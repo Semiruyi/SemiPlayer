@@ -15,6 +15,20 @@ pub struct MediaInfo {
 pub struct StreamInfo {
     pub index: usize,
     pub kind: StreamKind,
+    pub video: Option<VideoStreamInfo>,
+    pub audio: Option<AudioStreamInfo>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct VideoStreamInfo {
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AudioStreamInfo {
+    pub sample_rate: u32,
+    pub channels: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,10 +72,30 @@ pub fn probe_media(path: &str) -> Result<MediaInfo, MediaProbeError> {
             ffmpeg::codec::context::Context::from_parameters(stream.parameters()).map_err(
                 MediaProbeError::Decoder,
             )?;
+        let kind = map_stream_kind(codec.medium());
+        let (video, audio) = match kind {
+            StreamKind::Video => (
+                codec.decoder().video().ok().map(|video| VideoStreamInfo {
+                    width: video.width(),
+                    height: video.height(),
+                }),
+                None,
+            ),
+            StreamKind::Audio => (
+                None,
+                codec.decoder().audio().ok().map(|audio| AudioStreamInfo {
+                    sample_rate: audio.rate(),
+                    channels: audio.channels(),
+                }),
+            ),
+            _ => (None, None),
+        };
 
         streams.push(StreamInfo {
             index: stream.index(),
-            kind: map_stream_kind(codec.medium()),
+            kind,
+            video,
+            audio,
         });
     }
 
@@ -92,4 +126,44 @@ fn format_duration_to_us(duration: i64) -> Option<MediaTimeUs> {
 
     let time_base = i64::from(ffmpeg::ffi::AV_TIME_BASE);
     Some(duration.saturating_mul(1_000_000).saturating_div(time_base))
+}
+
+impl MediaInfo {
+    pub fn stream_count(&self) -> u32 {
+        self.streams.len() as u32
+    }
+
+    pub fn video_stream_count(&self) -> u32 {
+        self.streams
+            .iter()
+            .filter(|stream| stream.kind == StreamKind::Video)
+            .count() as u32
+    }
+
+    pub fn audio_stream_count(&self) -> u32 {
+        self.streams
+            .iter()
+            .filter(|stream| stream.kind == StreamKind::Audio)
+            .count() as u32
+    }
+
+    pub fn subtitle_stream_count(&self) -> u32 {
+        self.streams
+            .iter()
+            .filter(|stream| stream.kind == StreamKind::Subtitle)
+            .count() as u32
+    }
+
+    pub fn best_video_stream(&self) -> Option<&StreamInfo> {
+        find_stream(self, self.best_video_stream_index)
+    }
+
+    pub fn best_audio_stream(&self) -> Option<&StreamInfo> {
+        find_stream(self, self.best_audio_stream_index)
+    }
+}
+
+fn find_stream(media_info: &MediaInfo, index: Option<usize>) -> Option<&StreamInfo> {
+    let index = index?;
+    media_info.streams.iter().find(|stream| stream.index == index)
 }

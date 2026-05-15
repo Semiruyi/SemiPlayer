@@ -26,10 +26,22 @@ try
     EnsureOk(Native.semi_player_get_state(player, out uint state), "semi_player_get_state");
     EnsureOk(Native.semi_player_get_position_ms(player, out long positionMs), "semi_player_get_position_ms");
     EnsureOk(Native.semi_player_get_duration_ms(player, out long durationMs), "semi_player_get_duration_ms");
+    EnsureOk(Native.semi_player_get_media_info(player, out SemiMediaInfo mediaInfo), "semi_player_get_media_info");
 
     Console.WriteLine($"[state] {state}");
     Console.WriteLine($"[position_ms] {positionMs}");
     Console.WriteLine($"[duration_ms] {durationMs}");
+    Console.WriteLine($"[stream_count] {mediaInfo.StreamCount}");
+    Console.WriteLine($"[video_stream_count] {mediaInfo.VideoStreamCount}");
+    Console.WriteLine($"[audio_stream_count] {mediaInfo.AudioStreamCount}");
+    Console.WriteLine($"[subtitle_stream_count] {mediaInfo.SubtitleStreamCount}");
+    Console.WriteLine($"[best_video_stream_index] {mediaInfo.BestVideoStreamIndex}");
+    Console.WriteLine($"[best_audio_stream_index] {mediaInfo.BestAudioStreamIndex}");
+    Console.WriteLine($"[best_subtitle_stream_index] {mediaInfo.BestSubtitleStreamIndex}");
+    Console.WriteLine($"[video_width] {mediaInfo.VideoWidth}");
+    Console.WriteLine($"[video_height] {mediaInfo.VideoHeight}");
+    Console.WriteLine($"[audio_sample_rate] {mediaInfo.AudioSampleRate}");
+    Console.WriteLine($"[audio_channels] {mediaInfo.AudioChannels}");
 
     EnsureOk(Native.semi_player_reset(player), "semi_player_reset");
     Console.WriteLine("=== All player skeleton tests passed ===");
@@ -85,6 +97,9 @@ internal static class Native
     internal static extern int semi_player_get_duration_ms(IntPtr player, out long durationMs);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_media_info(IntPtr player, out SemiMediaInfo mediaInfo);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void semi_player_destroy(IntPtr player);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -92,4 +107,22 @@ internal static class Native
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void semi_free_string(IntPtr s);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiMediaInfo
+{
+    internal long DurationMs;
+    internal uint StreamCount;
+    internal uint VideoStreamCount;
+    internal uint AudioStreamCount;
+    internal uint SubtitleStreamCount;
+    internal int BestVideoStreamIndex;
+    internal int BestAudioStreamIndex;
+    internal int BestSubtitleStreamIndex;
+    internal uint VideoWidth;
+    internal uint VideoHeight;
+    internal uint AudioSampleRate;
+    internal ushort AudioChannels;
+    internal ushort Reserved0;
 }

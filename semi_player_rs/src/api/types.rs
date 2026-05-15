@@ -22,3 +22,21 @@ impl PlayerState {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SemiMediaInfo {
+    pub duration_ms: i64,
+    pub stream_count: u32,
+    pub video_stream_count: u32,
+    pub audio_stream_count: u32,
+    pub subtitle_stream_count: u32,
+    pub best_video_stream_index: i32,
+    pub best_audio_stream_index: i32,
+    pub best_subtitle_stream_index: i32,
+    pub video_width: u32,
+    pub video_height: u32,
+    pub audio_sample_rate: u32,
+    pub audio_channels: u16,
+    pub reserved0: u16,
+}
