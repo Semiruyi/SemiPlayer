@@ -17,7 +17,8 @@ use crate::api::types::{
 };
 use crate::core::media::{open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::util::time::{add_media_time_us, ms_to_us, us_to_ms};
+use crate::core::player::pump::pump_player;
+use crate::util::time::{ms_to_us, us_to_ms};
 
 fn with_player_mut<T>(
     player: *mut SemiPlayerHandle,
@@ -251,6 +252,7 @@ pub extern "C" fn semi_player_seek(
             return SEMI_E_SEEK_FAILED;
         }
 
+        player.runtime.clear();
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         SEMI_OK
@@ -454,63 +456,7 @@ pub extern "C" fn semi_player_pump(
     player: *mut SemiPlayerHandle,
     max_iterations: u32,
 ) -> c_int {
-    match with_player_mut(player, |player| {
-        if !player.is_media_loaded() {
-            return SEMI_E_INVALID_STATE;
-        }
-
-        let Some(opened_media) = player.opened_media.as_mut() else {
-            return SEMI_E_INVALID_STATE;
-        };
-
-        let iterations = if max_iterations == 0 { 256 } else { max_iterations };
-        let target_audio_queue_len = 8usize;
-
-        for _ in 0..iterations {
-            let output = match opened_media.next_decoded_output() {
-                Ok(Some(output)) => output,
-                Ok(None) => break,
-                Err(_) => return SEMI_E_INVALID_STATE,
-            };
-
-            match output {
-                DecodedOutput::Video(frame) => {
-                    player.runtime.push_video_frame(frame);
-                }
-                DecodedOutput::Audio(frame) => {
-                    player.runtime.push_audio_frame(frame);
-                }
-                DecodedOutput::EndOfStream => {
-                    player.runtime.mark_end_of_stream();
-                    break;
-                }
-            }
-
-            if player.runtime.audio_queue_len() >= target_audio_queue_len {
-                let target_video_time_us = add_media_time_us(
-                    player.audio_clock.presentation_time_us(),
-                    player.video_presentation_bias_us,
-                );
-                let _ = player
-                    .runtime
-                    .select_video_frame(&player.video_scheduler, target_video_time_us);
-
-                if player.runtime.has_current_video_frame() {
-                    break;
-                }
-            }
-        }
-
-        let target_video_time_us = add_media_time_us(
-            player.audio_clock.presentation_time_us(),
-            player.video_presentation_bias_us,
-        );
-        let _ = player
-            .runtime
-            .select_video_frame(&player.video_scheduler, target_video_time_us);
-
-        SEMI_OK
-    }) {
+    match with_player_mut(player, |player| pump_player(player, max_iterations)) {
         Ok(code) => code,
         Err(code) => code,
     }

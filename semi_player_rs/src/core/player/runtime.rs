@@ -134,4 +134,37 @@ mod tests {
         assert_eq!(current.pts_us, 10_000);
         assert_eq!(runtime.video_queue_len(), 0);
     }
+
+    #[test]
+    fn clear_resets_current_frame_and_end_of_stream() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_audio_frame(crate::audio::core::frame::AudioFrame {
+            pts_us: 5_000,
+            duration_us: Some(5_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 240,
+            sample_format: crate::audio::core::frame::AudioSampleFormatCategory::F32,
+            is_planar: false,
+        });
+        runtime.push_video_frame(VideoFrame {
+            pts_us: 10_000,
+            duration_us: Some(10_000),
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Nv12,
+            is_key_frame: true,
+        });
+        let _ = runtime.select_video_frame(&VideoScheduler::new(), 10_000);
+        runtime.mark_end_of_stream();
+
+        runtime.clear();
+
+        assert_eq!(runtime.audio_queue_len(), 0);
+        assert_eq!(runtime.video_queue_len(), 0);
+        assert!(runtime.current_video_frame().is_none());
+        assert!(runtime.last_audio_frame().is_none());
+        assert!(!runtime.has_reached_end_of_stream());
+    }
 }
