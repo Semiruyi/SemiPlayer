@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
+use crate::audio::core::output_controller::AudioOutputController;
 use crate::core::media::OpenedMedia;
 use crate::core::player::runtime::PlayerRuntime;
 use crate::render::core::scheduler::VideoScheduler;
@@ -16,6 +17,7 @@ pub struct SemiPlayerHandle {
     pub(crate) subtitles_visible: bool,
     pub(crate) video_presentation_bias_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
+    pub(crate) audio_output: AudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
     pub(crate) runtime: PlayerRuntime,
 }
@@ -29,6 +31,7 @@ impl SemiPlayerHandle {
             subtitles_visible: true,
             video_presentation_bias_us: 0,
             audio_clock: AudioClock::new(),
+            audio_output: AudioOutputController::new(),
             video_scheduler: VideoScheduler::new(),
             runtime: PlayerRuntime::new(),
         }
@@ -43,6 +46,7 @@ impl SemiPlayerHandle {
         self.subtitles_visible = true;
         self.video_presentation_bias_us = 0;
         self.audio_clock.reset();
+        self.audio_output.stop();
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
     }

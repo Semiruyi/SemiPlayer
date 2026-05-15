@@ -25,6 +25,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     let playback_time_us = player.audio_clock.presentation_time_us();
     player.runtime.discard_consumed_audio_frames(playback_time_us);
     select_video_frame(player, playback_time_us);
+    sync_audio_output(player);
 
     if has_sufficient_buffer(player) {
         return SEMI_OK;
@@ -59,6 +60,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         let playback_time_us = player.audio_clock.presentation_time_us();
         player.runtime.discard_consumed_audio_frames(playback_time_us);
         select_video_frame(player, playback_time_us);
+        sync_audio_output(player);
 
         if has_sufficient_buffer(player) {
             break;
@@ -68,6 +70,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     let playback_time_us = player.audio_clock.presentation_time_us();
     player.runtime.discard_consumed_audio_frames(playback_time_us);
     select_video_frame(player, playback_time_us);
+    sync_audio_output(player);
     SEMI_OK
 }
 
@@ -87,4 +90,29 @@ fn has_sufficient_buffer(player: &SemiPlayerHandle) -> bool {
         && player
             .runtime
             .has_buffered_future_video_frames(TARGET_FUTURE_VIDEO_QUEUE_LEN)
+}
+
+fn sync_audio_output(player: &mut SemiPlayerHandle) {
+    let audio_format = player.runtime.current_audio_format();
+    let state = player.state();
+
+    player.audio_output.ensure_backend_format(audio_format);
+    player.audio_output.sync_started_state(state);
+
+    let configured_format = player.audio_output.configured_format();
+    while player.audio_output.needs_more_frames() {
+        let Some(chunk) = player
+            .runtime
+            .pull_audio_chunk(player.audio_output.next_request_frame_count())
+        else {
+            break;
+        };
+
+        if chunk.format() != configured_format {
+            player.audio_output.clear_buffer();
+            break;
+        }
+
+        player.audio_output.submit_chunk(&chunk);
+    }
 }

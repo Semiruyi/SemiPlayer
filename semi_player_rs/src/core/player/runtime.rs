@@ -61,6 +61,13 @@ impl PlayerRuntime {
         self.last_audio_frame.as_ref()
     }
 
+    pub fn current_audio_format(&self) -> Option<crate::audio::core::output::AudioStreamFormat> {
+        self.queued_audio_frames
+            .front()
+            .map(|frame| frame.format())
+            .or_else(|| self.last_audio_frame.as_ref().map(|frame| frame.format()))
+    }
+
     pub fn has_reached_end_of_stream(&self) -> bool {
         self.end_of_stream
     }

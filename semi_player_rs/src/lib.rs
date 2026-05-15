@@ -270,6 +270,7 @@ pub extern "C" fn semi_player_seek(
         }
 
         player.runtime.clear();
+        player.audio_output.clear_buffer();
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         SEMI_OK
