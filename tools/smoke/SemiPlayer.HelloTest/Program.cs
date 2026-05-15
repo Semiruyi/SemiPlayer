@@ -90,6 +90,7 @@ internal sealed class PlayerSmokeWindow : Window
     private long _durationMs;
     private long _lastPresentedPtsMs = long.MinValue;
     private WriteableBitmap? _bitmap;
+    private readonly PlaybackDiagnostics _diagnostics = new();
 
     public PlayerSmokeWindow(string mediaPath, int? autoCloseMs)
     {
@@ -158,6 +159,7 @@ internal sealed class PlayerSmokeWindow : Window
 
             EnsureOk(Native.semi_player_open(_player, _mediaPath), "semi_player_open");
             EnsureOk(Native.semi_player_get_duration_ms(_player, out _durationMs), "semi_player_get_duration_ms");
+            _diagnostics.Reset();
 
             EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
             RefreshVideoFrame(forceCopy: true);
@@ -211,9 +213,16 @@ internal sealed class PlayerSmokeWindow : Window
             throw new InvalidOperationException($"semi_player_get_playback_snapshot failed with code {snapshotCode}");
         }
 
+        EnsureOk(Native.semi_player_get_position_ms(_player, out long audioPositionMs), "semi_player_get_position_ms");
+
         if (snapshot.HasCurrentVideoFrame == 0)
         {
-            _statusText.Text = BuildStatusText(snapshot, null);
+            _diagnostics.ObserveTick(
+                audioPositionMs: audioPositionMs,
+                videoPtsMs: null,
+                frameCopied: false,
+                isPlaying: _isPlaying);
+            _statusText.Text = BuildStatusText(snapshot, null, audioPositionMs);
             return;
         }
 
@@ -243,7 +252,13 @@ internal sealed class PlayerSmokeWindow : Window
             _lastPresentedPtsMs = frameInfo.PtsMs;
         }
 
-        _statusText.Text = BuildStatusText(snapshot, frameInfo);
+        _diagnostics.ObserveTick(
+            audioPositionMs: audioPositionMs,
+            videoPtsMs: frameInfo.PtsMs,
+            frameCopied: shouldCopyFrame,
+            isPlaying: _isPlaying);
+
+        _statusText.Text = BuildStatusText(snapshot, frameInfo, audioPositionMs);
     }
 
     private void EnsureBitmap(SemiVideoFrameInfo frameInfo)
@@ -266,16 +281,30 @@ internal sealed class PlayerSmokeWindow : Window
         _image.Source = _bitmap;
     }
 
-    private string BuildStatusText(SemiPlaybackSnapshot snapshot, SemiVideoFrameInfo? frameInfo)
+    private string BuildStatusText(
+        SemiPlaybackSnapshot snapshot,
+        SemiVideoFrameInfo? frameInfo,
+        long audioPositionMs)
     {
         string state = _isPlaying ? "Playing" : "Paused";
         string framePart = frameInfo is SemiVideoFrameInfo frame
             ? $"Frame {frame.PtsMs} ms  {frame.Width}x{frame.Height}  stride {frame.Stride}  bytes {frame.ByteLen}"
             : "Frame unavailable";
+        string diagnosticsPart =
+            $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
+            $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
+            $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
+        long avDeltaMs = frameInfo is SemiVideoFrameInfo currentFrame
+            ? audioPositionMs - currentFrame.PtsMs
+            : 0;
 
-        return $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms  |  " +
-               $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}  |  " +
-               $"{framePart}  |  Space Play/Pause  Left/Right Seek 5s";
+        return
+            $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
+            $"AudioPos {audioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  A-V {avDeltaMs} ms  " +
+            $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
+            $"{framePart}{Environment.NewLine}" +
+            $"{diagnosticsPart}{Environment.NewLine}" +
+            "Space Play/Pause  Left/Right Seek 5s";
     }
 
     private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -330,6 +359,8 @@ internal sealed class PlayerSmokeWindow : Window
         EnsureOk(Native.semi_player_get_position_ms(_player, out long positionMs), "semi_player_get_position_ms");
         long targetMs = Math.Clamp(positionMs + deltaMs, 0, _durationMs);
         EnsureOk(Native.semi_player_seek(_player, targetMs, 0), "semi_player_seek");
+        _diagnostics.Reset();
+        _lastPresentedPtsMs = long.MinValue;
         EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
         RefreshVideoFrame(forceCopy: true);
     }
@@ -355,6 +386,112 @@ internal sealed class PlayerSmokeWindow : Window
             throw new InvalidOperationException($"{api} failed with code {code}");
         }
     }
+}
+
+internal sealed class PlaybackDiagnostics
+{
+    private readonly long _startTimestamp = Environment.TickCount64;
+    private long _windowStartMs;
+    private int _ticksInWindow;
+    private int _frameCopiesInWindow;
+    private int _frameAdvancesInWindow;
+    private long? _lastVideoPtsMs;
+    private long _lastAudioPositionMs;
+    private long _stallStartMs = -1;
+
+    public double UiTicksPerSecond { get; private set; }
+
+    public double FrameCopiesPerSecond { get; private set; }
+
+    public double FrameAdvancesPerSecond { get; private set; }
+
+    public long LastVideoStepMs { get; private set; }
+
+    public bool IsStalled { get; private set; }
+
+    public long StallDurationMs { get; private set; }
+
+    public void Reset()
+    {
+        _windowStartMs = ElapsedMs;
+        _ticksInWindow = 0;
+        _frameCopiesInWindow = 0;
+        _frameAdvancesInWindow = 0;
+        _lastVideoPtsMs = null;
+        _lastAudioPositionMs = 0;
+        _stallStartMs = -1;
+        UiTicksPerSecond = 0;
+        FrameCopiesPerSecond = 0;
+        FrameAdvancesPerSecond = 0;
+        LastVideoStepMs = 0;
+        IsStalled = false;
+        StallDurationMs = 0;
+    }
+
+    public void ObserveTick(long audioPositionMs, long? videoPtsMs, bool frameCopied, bool isPlaying)
+    {
+        long nowMs = ElapsedMs;
+        _ticksInWindow++;
+
+        if (frameCopied)
+        {
+            _frameCopiesInWindow++;
+        }
+
+        bool videoAdvanced = false;
+        if (videoPtsMs is long currentVideoPtsMs)
+        {
+            if (_lastVideoPtsMs is long previousVideoPtsMs && currentVideoPtsMs != previousVideoPtsMs)
+            {
+                videoAdvanced = true;
+                LastVideoStepMs = currentVideoPtsMs - previousVideoPtsMs;
+            }
+
+            _lastVideoPtsMs = currentVideoPtsMs;
+        }
+
+        if (videoAdvanced)
+        {
+            _frameAdvancesInWindow++;
+            _stallStartMs = -1;
+            IsStalled = false;
+            StallDurationMs = 0;
+        }
+        else if (!isPlaying || videoPtsMs is null)
+        {
+            _stallStartMs = -1;
+            IsStalled = false;
+            StallDurationMs = 0;
+        }
+        else if (audioPositionMs > _lastAudioPositionMs + 150)
+        {
+            if (_stallStartMs < 0)
+            {
+                _stallStartMs = nowMs;
+            }
+
+            StallDurationMs = nowMs - _stallStartMs;
+            IsStalled = StallDurationMs >= 500;
+        }
+
+        _lastAudioPositionMs = audioPositionMs;
+
+        long windowElapsedMs = nowMs - _windowStartMs;
+        if (windowElapsedMs >= 1000)
+        {
+            double windowSeconds = windowElapsedMs / 1000.0;
+            UiTicksPerSecond = _ticksInWindow / windowSeconds;
+            FrameCopiesPerSecond = _frameCopiesInWindow / windowSeconds;
+            FrameAdvancesPerSecond = _frameAdvancesInWindow / windowSeconds;
+
+            _windowStartMs = nowMs;
+            _ticksInWindow = 0;
+            _frameCopiesInWindow = 0;
+            _frameAdvancesInWindow = 0;
+        }
+    }
+
+    private long ElapsedMs => Environment.TickCount64 - _startTimestamp;
 }
 
 internal static class Native
