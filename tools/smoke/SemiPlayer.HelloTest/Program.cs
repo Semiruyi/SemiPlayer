@@ -43,6 +43,16 @@ try
     Console.WriteLine($"[audio_sample_rate] {mediaInfo.AudioSampleRate}");
     Console.WriteLine($"[audio_channels] {mediaInfo.AudioChannels}");
 
+    EnsureOk(Native.semi_player_pump(player, 0), "semi_player_pump");
+    EnsureOk(Native.semi_player_get_playback_snapshot(player, out SemiPlaybackSnapshot snapshot), "semi_player_get_playback_snapshot");
+    Console.WriteLine($"[snapshot.audio_queue_len] {snapshot.AudioQueueLen}");
+    Console.WriteLine($"[snapshot.video_queue_len] {snapshot.VideoQueueLen}");
+    Console.WriteLine($"[snapshot.has_current_video_frame] {snapshot.HasCurrentVideoFrame}");
+    Console.WriteLine($"[snapshot.current_video_pts_ms] {snapshot.CurrentVideoPtsMs}");
+    Console.WriteLine($"[snapshot.current_video_duration_ms] {snapshot.CurrentVideoDurationMs}");
+    Console.WriteLine($"[snapshot.last_audio_pts_ms] {snapshot.LastAudioPtsMs}");
+    Console.WriteLine($"[snapshot.end_of_stream] {snapshot.EndOfStream}");
+
     for (int i = 0; i < 8; i++)
     {
         EnsureOk(Native.semi_player_debug_decode_next(player, out SemiDecodedOutput decoded), "semi_player_debug_decode_next");
@@ -119,6 +129,12 @@ internal static class Native
     internal static extern int semi_player_get_media_info(IntPtr player, out SemiMediaInfo mediaInfo);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_pump(IntPtr player, uint maxIterations);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_playback_snapshot(IntPtr player, out SemiPlaybackSnapshot snapshot);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_debug_decode_next(IntPtr player, out SemiDecodedOutput decodedOutput);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -161,4 +177,16 @@ internal struct SemiDecodedOutput
     internal ushort Channels;
     internal uint SampleCount;
     internal uint Flags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiPlaybackSnapshot
+{
+    internal uint AudioQueueLen;
+    internal uint VideoQueueLen;
+    internal uint HasCurrentVideoFrame;
+    internal long CurrentVideoPtsMs;
+    internal long CurrentVideoDurationMs;
+    internal long LastAudioPtsMs;
+    internal uint EndOfStream;
 }

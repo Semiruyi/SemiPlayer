@@ -12,10 +12,12 @@ use crate::api::error::{
     ResultCode, SEMI_E_DECODER_OPEN_FAILED, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE,
     SEMI_E_MEDIA_OPEN_FAILED, SEMI_E_MEDIA_PROBE_FAILED, SEMI_E_SEEK_FAILED, SEMI_OK,
 };
-use crate::api::types::{PlayerState, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo};
+use crate::api::types::{
+    PlayerState, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo, SemiPlaybackSnapshot,
+};
 use crate::core::media::{open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::util::time::{ms_to_us, us_to_ms};
+use crate::util::time::{add_media_time_us, ms_to_us, us_to_ms};
 
 fn with_player_mut<T>(
     player: *mut SemiPlayerHandle,
@@ -106,6 +108,23 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
             sample_count: 0,
             flags: 0,
         },
+    }
+}
+
+fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
+    let current_video_frame = player.runtime.current_video_frame();
+    let last_audio_frame = player.runtime.last_audio_frame();
+
+    SemiPlaybackSnapshot {
+        audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
+        video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
+        has_current_video_frame: u32::from(current_video_frame.is_some()),
+        current_video_pts_ms: current_video_frame.map(|frame| us_to_ms(frame.pts_us)).unwrap_or(0),
+        current_video_duration_ms: current_video_frame
+            .and_then(|frame| frame.duration_us.map(us_to_ms))
+            .unwrap_or(0),
+        last_audio_pts_ms: last_audio_frame.map(|frame| us_to_ms(frame.pts_us)).unwrap_or(0),
+        end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
 }
 
@@ -421,6 +440,98 @@ pub extern "C" fn semi_player_debug_decode_next(
 
         unsafe {
             *out_output = build_decoded_output_view(output);
+        }
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_pump(
+    player: *mut SemiPlayerHandle,
+    max_iterations: u32,
+) -> c_int {
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let Some(opened_media) = player.opened_media.as_mut() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        let iterations = if max_iterations == 0 { 256 } else { max_iterations };
+        let target_audio_queue_len = 8usize;
+
+        for _ in 0..iterations {
+            let output = match opened_media.next_decoded_output() {
+                Ok(Some(output)) => output,
+                Ok(None) => break,
+                Err(_) => return SEMI_E_INVALID_STATE,
+            };
+
+            match output {
+                DecodedOutput::Video(frame) => {
+                    player.runtime.push_video_frame(frame);
+                }
+                DecodedOutput::Audio(frame) => {
+                    player.runtime.push_audio_frame(frame);
+                }
+                DecodedOutput::EndOfStream => {
+                    player.runtime.mark_end_of_stream();
+                    break;
+                }
+            }
+
+            if player.runtime.audio_queue_len() >= target_audio_queue_len {
+                let target_video_time_us = add_media_time_us(
+                    player.audio_clock.presentation_time_us(),
+                    player.video_presentation_bias_us,
+                );
+                let _ = player
+                    .runtime
+                    .select_video_frame(&player.video_scheduler, target_video_time_us);
+
+                if player.runtime.has_current_video_frame() {
+                    break;
+                }
+            }
+        }
+
+        let target_video_time_us = add_media_time_us(
+            player.audio_clock.presentation_time_us(),
+            player.video_presentation_bias_us,
+        );
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, target_video_time_us);
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_get_playback_snapshot(
+    player: *mut SemiPlayerHandle,
+    out_snapshot: *mut SemiPlaybackSnapshot,
+) -> c_int {
+    if out_snapshot.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        unsafe {
+            *out_snapshot = build_playback_snapshot(player);
         }
 
         SEMI_OK

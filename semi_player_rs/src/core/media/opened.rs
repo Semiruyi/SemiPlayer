@@ -226,6 +226,7 @@ fn decode_video_packet(
             &frame,
         )))),
         Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(None),
+        Err(ffmpeg::Error::Eof) => Ok(None),
         Err(error) => Err(MediaOpenError::ReceiveFrame(error)),
     }
 }
@@ -247,6 +248,7 @@ fn decode_audio_packet(
             &frame,
         )))),
         Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(None),
+        Err(ffmpeg::Error::Eof) => Ok(None),
         Err(error) => Err(MediaOpenError::ReceiveFrame(error)),
     }
 }

@@ -69,3 +69,15 @@ pub struct SemiDecodedOutput {
     pub sample_count: u32,
     pub flags: u32,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SemiPlaybackSnapshot {
+    pub audio_queue_len: u32,
+    pub video_queue_len: u32,
+    pub has_current_video_frame: u32,
+    pub current_video_pts_ms: i64,
+    pub current_video_duration_ms: i64,
+    pub last_audio_pts_ms: i64,
+    pub end_of_stream: u32,
+}
