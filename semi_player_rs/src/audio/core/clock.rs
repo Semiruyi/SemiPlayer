@@ -3,10 +3,18 @@ use std::time::Instant;
 
 use crate::util::time::{add_media_time_us, MediaTimeUs};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DevicePlaybackTiming {
+    pub base_pts_us: MediaTimeUs,
+    pub played_frames: u64,
+    pub sample_rate: u32,
+}
+
 struct ClockState {
     anchor_media_time_us: MediaTimeUs,
     anchor_instant: Option<Instant>,
     speed: f64,
+    device_timing: Option<DevicePlaybackTiming>,
 }
 
 pub struct AudioClock {
@@ -20,6 +28,7 @@ impl AudioClock {
                 anchor_media_time_us: 0,
                 anchor_instant: None,
                 speed: 1.0,
+                device_timing: None,
             }),
         }
     }
@@ -35,11 +44,13 @@ impl AudioClock {
         let mut state = self.state.lock().unwrap();
         self.reanchor_to_now(&mut state);
         state.anchor_instant = None;
+        state.device_timing = None;
     }
 
     pub fn seek(&self, position_us: MediaTimeUs) {
         let mut state = self.state.lock().unwrap();
         state.anchor_media_time_us = position_us;
+        state.device_timing = None;
         if state.anchor_instant.is_some() {
             state.anchor_instant = Some(Instant::now());
         }
@@ -59,6 +70,27 @@ impl AudioClock {
         state.anchor_media_time_us = 0;
         state.anchor_instant = None;
         state.speed = 1.0;
+        state.device_timing = None;
+    }
+
+    pub fn update_from_device(&self, timing: Option<DevicePlaybackTiming>) {
+        let mut state = self.state.lock().unwrap();
+        if state.anchor_instant.is_none() {
+            state.device_timing = None;
+            return;
+        }
+
+        if let Some(timing) = timing {
+            state.anchor_media_time_us = self.device_media_time_us(&timing);
+            state.anchor_instant = Some(Instant::now());
+            state.device_timing = Some(timing);
+        } else {
+            self.reanchor_to_now(&mut state);
+            state.device_timing = None;
+            if state.anchor_instant.is_some() {
+                state.anchor_instant = Some(Instant::now());
+            }
+        }
     }
 
     pub fn presentation_time_us(&self) -> MediaTimeUs {
@@ -79,6 +111,10 @@ impl AudioClock {
     }
 
     fn projected_media_time_us(&self, state: &ClockState, now: Instant) -> MediaTimeUs {
+        if let Some(device_timing) = state.device_timing {
+            return self.device_media_time_us(&device_timing);
+        }
+
         let Some(anchor_instant) = state.anchor_instant else {
             return state.anchor_media_time_us;
         };
@@ -86,6 +122,17 @@ impl AudioClock {
         let elapsed_us = now.duration_since(anchor_instant).as_micros() as f64;
         let advanced_us = (elapsed_us * state.speed) as MediaTimeUs;
         add_media_time_us(state.anchor_media_time_us, advanced_us)
+    }
+
+    fn device_media_time_us(&self, timing: &DevicePlaybackTiming) -> MediaTimeUs {
+        if timing.sample_rate == 0 {
+            return timing.base_pts_us;
+        }
+
+        let advanced_us = (timing.played_frames as i64)
+            .saturating_mul(1_000_000)
+            .saturating_div(i64::from(timing.sample_rate));
+        add_media_time_us(timing.base_pts_us, advanced_us)
     }
 }
 
@@ -97,7 +144,7 @@ impl Default for AudioClock {
 
 #[cfg(test)]
 mod tests {
-    use super::AudioClock;
+    use super::{AudioClock, DevicePlaybackTiming};
 
     #[test]
     fn paused_clock_stays_frozen() {
@@ -116,5 +163,32 @@ mod tests {
         let second = clock.presentation_time_us();
 
         assert!(second >= first);
+    }
+
+    #[test]
+    fn device_timing_overrides_logical_projection() {
+        let clock = AudioClock::new();
+        clock.play();
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 100_000,
+            played_frames: 4_800,
+            sample_rate: 48_000,
+        }));
+
+        assert_eq!(clock.presentation_time_us(), 200_000);
+    }
+
+    #[test]
+    fn pause_clears_device_timing_and_freezes_position() {
+        let clock = AudioClock::new();
+        clock.play();
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 100_000,
+            played_frames: 4_800,
+            sample_rate: 48_000,
+        }));
+
+        clock.pause();
+        assert_eq!(clock.presentation_time_us(), 200_000);
     }
 }

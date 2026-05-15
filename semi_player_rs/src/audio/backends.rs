@@ -2,9 +2,18 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfigRange};
+use cpal::{
+    BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfigRange,
+};
 
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AudioBackendTiming {
+    pub played_frames_total: u64,
+    pub buffered_frames: usize,
+    pub started: bool,
+}
 
 #[derive(Debug)]
 pub enum AudioBackendError {
@@ -28,6 +37,8 @@ pub trait AudioOutputBackend {
     fn submit(&mut self, chunk: &AudioOutputChunk) -> Result<(), AudioBackendError>;
 
     fn buffered_frames(&self) -> usize;
+
+    fn timing(&self) -> AudioBackendTiming;
 }
 
 pub struct CpalAudioOutputBackend {
@@ -94,26 +105,39 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         shared.format = Some(format);
         shared.samples.clear();
         shared.buffered_frames = 0;
+        shared.played_frames_total = 0;
         Ok(())
     }
 
     fn start(&mut self) -> Result<(), AudioBackendError> {
-        let stream = self.stream.as_ref().ok_or(AudioBackendError::NotConfigured)?;
-        stream.play().map_err(|_| AudioBackendError::BackendFailure)?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or(AudioBackendError::NotConfigured)?;
+        stream
+            .play()
+            .map_err(|_| AudioBackendError::BackendFailure)?;
         self.started = true;
         Ok(())
     }
 
     fn pause(&mut self) -> Result<(), AudioBackendError> {
-        let stream = self.stream.as_ref().ok_or(AudioBackendError::NotConfigured)?;
-        stream.pause().map_err(|_| AudioBackendError::BackendFailure)?;
+        let stream = self
+            .stream
+            .as_ref()
+            .ok_or(AudioBackendError::NotConfigured)?;
+        stream
+            .pause()
+            .map_err(|_| AudioBackendError::BackendFailure)?;
         self.started = false;
         Ok(())
     }
 
     fn stop(&mut self) -> Result<(), AudioBackendError> {
         if let Some(stream) = self.stream.as_ref() {
-            stream.pause().map_err(|_| AudioBackendError::BackendFailure)?;
+            stream
+                .pause()
+                .map_err(|_| AudioBackendError::BackendFailure)?;
         }
         self.started = false;
         self.clear_buffer()
@@ -123,11 +147,14 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         let mut shared = self.shared.lock().unwrap();
         shared.samples.clear();
         shared.buffered_frames = 0;
+        shared.played_frames_total = 0;
         Ok(())
     }
 
     fn submit(&mut self, chunk: &AudioOutputChunk) -> Result<(), AudioBackendError> {
-        let configured_format = self.configured_format.ok_or(AudioBackendError::NotConfigured)?;
+        let configured_format = self
+            .configured_format
+            .ok_or(AudioBackendError::NotConfigured)?;
         let chunk_format = chunk.format().ok_or(AudioBackendError::InvalidFormat)?;
         if configured_format != chunk_format {
             return Err(AudioBackendError::InvalidFormat);
@@ -142,6 +169,15 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
     fn buffered_frames(&self) -> usize {
         self.shared.lock().unwrap().buffered_frames
     }
+
+    fn timing(&self) -> AudioBackendTiming {
+        let shared = self.shared.lock().unwrap();
+        AudioBackendTiming {
+            played_frames_total: shared.played_frames_total,
+            buffered_frames: shared.buffered_frames,
+            started: self.started,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -149,6 +185,7 @@ struct SharedAudioBuffer {
     format: Option<AudioStreamFormat>,
     samples: VecDeque<f32>,
     buffered_frames: usize,
+    played_frames_total: u64,
 }
 
 fn find_matching_output_config(
@@ -184,12 +221,12 @@ fn fill_output_buffer(output: &mut [f32], shared: &Arc<Mutex<SharedAudioBuffer>>
 
     let consumed_frames = output.len() / channel_count;
     shared.buffered_frames = shared.buffered_frames.saturating_sub(consumed_frames);
+    shared.played_frames_total = shared
+        .played_frames_total
+        .saturating_add(consumed_frames as u64);
 }
 
-fn select_buffer_size(
-    config: &SupportedStreamConfigRange,
-    preferred_frames: usize,
-) -> BufferSize {
+fn select_buffer_size(config: &SupportedStreamConfigRange, preferred_frames: usize) -> BufferSize {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
             let preferred = preferred_frames as u32;

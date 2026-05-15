@@ -23,7 +23,9 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     };
 
     let playback_time_us = player.audio_clock.presentation_time_us();
-    player.runtime.discard_consumed_audio_frames(playback_time_us);
+    player
+        .runtime
+        .discard_consumed_audio_frames(playback_time_us);
     select_video_frame(player, playback_time_us);
     sync_audio_output(player);
 
@@ -58,7 +60,9 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         }
 
         let playback_time_us = player.audio_clock.presentation_time_us();
-        player.runtime.discard_consumed_audio_frames(playback_time_us);
+        player
+            .runtime
+            .discard_consumed_audio_frames(playback_time_us);
         select_video_frame(player, playback_time_us);
         sync_audio_output(player);
 
@@ -68,17 +72,17 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     }
 
     let playback_time_us = player.audio_clock.presentation_time_us();
-    player.runtime.discard_consumed_audio_frames(playback_time_us);
+    player
+        .runtime
+        .discard_consumed_audio_frames(playback_time_us);
     select_video_frame(player, playback_time_us);
     sync_audio_output(player);
     SEMI_OK
 }
 
 fn select_video_frame(player: &mut SemiPlayerHandle, playback_time_us: i64) {
-    let target_video_time_us = add_media_time_us(
-        playback_time_us,
-        player.video_presentation_bias_us,
-    );
+    let target_video_time_us =
+        add_media_time_us(playback_time_us, player.video_presentation_bias_us);
     let _ = player
         .runtime
         .select_video_frame(&player.video_scheduler, target_video_time_us);
@@ -115,4 +119,7 @@ fn sync_audio_output(player: &mut SemiPlayerHandle) {
 
         player.audio_output.submit_chunk(&chunk);
     }
+
+    let device_timing = player.audio_output.playback_timing();
+    player.audio_clock.update_from_device(device_timing);
 }

@@ -73,10 +73,8 @@ pub(crate) fn collect_media_info(
 
     let mut streams = Vec::new();
     for stream in context.streams() {
-        let codec =
-            ffmpeg::codec::context::Context::from_parameters(stream.parameters()).map_err(
-                MediaProbeError::Decoder,
-            )?;
+        let codec = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+            .map_err(MediaProbeError::Decoder)?;
         let kind = map_stream_kind(codec.medium());
         let (video, audio) = match kind {
             StreamKind::Video => (
@@ -170,5 +168,8 @@ impl MediaInfo {
 
 fn find_stream(media_info: &MediaInfo, index: Option<usize>) -> Option<&StreamInfo> {
     let index = index?;
-    media_info.streams.iter().find(|stream| stream.index == index)
+    media_info
+        .streams
+        .iter()
+        .find(|stream| stream.index == index)
 }

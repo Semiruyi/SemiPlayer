@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 
 use ffmpeg_next as ffmpeg;
-use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 use ffmpeg_next::software::scaling::{context::Context as ScalingContext, Flags as ScalingFlags};
+use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
@@ -116,7 +116,9 @@ impl OpenedMedia {
 
     pub fn seek(&mut self, position_us: MediaTimeUs) -> Result<(), MediaOpenError> {
         let position = position_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
-        self.input.seek(position, ..).map_err(MediaOpenError::Seek)?;
+        self.input
+            .seek(position, ..)
+            .map_err(MediaOpenError::Seek)?;
         self.flush_decoders();
         Ok(())
     }
@@ -179,7 +181,11 @@ impl OpenedMedia {
                 .unwrap_or(false)
             {
                 let video_decoder = self.video_decoder.as_mut().expect("video decoder exists");
-                decode_video_packet(video_decoder, &media_packet.packet, &mut self.pending_outputs)?;
+                decode_video_packet(
+                    video_decoder,
+                    &media_packet.packet,
+                    &mut self.pending_outputs,
+                )?;
                 continue;
             }
 
@@ -190,7 +196,11 @@ impl OpenedMedia {
                 .unwrap_or(false)
             {
                 let audio_decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
-                decode_audio_packet(audio_decoder, &media_packet.packet, &mut self.pending_outputs)?;
+                decode_audio_packet(
+                    audio_decoder,
+                    &media_packet.packet,
+                    &mut self.pending_outputs,
+                )?;
                 continue;
             }
         }
@@ -466,7 +476,11 @@ fn audio_duration_us(frame: &frame::Audio) -> Option<MediaTimeUs> {
     }
 
     let samples = i64::try_from(frame.samples()).ok()?;
-    Some(samples.saturating_mul(1_000_000).saturating_div(i64::from(frame.rate())))
+    Some(
+        samples
+            .saturating_mul(1_000_000)
+            .saturating_div(i64::from(frame.rate())),
+    )
 }
 
 fn map_pixel_format(pixel: format::Pixel) -> PixelFormatCategory {

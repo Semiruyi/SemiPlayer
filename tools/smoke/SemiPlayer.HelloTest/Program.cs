@@ -213,6 +213,12 @@ internal sealed class PlayerSmokeWindow : Window
             throw new InvalidOperationException($"semi_player_get_playback_snapshot failed with code {snapshotCode}");
         }
 
+        int audioOutputCode = Native.semi_player_get_audio_output_snapshot(_player, out SemiAudioOutputSnapshot audioOutput);
+        if (audioOutputCode != 0)
+        {
+            throw new InvalidOperationException($"semi_player_get_audio_output_snapshot failed with code {audioOutputCode}");
+        }
+
         EnsureOk(Native.semi_player_get_position_ms(_player, out long audioPositionMs), "semi_player_get_position_ms");
 
         if (snapshot.HasCurrentVideoFrame == 0)
@@ -222,7 +228,7 @@ internal sealed class PlayerSmokeWindow : Window
                 videoPtsMs: null,
                 frameCopied: false,
                 isPlaying: _isPlaying);
-            _statusText.Text = BuildStatusText(snapshot, null, audioPositionMs);
+            _statusText.Text = BuildStatusText(snapshot, audioOutput, null, audioPositionMs);
             return;
         }
 
@@ -258,7 +264,7 @@ internal sealed class PlayerSmokeWindow : Window
             frameCopied: shouldCopyFrame,
             isPlaying: _isPlaying);
 
-        _statusText.Text = BuildStatusText(snapshot, frameInfo, audioPositionMs);
+        _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo, audioPositionMs);
     }
 
     private void EnsureBitmap(SemiVideoFrameInfo frameInfo)
@@ -283,6 +289,7 @@ internal sealed class PlayerSmokeWindow : Window
 
     private string BuildStatusText(
         SemiPlaybackSnapshot snapshot,
+        SemiAudioOutputSnapshot audioOutput,
         SemiVideoFrameInfo? frameInfo,
         long audioPositionMs)
     {
@@ -290,6 +297,13 @@ internal sealed class PlayerSmokeWindow : Window
         string framePart = frameInfo is SemiVideoFrameInfo frame
             ? $"Frame {frame.PtsMs} ms  {frame.Width}x{frame.Height}  stride {frame.Stride}  bytes {frame.ByteLen}"
             : "Frame unavailable";
+        string audioOutputPart =
+            $"Out {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
+            $"Started {audioOutput.Started}  DeviceTiming {audioOutput.HasDeviceTiming}  " +
+            $"DevBase {audioOutput.BasePtsMs} ms  DevPlayed {audioOutput.DevicePlayedFrames}";
+        string audioBufferPart =
+            $"DevBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames} frames  " +
+            $"QueuedTotal {audioOutput.SubmittedFramesTotal}  PlayedTotal {audioOutput.PlayedFramesTotal}";
         string diagnosticsPart =
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
@@ -302,6 +316,8 @@ internal sealed class PlayerSmokeWindow : Window
             $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
             $"AudioPos {audioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  A-V {avDeltaMs} ms  " +
             $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
+            $"{audioOutputPart}{Environment.NewLine}" +
+            $"{audioBufferPart}{Environment.NewLine}" +
             $"{framePart}{Environment.NewLine}" +
             $"{diagnosticsPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s";
@@ -523,6 +539,9 @@ internal static class Native
     internal static extern int semi_player_get_playback_snapshot(IntPtr player, out SemiPlaybackSnapshot snapshot);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_audio_output_snapshot(IntPtr player, out SemiAudioOutputSnapshot snapshot);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_get_current_video_frame_info(IntPtr player, out SemiVideoFrameInfo frameInfo);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -545,6 +564,22 @@ internal struct SemiPlaybackSnapshot
     internal long CurrentVideoDurationMs;
     internal long LastAudioPtsMs;
     internal uint EndOfStream;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiAudioOutputSnapshot
+{
+    internal uint ConfiguredSampleRate;
+    internal ushort ConfiguredChannels;
+    internal ushort Reserved0;
+    internal uint TargetBufferFrames;
+    internal uint BufferedFrames;
+    internal ulong PlayedFramesTotal;
+    internal ulong SubmittedFramesTotal;
+    internal uint Started;
+    internal uint HasDeviceTiming;
+    internal long BasePtsMs;
+    internal ulong DevicePlayedFrames;
 }
 
 [StructLayout(LayoutKind.Sequential)]

@@ -1,5 +1,5 @@
-use crate::util::time::MediaTimeUs;
 use super::output::AudioStreamFormat;
+use crate::util::time::MediaTimeUs;
 
 pub const NORMALIZED_AUDIO_FORMAT: AudioSampleFormatCategory = AudioSampleFormatCategory::F32;
 
@@ -28,7 +28,8 @@ pub struct AudioFrame {
 
 impl AudioFrame {
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {
-        self.duration_us.map(|duration_us| self.pts_us.saturating_add(duration_us))
+        self.duration_us
+            .map(|duration_us| self.pts_us.saturating_add(duration_us))
     }
 
     pub fn sample_len(&self) -> usize {

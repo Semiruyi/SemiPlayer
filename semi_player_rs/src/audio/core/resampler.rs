@@ -1,10 +1,8 @@
 use ffmpeg_next as ffmpeg;
-use ffmpeg_next::{format, frame, ChannelLayout};
 use ffmpeg_next::software::resampling::Context as ResamplingContext;
+use ffmpeg_next::{format, frame, ChannelLayout};
 
-use crate::audio::core::frame::{
-    AudioFrame, NORMALIZED_AUDIO_FORMAT,
-};
+use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::util::time::MediaTimeUs;
 
 use crate::core::media::MediaOpenError;
@@ -26,12 +24,7 @@ impl NormalizedAudioResampler {
         duration_us: Option<MediaTimeUs>,
     ) -> Result<AudioFrame, MediaOpenError> {
         let input_layout = resolve_channel_layout(decoder, input);
-        self.ensure_context(
-            input.format(),
-            input_layout,
-            input.rate(),
-            input.channels(),
-        )?;
+        self.ensure_context(input.format(), input_layout, input.rate(), input.channels())?;
 
         let mut output = frame::Audio::empty();
         self.context
@@ -42,7 +35,8 @@ impl NormalizedAudioResampler {
 
         Ok(AudioFrame {
             pts_us,
-            duration_us: duration_us.or_else(|| normalized_audio_duration_us(output.rate(), output.samples())),
+            duration_us: duration_us
+                .or_else(|| normalized_audio_duration_us(output.rate(), output.samples())),
             sample_rate: output.rate(),
             channels: output.channels(),
             sample_count: output.samples(),
@@ -67,8 +61,7 @@ impl NormalizedAudioResampler {
                 context.input().format != input_format
                     || context.input().channel_layout != input_layout
                     || context.input().rate != input_rate
-                    || context.output().format
-                        != format::Sample::F32(format::sample::Type::Packed)
+                    || context.output().format != format::Sample::F32(format::sample::Type::Packed)
                     || context.output().channel_layout != output_layout
                     || context.output().rate != input_rate
             })
@@ -98,10 +91,7 @@ impl Default for NormalizedAudioResampler {
     }
 }
 
-fn resolve_channel_layout(
-    decoder: &ffmpeg::decoder::Audio,
-    input: &frame::Audio,
-) -> ChannelLayout {
+fn resolve_channel_layout(decoder: &ffmpeg::decoder::Audio, input: &frame::Audio) -> ChannelLayout {
     let frame_layout = input.channel_layout();
     if !frame_layout.is_empty() {
         return frame_layout;
@@ -135,7 +125,11 @@ fn normalized_audio_duration_us(rate: u32, samples: usize) -> Option<MediaTimeUs
     }
 
     let samples = i64::try_from(samples).ok()?;
-    Some(samples.saturating_mul(1_000_000).saturating_div(i64::from(rate)))
+    Some(
+        samples
+            .saturating_mul(1_000_000)
+            .saturating_div(i64::from(rate)),
+    )
 }
 
 #[cfg(test)]

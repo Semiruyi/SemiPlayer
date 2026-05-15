@@ -6,21 +6,21 @@ mod render;
 mod subtitle;
 mod util;
 
-use std::ffi::{c_char, c_double, c_int, CStr, CString};
-use std::ptr;
 use crate::api::error::{
     ResultCode, SEMI_E_DECODER_OPEN_FAILED, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE,
     SEMI_E_MEDIA_OPEN_FAILED, SEMI_E_MEDIA_PROBE_FAILED, SEMI_E_SEEK_FAILED, SEMI_OK,
 };
 use crate::api::types::{
-    PlayerState, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo, SemiPlaybackSnapshot,
-    SemiVideoFrameInfo,
+    PlayerState, SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
+    SemiPlaybackSnapshot, SemiVideoFrameInfo,
 };
 use crate::core::media::{open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
 use crate::render::core::frame::VideoFrame;
 use crate::util::time::{ms_to_us, us_to_ms};
+use std::ffi::{c_char, c_double, c_int, CStr, CString};
+use std::ptr;
 
 fn with_player_mut<T>(
     player: *mut SemiPlayerHandle,
@@ -44,7 +44,9 @@ fn cstr_to_string(input: *const c_char) -> Result<String, c_int> {
 }
 
 fn option_index_to_i32(index: Option<usize>) -> i32 {
-    index.and_then(|value| i32::try_from(value).ok()).unwrap_or(-1)
+    index
+        .and_then(|value| i32::try_from(value).ok())
+        .unwrap_or(-1)
 }
 
 fn build_media_info_view(media_info: &MediaInfo) -> SemiMediaInfo {
@@ -122,11 +124,15 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
         has_current_video_frame: u32::from(current_video_frame.is_some()),
-        current_video_pts_ms: current_video_frame.map(|frame| us_to_ms(frame.pts_us)).unwrap_or(0),
+        current_video_pts_ms: current_video_frame
+            .map(|frame| us_to_ms(frame.pts_us))
+            .unwrap_or(0),
         current_video_duration_ms: current_video_frame
             .and_then(|frame| frame.duration_us.map(us_to_ms))
             .unwrap_or(0),
-        last_audio_pts_ms: last_audio_frame.map(|frame| us_to_ms(frame.pts_us)).unwrap_or(0),
+        last_audio_pts_ms: last_audio_frame
+            .map(|frame| us_to_ms(frame.pts_us))
+            .unwrap_or(0),
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
 }
@@ -141,6 +147,35 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
         pixel_format: frame.pixel_format.as_raw(),
         byte_len: u32::try_from(frame.byte_len()).unwrap_or(u32::MAX),
         flags: u32::from(frame.is_key_frame),
+    }
+}
+
+fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnapshot {
+    let snapshot = player.audio_output.snapshot();
+    let device_timing = snapshot.device_timing;
+
+    SemiAudioOutputSnapshot {
+        configured_sample_rate: snapshot
+            .configured_format
+            .map(|format| format.sample_rate)
+            .unwrap_or(0),
+        configured_channels: snapshot
+            .configured_format
+            .map(|format| format.channels)
+            .unwrap_or(0),
+        reserved0: 0,
+        target_buffer_frames: u32::try_from(snapshot.target_buffer_frames).unwrap_or(u32::MAX),
+        buffered_frames: u32::try_from(snapshot.buffered_frames).unwrap_or(u32::MAX),
+        played_frames_total: snapshot.played_frames_total,
+        submitted_frames_total: snapshot.submitted_frames_total,
+        started: u32::from(snapshot.started),
+        has_device_timing: u32::from(device_timing.is_some()),
+        base_pts_ms: device_timing
+            .map(|timing| us_to_ms(timing.base_pts_us))
+            .unwrap_or(0),
+        device_played_frames: device_timing
+            .map(|timing| timing.played_frames)
+            .unwrap_or(0),
     }
 }
 
@@ -184,7 +219,9 @@ pub extern "C" fn semi_player_open(
 
     let opened_media = match open_media(&path) {
         Ok(opened_media) => opened_media,
-        Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => return SEMI_E_MEDIA_OPEN_FAILED,
+        Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => {
+            return SEMI_E_MEDIA_OPEN_FAILED
+        }
         Err(MediaOpenError::Probe(MediaProbeError::FfmpegInit(_)))
         | Err(MediaOpenError::Probe(MediaProbeError::Decoder(_))) => {
             return SEMI_E_MEDIA_PROBE_FAILED;
@@ -352,10 +389,8 @@ pub extern "C" fn semi_player_get_state(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
-        unsafe {
-            *out_state = player.state().as_raw();
-        }
+    match with_player_mut(player, |player| unsafe {
+        *out_state = player.state().as_raw();
     }) {
         Ok(_) => SEMI_OK,
         Err(code) => code,
@@ -371,10 +406,8 @@ pub extern "C" fn semi_player_get_position_ms(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
-        unsafe {
-            *out_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
-        }
+    match with_player_mut(player, |player| unsafe {
+        *out_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
     }) {
         Ok(_) => SEMI_OK,
         Err(code) => code,
@@ -390,15 +423,13 @@ pub extern "C" fn semi_player_get_duration_ms(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
-        unsafe {
-            *out_duration_ms = player
-                .opened_media
-                .as_ref()
-                .and_then(|opened_media| opened_media.duration_us())
-                .map(us_to_ms)
-                .unwrap_or(0);
-        }
+    match with_player_mut(player, |player| unsafe {
+        *out_duration_ms = player
+            .opened_media
+            .as_ref()
+            .and_then(|opened_media| opened_media.duration_us())
+            .map(us_to_ms)
+            .unwrap_or(0);
     }) {
         Ok(_) => SEMI_OK,
         Err(code) => code,
@@ -419,7 +450,11 @@ pub extern "C" fn semi_player_get_media_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(media_info) = player.opened_media.as_ref().map(|opened_media| opened_media.info()) else {
+        let Some(media_info) = player
+            .opened_media
+            .as_ref()
+            .map(|opened_media| opened_media.info())
+        else {
             return SEMI_E_INVALID_STATE;
         };
 
@@ -470,10 +505,7 @@ pub extern "C" fn semi_player_debug_decode_next(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_pump(
-    player: *mut SemiPlayerHandle,
-    max_iterations: u32,
-) -> c_int {
+pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
     match with_player_mut(player, |player| pump_player(player, max_iterations)) {
         Ok(code) => code,
         Err(code) => code,
@@ -496,6 +528,31 @@ pub extern "C" fn semi_player_get_playback_snapshot(
 
         unsafe {
             *out_snapshot = build_playback_snapshot(player);
+        }
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_get_audio_output_snapshot(
+    player: *mut SemiPlayerHandle,
+    out_snapshot: *mut SemiAudioOutputSnapshot,
+) -> c_int {
+    if out_snapshot.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        unsafe {
+            *out_snapshot = build_audio_output_snapshot(player);
         }
 
         SEMI_OK

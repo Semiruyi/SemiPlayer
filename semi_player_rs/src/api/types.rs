@@ -84,6 +84,22 @@ pub struct SemiPlaybackSnapshot {
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
+pub struct SemiAudioOutputSnapshot {
+    pub configured_sample_rate: u32,
+    pub configured_channels: u16,
+    pub reserved0: u16,
+    pub target_buffer_frames: u32,
+    pub buffered_frames: u32,
+    pub played_frames_total: u64,
+    pub submitted_frames_total: u64,
+    pub started: u32,
+    pub has_device_timing: u32,
+    pub base_pts_ms: i64,
+    pub device_played_frames: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SemiVideoFrameInfo {
     pub pts_ms: i64,
     pub duration_ms: i64,

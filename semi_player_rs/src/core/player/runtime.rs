@@ -122,7 +122,9 @@ impl PlayerRuntime {
             if chunk.sample_rate == 0 {
                 chunk.sample_rate = front_format.sample_rate;
                 chunk.channels = front_format.channels;
-            } else if chunk.sample_rate != front_format.sample_rate || chunk.channels != front_format.channels {
+            } else if chunk.sample_rate != front_format.sample_rate
+                || chunk.channels != front_format.channels
+            {
                 break;
             }
 
@@ -320,7 +322,10 @@ mod tests {
 
         assert_eq!(removed, 1);
         assert_eq!(runtime.audio_queue_len(), 2);
-        assert_eq!(runtime.last_audio_frame().map(|frame| frame.pts_us), Some(20_000));
+        assert_eq!(
+            runtime.last_audio_frame().map(|frame| frame.pts_us),
+            Some(20_000)
+        );
     }
 
     #[test]
@@ -388,6 +393,12 @@ mod tests {
         assert_eq!(chunk.sample_rate, 48_000);
         assert_eq!(chunk.frame_count, 2);
         assert_eq!(runtime.audio_queue_len(), 1);
-        assert_eq!(runtime.queued_audio_frames.front().map(|frame| frame.sample_rate), Some(44_100));
+        assert_eq!(
+            runtime
+                .queued_audio_frames
+                .front()
+                .map(|frame| frame.sample_rate),
+            Some(44_100)
+        );
     }
 }

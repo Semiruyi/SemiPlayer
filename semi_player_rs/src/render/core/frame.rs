@@ -31,7 +31,8 @@ pub struct VideoFrame {
 
 impl VideoFrame {
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {
-        self.duration_us.map(|duration_us| self.pts_us.saturating_add(duration_us))
+        self.duration_us
+            .map(|duration_us| self.pts_us.saturating_add(duration_us))
     }
 
     pub fn byte_len(&self) -> usize {

@@ -1,18 +1,33 @@
-use crate::audio::backends::{AudioOutputBackend, CpalAudioOutputBackend};
-use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
 use crate::api::types::PlayerState;
+use crate::audio::backends::{AudioBackendTiming, AudioOutputBackend, CpalAudioOutputBackend};
+use crate::audio::core::clock::DevicePlaybackTiming;
+use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
+use crate::util::time::MediaTimeUs;
 
 const TARGET_DEVICE_BUFFER_FRAMES: usize = 4_096;
 const CHUNK_FRAME_COUNT: usize = 1_024;
 
 pub struct AudioOutputController {
     backend: CpalAudioOutputBackend,
+    timing_state: AudioOutputTimingState,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AudioOutputSnapshot {
+    pub configured_format: Option<AudioStreamFormat>,
+    pub target_buffer_frames: usize,
+    pub buffered_frames: usize,
+    pub played_frames_total: u64,
+    pub submitted_frames_total: u64,
+    pub started: bool,
+    pub device_timing: Option<DevicePlaybackTiming>,
 }
 
 impl AudioOutputController {
     pub fn new() -> Self {
         Self {
             backend: CpalAudioOutputBackend::new(TARGET_DEVICE_BUFFER_FRAMES),
+            timing_state: AudioOutputTimingState::default(),
         }
     }
 
@@ -28,6 +43,8 @@ impl AudioOutputController {
         if self.backend.configure(audio_format).is_err() {
             return;
         }
+
+        self.timing_state = AudioOutputTimingState::default();
     }
 
     pub fn sync_started_state(&mut self, state: PlayerState) {
@@ -58,22 +75,87 @@ impl AudioOutputController {
     }
 
     pub fn submit_chunk(&mut self, chunk: &AudioOutputChunk) {
+        self.timing_state.observe_submit(chunk);
         if self.backend.submit(chunk).is_err() {
             self.clear_buffer();
         }
     }
 
+    pub fn playback_timing(&self) -> Option<DevicePlaybackTiming> {
+        let backend_timing = self.backend.timing();
+        self.timing_state.to_device_timing(backend_timing)
+    }
+
+    pub fn snapshot(&self) -> AudioOutputSnapshot {
+        let backend_timing = self.backend.timing();
+
+        AudioOutputSnapshot {
+            configured_format: self.backend.configured_format(),
+            target_buffer_frames: self.backend.target_buffer_frames(),
+            buffered_frames: backend_timing.buffered_frames,
+            played_frames_total: backend_timing.played_frames_total,
+            submitted_frames_total: self.timing_state.submitted_frames_total,
+            started: backend_timing.started,
+            device_timing: self.timing_state.to_device_timing(backend_timing),
+        }
+    }
+
     pub fn clear_buffer(&mut self) {
         let _ = self.backend.clear_buffer();
+        self.timing_state = AudioOutputTimingState::default();
     }
 
     pub fn stop(&mut self) {
         let _ = self.backend.stop();
+        self.timing_state = AudioOutputTimingState::default();
     }
 }
 
 impl Default for AudioOutputController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct AudioOutputTimingState {
+    base_pts_us: Option<MediaTimeUs>,
+    submitted_frames_total: u64,
+    format: Option<AudioStreamFormat>,
+}
+
+impl AudioOutputTimingState {
+    fn observe_submit(&mut self, chunk: &AudioOutputChunk) {
+        let Some(format) = chunk.format() else {
+            return;
+        };
+
+        if self.format != Some(format) {
+            self.base_pts_us = chunk.pts_us;
+            self.submitted_frames_total = 0;
+            self.format = Some(format);
+        }
+
+        if self.base_pts_us.is_none() {
+            self.base_pts_us = chunk.pts_us;
+        }
+
+        self.submitted_frames_total = self
+            .submitted_frames_total
+            .saturating_add(chunk.frame_count as u64);
+    }
+
+    fn to_device_timing(&self, backend_timing: AudioBackendTiming) -> Option<DevicePlaybackTiming> {
+        let base_pts_us = self.base_pts_us?;
+        let format = self.format?;
+        let played_frames = backend_timing
+            .played_frames_total
+            .min(self.submitted_frames_total);
+
+        Some(DevicePlaybackTiming {
+            base_pts_us,
+            played_frames,
+            sample_rate: format.sample_rate,
+        })
     }
 }
