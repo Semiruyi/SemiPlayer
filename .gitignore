@@ -1,0 +1,16 @@
+tools/smoke/SemiPlayer.HelloTest/bin/
+tools/smoke/SemiPlayer.HelloTest/obj/
+semi_player_rs/target/
+
+.claude/
+.vs/
+.idea/
+.vscode/
+
+tmp
+*.tmp
+Thumbs.db
+.DS_Store
+
+third_party/ffmpeg/current/
+third_party/ffmpeg/archives/

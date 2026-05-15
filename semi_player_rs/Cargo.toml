@@ -1,0 +1,10 @@
+[package]
+name = "semi_player_rs"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+ffmpeg-next = { version = "8.1", features = ["codec", "format", "software-resampling", "software-scaling"] }
