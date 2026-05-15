@@ -69,6 +69,30 @@ impl PlayerRuntime {
         self.current_video_frame.is_some()
     }
 
+    pub fn has_buffered_future_video_frames(&self, min_count: usize) -> bool {
+        self.queued_video_frames.len() >= min_count
+    }
+
+    pub fn discard_consumed_audio_frames(&mut self, playback_time_us: MediaTimeUs) -> usize {
+        let mut removed = 0usize;
+
+        while let Some(front) = self.queued_audio_frames.front() {
+            let is_consumed = match front.end_time_us() {
+                Some(end_time_us) => end_time_us <= playback_time_us,
+                None => front.pts_us < playback_time_us,
+            };
+
+            if !is_consumed {
+                break;
+            }
+
+            let _ = self.queued_audio_frames.pop_front();
+            removed += 1;
+        }
+
+        removed
+    }
+
     pub fn select_video_frame(
         &mut self,
         scheduler: &VideoScheduler,
@@ -110,6 +134,7 @@ impl Default for PlayerRuntime {
 #[cfg(test)]
 mod tests {
     use super::PlayerRuntime;
+    use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
     use crate::render::core::scheduler::VideoScheduler;
 
@@ -147,7 +172,7 @@ mod tests {
             sample_rate: 48_000,
             channels: 2,
             sample_count: 240,
-            sample_format: crate::audio::core::frame::AudioSampleFormatCategory::F32,
+            sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
         });
         runtime.push_video_frame(VideoFrame {
@@ -170,5 +195,44 @@ mod tests {
         assert!(runtime.current_video_frame().is_none());
         assert!(runtime.last_audio_frame().is_none());
         assert!(!runtime.has_reached_end_of_stream());
+    }
+
+    #[test]
+    fn discard_consumed_audio_frames_keeps_future_audio() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 0,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 480,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+        });
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 10_000,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 480,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+        });
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 20_000,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 480,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+        });
+
+        let removed = runtime.discard_consumed_audio_frames(15_000);
+
+        assert_eq!(removed, 1);
+        assert_eq!(runtime.audio_queue_len(), 2);
+        assert_eq!(runtime.last_audio_frame().map(|frame| frame.pts_us), Some(20_000));
     }
 }

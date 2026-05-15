@@ -21,3 +21,9 @@ pub struct AudioFrame {
     pub sample_format: AudioSampleFormatCategory,
     pub is_planar: bool,
 }
+
+impl AudioFrame {
+    pub fn end_time_us(&self) -> Option<MediaTimeUs> {
+        self.duration_us.map(|duration_us| self.pts_us.saturating_add(duration_us))
+    }
+}
