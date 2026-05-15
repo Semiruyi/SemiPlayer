@@ -1,1 +1,3 @@
-// Platform-agnostic media open/demux/decode logic will live here.
+mod probe;
+
+pub use probe::{probe_media, MediaInfo, MediaProbeError, StreamInfo, StreamKind};

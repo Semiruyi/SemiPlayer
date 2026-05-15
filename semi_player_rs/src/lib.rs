@@ -8,8 +8,12 @@ mod util;
 
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
-use crate::api::error::{ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_OK};
+use crate::api::error::{
+    ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_E_MEDIA_OPEN_FAILED,
+    SEMI_E_MEDIA_PROBE_FAILED, SEMI_OK,
+};
 use crate::api::types::PlayerState;
+use crate::core::media::{probe_media, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::util::time::{ms_to_us, us_to_ms};
 
@@ -72,9 +76,18 @@ pub extern "C" fn semi_player_open(
         Err(code) => return code,
     };
 
+    let media_info = match probe_media(&path) {
+        Ok(media_info) => media_info,
+        Err(MediaProbeError::OpenInput(_)) => return SEMI_E_MEDIA_OPEN_FAILED,
+        Err(MediaProbeError::FfmpegInit(_)) | Err(MediaProbeError::Decoder(_)) => {
+            return SEMI_E_MEDIA_PROBE_FAILED;
+        }
+    };
+
     match with_player_mut(player, |player| {
         player.media_path = Some(path);
-        player.duration_us = 0;
+        player.duration_us = media_info.duration_us.unwrap_or(0);
+        player.media_info = Some(media_info);
         player.reset_runtime_state();
         player.set_state(PlayerState::Ready);
     }) {
@@ -141,9 +154,7 @@ pub extern "C" fn semi_player_seek(
 #[no_mangle]
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
     match with_player_mut(player, |player| {
-        player.media_path = None;
-        player.duration_us = 0;
-        player.reset_runtime_state();
+        player.clear_media();
         player.set_state(PlayerState::Idle);
         SEMI_OK
     }) {

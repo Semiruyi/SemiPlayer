@@ -2,6 +2,10 @@ using System.Runtime.InteropServices;
 
 Console.WriteLine("=== SemiPlayer Player Skeleton Test ===");
 
+string mediaPath = args.Length > 0
+    ? args[0]
+    : throw new ArgumentException("Usage: dotnet run --project tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj -- <media-file>");
+
 IntPtr player;
 EnsureOk(Native.semi_player_create(out player), "semi_player_create");
 
@@ -12,7 +16,7 @@ try
     Console.WriteLine($"[semi_ffmpeg_version_string] {version}");
     Native.semi_free_string(versionPtr);
 
-    EnsureOk(Native.semi_player_open(player, @"C:\media\placeholder.mp4"), "semi_player_open");
+    EnsureOk(Native.semi_player_open(player, mediaPath), "semi_player_open");
     EnsureOk(Native.semi_player_play(player), "semi_player_play");
     EnsureOk(Native.semi_player_seek(player, 12_345, 0), "semi_player_seek");
     EnsureOk(Native.semi_player_set_speed(player, 1.25), "semi_player_set_speed");

@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
+use crate::core::media::MediaInfo;
 use crate::render::core::scheduler::VideoScheduler;
 use crate::util::time::MediaTimeUs;
 
@@ -12,6 +13,7 @@ pub struct SemiPlayerHandle {
     pub(crate) speed: c_double,
     pub(crate) duration_us: MediaTimeUs,
     pub(crate) media_path: Option<String>,
+    pub(crate) media_info: Option<MediaInfo>,
     pub(crate) subtitles_visible: bool,
     pub(crate) video_presentation_bias_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
@@ -25,6 +27,7 @@ impl SemiPlayerHandle {
             speed: 1.0,
             duration_us: 0,
             media_path: None,
+            media_info: None,
             subtitles_visible: true,
             video_presentation_bias_us: 0,
             audio_clock: AudioClock::new(),
@@ -42,6 +45,13 @@ impl SemiPlayerHandle {
         self.video_presentation_bias_us = 0;
         self.audio_clock.reset();
         self.video_scheduler = VideoScheduler::new();
+    }
+
+    pub fn clear_media(&mut self) {
+        self.duration_us = 0;
+        self.media_path = None;
+        self.media_info = None;
+        self.reset_runtime_state();
     }
 
     pub fn set_state(&self, state: PlayerState) {
