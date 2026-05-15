@@ -136,6 +136,7 @@ Rust core owns:
 - playback state machine
 - clocks and sync
 - output contracts
+- synchronized timeline semantics
 
 Platform backends own:
 
@@ -148,6 +149,7 @@ UI hosts own:
 - application windowing
 - input wiring
 - presenting the exported frame output
+- measuring host-side presentation delay characteristics
 - user-facing controls
 
 ## 8. Core Design Rule
@@ -165,6 +167,7 @@ It should know only:
 - how to decode media
 - how to synchronize outputs
 - how to produce renderable frame output through an abstract contract
+- how to compensate for presentation bias supplied by the host
 
 ## 9. Rust Module Direction
 
@@ -284,7 +287,7 @@ input
 Video:
 
 - FFmpeg decodes compressed packets into frames
-- the core schedules and forwards frames into the active render backend
+- the core schedules and forwards frames into the active render backend using synchronized timeline semantics and host-supplied presentation bias
 
 Audio:
 
@@ -307,6 +310,7 @@ The render layer should expose portable concepts such as:
 - render target
 - subtitle overlay composition
 - output surface contract
+- presentation bias input
 
 It should not expose D3D11-specific concepts as the only valid model.
 
@@ -411,6 +415,48 @@ Recommended sync rule:
 - video schedules itself against audio
 - subtitles follow the same timeline basis
 
+### 15.5 Presentation Bias Compensation
+
+The player should not assume that a frame becomes visible at the exact moment the host receives it.
+
+Instead:
+
+- the player owns synchronized timeline semantics
+- the host measures or estimates its own presentation delay
+- the host feeds a presentation bias value back into the player
+- the player uses that bias when deciding which frame is currently correct for display
+
+Conceptually:
+
+```text
+target_video_time = audio_presentation_clock + presentation_bias
+```
+
+Where:
+
+- `audio_presentation_clock` is the player-side estimate of what the user is currently hearing
+- `presentation_bias` is a host-supplied estimate of how late the displayed frame will become visible
+
+This keeps the media synchronization rules centralized in the player while allowing each host shell to account for its own display pipeline.
+
+### 15.6 Responsibility Split
+
+The player is responsible for:
+
+- audio clock ownership
+- timeline progression
+- seek/reset flush semantics
+- subtitle timing
+- frame validity and drop decisions
+- current recommended synchronized output
+
+The host is responsible for:
+
+- measuring or estimating presentation delay
+- feeding presentation bias back to the player
+- deciding how to integrate the output with its own render loop
+- presenting the already synchronized output result
+
 ## 16. UI Host Strategy
 
 ### 16.1 WPF Short-Term
@@ -420,6 +466,7 @@ Short-term Windows presentation path:
 - Rust exports a Windows-compatible output surface
 - WPF adapter opens it through the Windows presentation path
 - `D3DImage` hosts the frame
+- WPF adapter measures or estimates presentation delay and reports it back to the player
 
 This belongs in a WPF adapter project, not in the portable player core.
 
@@ -429,6 +476,7 @@ Avalonia should reuse:
 
 - the same core playback API
 - the same output contract category
+- the same presentation bias compensation model
 
 But its presentation adapter should be free to differ from WPF.
 
@@ -450,6 +498,7 @@ int semi_player_pause(SemiPlayerHandle* player);
 int semi_player_seek(SemiPlayerHandle* player, int64_t position_ms, int exact);
 int semi_player_reset(SemiPlayerHandle* player);
 int semi_player_set_speed(SemiPlayerHandle* player, double speed);
+int semi_player_set_video_presentation_bias_ms(SemiPlayerHandle* player, int32_t bias_ms);
 
 int semi_player_select_subtitle_track(SemiPlayerHandle* player, int32_t track_id);
 int semi_player_load_external_subtitle(SemiPlayerHandle* player, const char* path_utf8);
@@ -466,6 +515,7 @@ Design notes:
 - functions return explicit error codes
 - opaque pointer hides Rust internals
 - platform-specific surface/export APIs should not define the whole ABI shape
+- the public API should allow hosts to provide presentation bias without forcing hosts to own media synchronization rules
 
 ## 18. Temporary Scaffolding
 
@@ -514,6 +564,7 @@ Deferred decisions:
 - whether `cpal` remains sufficient across target platforms
 - exact callback/event model
 - how platform-specific output surfaces should be represented in public APIs
+- whether presentation bias should remain a simple estimated offset or evolve into richer present-feedback integration
 
 ## 21. Milestones
 

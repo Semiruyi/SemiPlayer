@@ -1,1 +1,2 @@
-// Public FFI-facing API types and errors will live here.
+pub mod error;
+pub mod types;

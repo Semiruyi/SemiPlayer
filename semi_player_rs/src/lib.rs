@@ -1,47 +1,22 @@
+mod api;
+mod audio;
+mod core;
+mod platform;
+mod render;
+mod subtitle;
+mod util;
+
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-const SEMI_OK: c_int = 0;
-const SEMI_E_INVALID_ARG: c_int = -1;
-const SEMI_E_INVALID_STATE: c_int = -2;
-
-const SEMI_PLAYER_STATE_IDLE: u32 = 0;
-const SEMI_PLAYER_STATE_READY: u32 = 1;
-const SEMI_PLAYER_STATE_PLAYING: u32 = 2;
-const SEMI_PLAYER_STATE_PAUSED: u32 = 3;
-
-#[repr(C)]
-pub struct SemiPlayerHandle {
-    state: AtomicU32,
-    speed: c_double,
-    position_ms: i64,
-    duration_ms: i64,
-    media_path: Option<String>,
-    subtitles_visible: bool,
-}
-
-impl SemiPlayerHandle {
-    fn new() -> Self {
-        Self {
-            state: AtomicU32::new(SEMI_PLAYER_STATE_IDLE),
-            speed: 1.0,
-            position_ms: 0,
-            duration_ms: 0,
-            media_path: None,
-            subtitles_visible: true,
-        }
-    }
-
-    fn is_media_loaded(&self) -> bool {
-        self.media_path.is_some()
-    }
-}
+use crate::api::error::{ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_OK};
+use crate::api::types::PlayerState;
+use crate::core::player::handle::SemiPlayerHandle;
+use crate::util::time::{ms_to_us, us_to_ms};
 
 fn with_player_mut<T>(
     player: *mut SemiPlayerHandle,
     f: impl FnOnce(&mut SemiPlayerHandle) -> T,
-) -> Result<T, c_int> {
+) -> Result<T, ResultCode> {
     if player.is_null() {
         return Err(SEMI_E_INVALID_ARG);
     }
@@ -99,11 +74,11 @@ pub extern "C" fn semi_player_open(
 
     match with_player_mut(player, |player| {
         player.media_path = Some(path);
-        player.position_ms = 0;
-        player.duration_ms = 0;
+        player.position_us = 0;
+        player.duration_us = 0;
         player.speed = 1.0;
         player.subtitles_visible = true;
-        player.state.store(SEMI_PLAYER_STATE_READY, Ordering::SeqCst);
+        player.set_state(PlayerState::Ready);
     }) {
         Ok(_) => SEMI_OK,
         Err(code) => code,
@@ -117,7 +92,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
             return SEMI_E_INVALID_STATE;
         }
 
-        player.state.store(SEMI_PLAYER_STATE_PLAYING, Ordering::SeqCst);
+        player.set_state(PlayerState::Playing);
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -132,7 +107,7 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
             return SEMI_E_INVALID_STATE;
         }
 
-        player.state.store(SEMI_PLAYER_STATE_PAUSED, Ordering::SeqCst);
+        player.set_state(PlayerState::Paused);
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -154,7 +129,7 @@ pub extern "C" fn semi_player_seek(
             return SEMI_E_INVALID_ARG;
         }
 
-        player.position_ms = position_ms;
+        player.position_us = ms_to_us(position_ms);
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -166,11 +141,11 @@ pub extern "C" fn semi_player_seek(
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
     match with_player_mut(player, |player| {
         player.media_path = None;
-        player.position_ms = 0;
-        player.duration_ms = 0;
+        player.position_us = 0;
+        player.duration_us = 0;
         player.speed = 1.0;
         player.subtitles_visible = true;
-        player.state.store(SEMI_PLAYER_STATE_IDLE, Ordering::SeqCst);
+        player.set_state(PlayerState::Idle);
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -225,7 +200,7 @@ pub extern "C" fn semi_player_get_state(
 
     match with_player_mut(player, |player| {
         unsafe {
-            *out_state = player.state.load(Ordering::SeqCst);
+            *out_state = player.state().as_raw();
         }
     }) {
         Ok(_) => SEMI_OK,
@@ -244,7 +219,7 @@ pub extern "C" fn semi_player_get_position_ms(
 
     match with_player_mut(player, |player| {
         unsafe {
-            *out_position_ms = player.position_ms;
+            *out_position_ms = us_to_ms(player.position_us);
         }
     }) {
         Ok(_) => SEMI_OK,
@@ -263,7 +238,7 @@ pub extern "C" fn semi_player_get_duration_ms(
 
     match with_player_mut(player, |player| {
         unsafe {
-            *out_duration_ms = player.duration_ms;
+            *out_duration_ms = us_to_ms(player.duration_us);
         }
     }) {
         Ok(_) => SEMI_OK,
