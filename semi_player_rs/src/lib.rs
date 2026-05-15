@@ -195,7 +195,8 @@ pub extern "C" fn semi_player_open(
         Err(MediaOpenError::ReadPacket(_))
         | Err(MediaOpenError::SendPacket(_))
         | Err(MediaOpenError::ReceiveFrame(_))
-        | Err(MediaOpenError::ScaleFrame(_)) => {
+        | Err(MediaOpenError::ScaleFrame(_))
+        | Err(MediaOpenError::ResampleFrame(_)) => {
             return SEMI_E_DECODER_OPEN_FAILED;
         }
         Err(MediaOpenError::Seek(_)) => {

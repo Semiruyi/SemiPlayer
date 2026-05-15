@@ -174,6 +174,7 @@ mod tests {
             sample_count: 240,
             sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
+            data: vec![0.0; 240 * 2],
         });
         runtime.push_video_frame(VideoFrame {
             pts_us: 10_000,
@@ -209,6 +210,7 @@ mod tests {
             sample_count: 480,
             sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
+            data: vec![0.0; 480 * 2],
         });
         runtime.push_audio_frame(AudioFrame {
             pts_us: 10_000,
@@ -218,6 +220,7 @@ mod tests {
             sample_count: 480,
             sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
+            data: vec![0.0; 480 * 2],
         });
         runtime.push_audio_frame(AudioFrame {
             pts_us: 20_000,
@@ -227,6 +230,7 @@ mod tests {
             sample_count: 480,
             sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
+            data: vec![0.0; 480 * 2],
         });
 
         let removed = runtime.discard_consumed_audio_frames(15_000);

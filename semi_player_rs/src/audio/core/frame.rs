@@ -1,5 +1,7 @@
 use crate::util::time::MediaTimeUs;
 
+pub const NORMALIZED_AUDIO_FORMAT: AudioSampleFormatCategory = AudioSampleFormatCategory::F32;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AudioSampleFormatCategory {
     U8,
@@ -20,10 +22,15 @@ pub struct AudioFrame {
     pub sample_count: usize,
     pub sample_format: AudioSampleFormatCategory,
     pub is_planar: bool,
+    pub data: Vec<f32>,
 }
 
 impl AudioFrame {
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {
         self.duration_us.map(|duration_us| self.pts_us.saturating_add(duration_us))
+    }
+
+    pub fn sample_len(&self) -> usize {
+        self.data.len()
     }
 }

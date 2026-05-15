@@ -4,7 +4,8 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 use ffmpeg_next::software::scaling::{context::Context as ScalingContext, Flags as ScalingFlags};
 
-use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
+use crate::audio::core::frame::AudioFrame;
+use crate::audio::core::resampler::NormalizedAudioResampler;
 use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
 use crate::util::time::MediaTimeUs;
 
@@ -29,6 +30,7 @@ pub struct OpenedVideoDecoder {
 pub struct OpenedAudioDecoder {
     pub index: usize,
     pub decoder: ffmpeg::decoder::Audio,
+    resampler: NormalizedAudioResampler,
 }
 
 #[derive(Default)]
@@ -50,6 +52,7 @@ pub enum MediaOpenError {
     SendPacket(ffmpeg::Error),
     ReceiveFrame(ffmpeg::Error),
     ScaleFrame(ffmpeg::Error),
+    ResampleFrame(ffmpeg::Error),
     Seek(ffmpeg::Error),
 }
 
@@ -291,6 +294,7 @@ fn open_audio_decoder(
     Ok(Some(OpenedAudioDecoder {
         index: stream_index,
         decoder,
+        resampler: NormalizedAudioResampler::new(),
     }))
 }
 
@@ -377,7 +381,7 @@ fn collect_audio_frames(
     loop {
         let mut frame = frame::Audio::empty();
         match decoder.decoder.receive_frame(&mut frame) {
-            Ok(()) => outputs.push_back(DecodedOutput::Audio(map_audio_frame(&decoder.decoder, &frame))),
+            Ok(()) => outputs.push_back(DecodedOutput::Audio(map_audio_frame(decoder, &frame)?)),
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
             Err(ffmpeg::Error::Eof) => {
                 reached_decoder_eof = true;
@@ -430,22 +434,16 @@ fn map_video_frame(
 }
 
 fn map_audio_frame(
-    decoder: &ffmpeg::decoder::Audio,
+    decoder: &mut OpenedAudioDecoder,
     frame: &frame::Audio,
-) -> AudioFrame {
-    let time_base = decoder.packet_time_base();
+) -> Result<AudioFrame, MediaOpenError> {
+    let time_base = decoder.decoder.packet_time_base();
     let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
     let duration_us = audio_duration_us(frame);
 
-    AudioFrame {
-        pts_us,
-        duration_us,
-        sample_rate: frame.rate(),
-        channels: frame.channels(),
-        sample_count: frame.samples(),
-        sample_format: map_sample_format(frame.format()),
-        is_planar: frame.is_planar(),
-    }
+    decoder
+        .resampler
+        .convert(&decoder.decoder, frame, pts_us, duration_us)
 }
 
 fn frame_timestamp_us(timestamp: Option<i64>, time_base: Rational) -> MediaTimeUs {
@@ -479,18 +477,6 @@ fn map_pixel_format(pixel: format::Pixel) -> PixelFormatCategory {
         format::Pixel::BGRA => PixelFormatCategory::Bgra8,
         format::Pixel::GRAY8 => PixelFormatCategory::Gray8,
         _ => PixelFormatCategory::Unknown,
-    }
-}
-
-fn map_sample_format(sample: format::Sample) -> AudioSampleFormatCategory {
-    match sample {
-        format::Sample::U8(_) => AudioSampleFormatCategory::U8,
-        format::Sample::I16(_) => AudioSampleFormatCategory::I16,
-        format::Sample::I32(_) => AudioSampleFormatCategory::I32,
-        format::Sample::I64(_) => AudioSampleFormatCategory::I64,
-        format::Sample::F32(_) => AudioSampleFormatCategory::F32,
-        format::Sample::F64(_) => AudioSampleFormatCategory::F64,
-        format::Sample::None => AudioSampleFormatCategory::Unknown,
     }
 }
 
