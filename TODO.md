@@ -5,7 +5,7 @@ This file tracks the current implementation priorities for SemiPlayer.
 Related documents:
 
 - [ARCHITECTURE.md](c:/y-s/project/Semi/ARCHITECTURE.md)
-- [FFMPEG_ENV_SETUP.md](c:/y-s/project/Semi/FFMPEG_ENV_SETUP.md)
+- [docs/env/windows.md](c:/y-s/project/Semi/docs/env/windows.md)
 
 ## Current Snapshot
 
@@ -343,7 +343,7 @@ Whenever these change:
 update:
 
 - [ARCHITECTURE.md](c:/y-s/project/Semi/ARCHITECTURE.md)
-- [FFMPEG_ENV_SETUP.md](c:/y-s/project/Semi/FFMPEG_ENV_SETUP.md)
+- [docs/env/windows.md](c:/y-s/project/Semi/docs/env/windows.md)
 - [TODO.md](c:/y-s/project/Semi/TODO.md)
 
 ### C2. Keep the smoke test small

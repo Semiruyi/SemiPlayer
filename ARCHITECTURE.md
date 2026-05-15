@@ -46,7 +46,7 @@ The repository has already verified the current Windows development chain:
 
 Reference:
 
-- [FFMPEG_ENV_SETUP.md](c:/y-s/project/Semi/FFMPEG_ENV_SETUP.md)
+- [docs/env/windows.md](c:/y-s/project/Semi/docs/env/windows.md)
 
 Important current facts:
 
@@ -82,7 +82,7 @@ Semi/
     smoke/
       SemiPlayer.HelloTest/    temporary Windows/.NET smoke test
   third_party/                 local FFmpeg package and related assets
-  FFMPEG_ENV_SETUP.md          current Windows development baseline
+  docs/env/windows.md          current Windows development baseline
   ARCHITECTURE.md              this document
 ```
 

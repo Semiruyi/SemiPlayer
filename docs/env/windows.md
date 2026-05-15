@@ -10,7 +10,7 @@ It is intended to be the source of truth for the currently verified Windows setu
 
 For overall system design, see:
 
-- [ARCHITECTURE.md](c:/y-s/project/Semi/ARCHITECTURE.md)
+- [ARCHITECTURE.md](../../ARCHITECTURE.md)
 
 This document is not a cross-platform environment specification.
 
@@ -70,7 +70,7 @@ The current baseline is not described as universally optimal. It is described on
 
 Rust-side FFmpeg discovery is configured in:
 
-- [.cargo/config.toml](c:/y-s/project/Semi/.cargo/config.toml)
+- [`.cargo/config.toml`](../../.cargo/config.toml)
 
 Current contents:
 
@@ -89,7 +89,7 @@ Meaning:
 
 The current Rust dependency direction is defined in:
 
-- [semi_player_rs/Cargo.toml](c:/y-s/project/Semi/semi_player_rs/Cargo.toml)
+- [`semi_player_rs/Cargo.toml`](../../semi_player_rs/Cargo.toml)
 
 Current FFmpeg-related dependency:
 
@@ -106,7 +106,7 @@ If this version changes, this document should be updated together with:
 
 The current .NET verification host is:
 
-- [tools/smoke/SemiPlayer.HelloTest](c:/y-s/project/Semi/tools/smoke/SemiPlayer.HelloTest)
+- [`tools/smoke/SemiPlayer.HelloTest`](../../tools/smoke/SemiPlayer.HelloTest)
 
 Its project file currently copies:
 
@@ -115,7 +115,7 @@ Its project file currently copies:
 
 Reference:
 
-- [tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj](c:/y-s/project/Semi/tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj)
+- [`tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj`](../../tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj)
 
 This arrangement exists for local Windows verification only. It is not yet the final deployment strategy.
 
@@ -160,11 +160,11 @@ dotnet run
 
 ## 10. Repository Files That Define This Baseline
 
-- [.cargo/config.toml](c:/y-s/project/Semi/.cargo/config.toml)
-- [semi_player_rs/Cargo.toml](c:/y-s/project/Semi/semi_player_rs/Cargo.toml)
-- [tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj](c:/y-s/project/Semi/tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj)
-- [ARCHITECTURE.md](c:/y-s/project/Semi/ARCHITECTURE.md)
-- [FFMPEG_ENV_SETUP.md](c:/y-s/project/Semi/FFMPEG_ENV_SETUP.md)
+- [`.cargo/config.toml`](../../.cargo/config.toml)
+- [`semi_player_rs/Cargo.toml`](../../semi_player_rs/Cargo.toml)
+- [`tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj`](../../tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj)
+- [ARCHITECTURE.md](../../ARCHITECTURE.md)
+- [docs/env/windows.md](windows.md)
 
 ## 11. Change Management Rules
 
