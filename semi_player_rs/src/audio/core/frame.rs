@@ -1,4 +1,5 @@
 use crate::util::time::MediaTimeUs;
+use super::output::AudioStreamFormat;
 
 pub const NORMALIZED_AUDIO_FORMAT: AudioSampleFormatCategory = AudioSampleFormatCategory::F32;
 
@@ -32,5 +33,12 @@ impl AudioFrame {
 
     pub fn sample_len(&self) -> usize {
         self.data.len()
+    }
+
+    pub fn format(&self) -> AudioStreamFormat {
+        AudioStreamFormat {
+            sample_rate: self.sample_rate,
+            channels: self.channels,
+        }
     }
 }

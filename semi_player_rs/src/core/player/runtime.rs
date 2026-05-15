@@ -1,12 +1,14 @@
 use std::collections::VecDeque;
 
 use crate::audio::core::frame::AudioFrame;
+use crate::audio::core::output::AudioOutputChunk;
 use crate::render::core::frame::VideoFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
 pub struct PlayerRuntime {
     queued_audio_frames: VecDeque<AudioFrame>,
+    queued_audio_sample_offset: usize,
     queued_video_frames: VecDeque<VideoFrame>,
     current_video_frame: Option<VideoFrame>,
     last_audio_frame: Option<AudioFrame>,
@@ -17,6 +19,7 @@ impl PlayerRuntime {
     pub fn new() -> Self {
         Self {
             queued_audio_frames: VecDeque::new(),
+            queued_audio_sample_offset: 0,
             queued_video_frames: VecDeque::new(),
             current_video_frame: None,
             last_audio_frame: None,
@@ -26,6 +29,7 @@ impl PlayerRuntime {
 
     pub fn clear(&mut self) {
         self.queued_audio_frames.clear();
+        self.queued_audio_sample_offset = 0;
         self.queued_video_frames.clear();
         self.current_video_frame = None;
         self.last_audio_frame = None;
@@ -87,10 +91,81 @@ impl PlayerRuntime {
             }
 
             let _ = self.queued_audio_frames.pop_front();
+            self.queued_audio_sample_offset = 0;
             removed += 1;
         }
 
         removed
+    }
+
+    pub fn pull_audio_chunk(&mut self, requested_frame_count: usize) -> Option<AudioOutputChunk> {
+        if requested_frame_count == 0 {
+            return None;
+        }
+
+        let mut chunk = AudioOutputChunk::default();
+        let mut remaining_frames = requested_frame_count;
+
+        while remaining_frames > 0 {
+            let Some(front_frame) = self.queued_audio_frames.front() else {
+                break;
+            };
+
+            let front_format = front_frame.format();
+            if chunk.sample_rate == 0 {
+                chunk.sample_rate = front_format.sample_rate;
+                chunk.channels = front_format.channels;
+            } else if chunk.sample_rate != front_format.sample_rate || chunk.channels != front_format.channels {
+                break;
+            }
+
+            let channel_count = usize::from(front_frame.channels);
+            if channel_count == 0 || front_frame.sample_len() <= self.queued_audio_sample_offset {
+                let _ = self.queued_audio_frames.pop_front();
+                self.queued_audio_sample_offset = 0;
+                continue;
+            }
+
+            let available_samples = front_frame.sample_len() - self.queued_audio_sample_offset;
+            let available_frames = available_samples / channel_count;
+            if available_frames == 0 {
+                let _ = self.queued_audio_frames.pop_front();
+                self.queued_audio_sample_offset = 0;
+                continue;
+            }
+
+            let frames_to_take = remaining_frames.min(available_frames);
+            let samples_to_take = frames_to_take * channel_count;
+            let start_sample = self.queued_audio_sample_offset;
+            let end_sample = start_sample + samples_to_take;
+
+            if chunk.pts_us.is_none() {
+                let consumed_frames = start_sample / channel_count;
+                let consumed_us = (consumed_frames as i64)
+                    .saturating_mul(1_000_000)
+                    .saturating_div(i64::from(front_frame.sample_rate));
+                chunk.pts_us = Some(front_frame.pts_us.saturating_add(consumed_us));
+            }
+
+            chunk
+                .samples
+                .extend_from_slice(&front_frame.data[start_sample..end_sample]);
+            chunk.frame_count += frames_to_take;
+            remaining_frames -= frames_to_take;
+
+            if end_sample >= front_frame.sample_len() {
+                let _ = self.queued_audio_frames.pop_front();
+                self.queued_audio_sample_offset = 0;
+            } else {
+                self.queued_audio_sample_offset = end_sample;
+            }
+        }
+
+        if chunk.is_empty() {
+            None
+        } else {
+            Some(chunk)
+        }
     }
 
     pub fn select_video_frame(
@@ -135,6 +210,7 @@ impl Default for PlayerRuntime {
 mod tests {
     use super::PlayerRuntime;
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
+    use crate::audio::core::output::AudioStreamFormat;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
     use crate::render::core::scheduler::VideoScheduler;
 
@@ -238,5 +314,73 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(runtime.audio_queue_len(), 2);
         assert_eq!(runtime.last_audio_frame().map(|frame| frame.pts_us), Some(20_000));
+    }
+
+    #[test]
+    fn pull_audio_chunk_consumes_partial_frame() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 100_000,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 4,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![0.0, 0.1, 1.0, 1.1, 2.0, 2.1, 3.0, 3.1],
+        });
+
+        let chunk = runtime.pull_audio_chunk(2).expect("chunk");
+
+        assert_eq!(
+            chunk.format(),
+            Some(AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            })
+        );
+        assert_eq!(chunk.pts_us, Some(100_000));
+        assert_eq!(chunk.frame_count, 2);
+        assert_eq!(chunk.samples, vec![0.0, 0.1, 1.0, 1.1]);
+        assert_eq!(runtime.audio_queue_len(), 1);
+
+        let remaining = runtime.pull_audio_chunk(8).expect("remaining");
+        assert_eq!(remaining.frame_count, 2);
+        assert_eq!(remaining.samples, vec![2.0, 2.1, 3.0, 3.1]);
+        assert_eq!(runtime.audio_queue_len(), 0);
+    }
+
+    #[test]
+    fn pull_audio_chunk_stops_on_format_boundary() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 0,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 2,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![0.0, 0.1, 1.0, 1.1],
+        });
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 10_000,
+            duration_us: Some(10_000),
+            sample_rate: 44_100,
+            channels: 2,
+            sample_count: 2,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![2.0, 2.1, 3.0, 3.1],
+        });
+
+        let chunk = runtime.pull_audio_chunk(8).expect("chunk");
+
+        assert_eq!(chunk.sample_rate, 48_000);
+        assert_eq!(chunk.frame_count, 2);
+        assert_eq!(runtime.audio_queue_len(), 1);
+        assert_eq!(runtime.queued_audio_frames.front().map(|frame| frame.sample_rate), Some(44_100));
     }
 }
