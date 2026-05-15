@@ -53,6 +53,22 @@ try
     Console.WriteLine($"[snapshot.last_audio_pts_ms] {snapshot.LastAudioPtsMs}");
     Console.WriteLine($"[snapshot.end_of_stream] {snapshot.EndOfStream}");
 
+    if (snapshot.HasCurrentVideoFrame != 0)
+    {
+        EnsureOk(Native.semi_player_get_current_video_frame_info(player, out SemiVideoFrameInfo videoFrameInfo), "semi_player_get_current_video_frame_info");
+        byte[] frameBytes = new byte[videoFrameInfo.ByteLen];
+        EnsureOk(Native.semi_player_copy_current_video_frame_bgra(player, frameBytes, videoFrameInfo.ByteLen), "semi_player_copy_current_video_frame_bgra");
+        Console.WriteLine($"[video_frame.pts_ms] {videoFrameInfo.PtsMs}");
+        Console.WriteLine($"[video_frame.duration_ms] {videoFrameInfo.DurationMs}");
+        Console.WriteLine($"[video_frame.width] {videoFrameInfo.Width}");
+        Console.WriteLine($"[video_frame.height] {videoFrameInfo.Height}");
+        Console.WriteLine($"[video_frame.stride] {videoFrameInfo.Stride}");
+        Console.WriteLine($"[video_frame.pixel_format] {videoFrameInfo.PixelFormat}");
+        Console.WriteLine($"[video_frame.byte_len] {videoFrameInfo.ByteLen}");
+        Console.WriteLine($"[video_frame.flags] {videoFrameInfo.Flags}");
+        Console.WriteLine($"[video_frame.first_bytes] {string.Join(',', frameBytes.Take(Math.Min(8, frameBytes.Length)))}");
+    }
+
     for (int i = 0; i < 8; i++)
     {
         EnsureOk(Native.semi_player_debug_decode_next(player, out SemiDecodedOutput decoded), "semi_player_debug_decode_next");
@@ -135,6 +151,12 @@ internal static class Native
     internal static extern int semi_player_get_playback_snapshot(IntPtr player, out SemiPlaybackSnapshot snapshot);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_current_video_frame_info(IntPtr player, out SemiVideoFrameInfo frameInfo);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_copy_current_video_frame_bgra(IntPtr player, byte[] destination, uint destinationLen);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_debug_decode_next(IntPtr player, out SemiDecodedOutput decodedOutput);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -189,4 +211,17 @@ internal struct SemiPlaybackSnapshot
     internal long CurrentVideoDurationMs;
     internal long LastAudioPtsMs;
     internal uint EndOfStream;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiVideoFrameInfo
+{
+    internal long PtsMs;
+    internal long DurationMs;
+    internal uint Width;
+    internal uint Height;
+    internal uint Stride;
+    internal uint PixelFormat;
+    internal uint ByteLen;
+    internal uint Flags;
 }

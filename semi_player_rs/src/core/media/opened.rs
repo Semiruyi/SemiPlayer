@@ -1,5 +1,8 @@
+use std::collections::VecDeque;
+
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
+use ffmpeg_next::software::scaling::{context::Context as ScalingContext, Flags as ScalingFlags};
 
 use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
 use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
@@ -13,16 +16,29 @@ pub struct OpenedMedia {
     info: MediaInfo,
     video_decoder: Option<OpenedVideoDecoder>,
     audio_decoder: Option<OpenedAudioDecoder>,
+    pending_outputs: VecDeque<DecodedOutput>,
+    draining_state: DecoderDrainingState,
 }
 
 pub struct OpenedVideoDecoder {
     pub index: usize,
     pub decoder: ffmpeg::decoder::Video,
+    scaler: Option<ScalingContext>,
 }
 
 pub struct OpenedAudioDecoder {
     pub index: usize,
     pub decoder: ffmpeg::decoder::Audio,
+}
+
+#[derive(Default)]
+struct DecoderDrainingState {
+    input_exhausted: bool,
+    video_eof_sent: bool,
+    audio_eof_sent: bool,
+    video_drained: bool,
+    audio_drained: bool,
+    end_of_stream_emitted: bool,
 }
 
 #[derive(Debug)]
@@ -33,6 +49,7 @@ pub enum MediaOpenError {
     ReadPacket(ffmpeg::Error),
     SendPacket(ffmpeg::Error),
     ReceiveFrame(ffmpeg::Error),
+    ScaleFrame(ffmpeg::Error),
     Seek(ffmpeg::Error),
 }
 
@@ -69,6 +86,8 @@ impl OpenedMedia {
             info,
             video_decoder,
             audio_decoder,
+            pending_outputs: VecDeque::new(),
+            draining_state: DecoderDrainingState::default(),
         })
     }
 
@@ -107,6 +126,9 @@ impl OpenedMedia {
         if let Some(audio_decoder) = self.audio_decoder.as_mut() {
             audio_decoder.decoder.flush();
         }
+
+        self.pending_outputs.clear();
+        self.draining_state = DecoderDrainingState::default();
     }
 
     pub fn read_next_packet(&mut self) -> Result<Option<MediaPacket>, MediaOpenError> {
@@ -123,8 +145,28 @@ impl OpenedMedia {
 
     pub fn next_decoded_output(&mut self) -> Result<Option<DecodedOutput>, MediaOpenError> {
         loop {
+            if let Some(output) = self.pending_outputs.pop_front() {
+                return Ok(Some(output));
+            }
+
+            if self.draining_state.input_exhausted {
+                self.collect_drained_outputs()?;
+
+                if let Some(output) = self.pending_outputs.pop_front() {
+                    return Ok(Some(output));
+                }
+
+                if self.has_fully_drained() && !self.draining_state.end_of_stream_emitted {
+                    self.draining_state.end_of_stream_emitted = true;
+                    return Ok(Some(DecodedOutput::EndOfStream));
+                }
+
+                return Ok(None);
+            }
+
             let Some(media_packet) = self.read_next_packet()? else {
-                return Ok(Some(DecodedOutput::EndOfStream));
+                self.enter_draining_mode()?;
+                continue;
             };
 
             if self
@@ -134,9 +176,7 @@ impl OpenedMedia {
                 .unwrap_or(false)
             {
                 let video_decoder = self.video_decoder.as_mut().expect("video decoder exists");
-                if let Some(output) = decode_video_packet(video_decoder, &media_packet.packet)? {
-                    return Ok(Some(output));
-                }
+                decode_video_packet(video_decoder, &media_packet.packet, &mut self.pending_outputs)?;
                 continue;
             }
 
@@ -147,12 +187,56 @@ impl OpenedMedia {
                 .unwrap_or(false)
             {
                 let audio_decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
-                if let Some(output) = decode_audio_packet(audio_decoder, &media_packet.packet)? {
-                    return Ok(Some(output));
-                }
+                decode_audio_packet(audio_decoder, &media_packet.packet, &mut self.pending_outputs)?;
                 continue;
             }
         }
+    }
+
+    fn enter_draining_mode(&mut self) -> Result<(), MediaOpenError> {
+        self.draining_state.input_exhausted = true;
+
+        if let Some(video_decoder) = self.video_decoder.as_mut() {
+            send_video_decoder_eof(&mut video_decoder.decoder)?;
+            self.draining_state.video_eof_sent = true;
+        } else {
+            self.draining_state.video_drained = true;
+        }
+
+        if let Some(audio_decoder) = self.audio_decoder.as_mut() {
+            send_audio_decoder_eof(&mut audio_decoder.decoder)?;
+            self.draining_state.audio_eof_sent = true;
+        } else {
+            self.draining_state.audio_drained = true;
+        }
+
+        Ok(())
+    }
+
+    fn collect_drained_outputs(&mut self) -> Result<(), MediaOpenError> {
+        if !self.draining_state.video_drained {
+            if let Some(video_decoder) = self.video_decoder.as_mut() {
+                self.draining_state.video_drained =
+                    collect_video_frames(video_decoder, &mut self.pending_outputs, true)?;
+            } else {
+                self.draining_state.video_drained = true;
+            }
+        }
+
+        if !self.draining_state.audio_drained {
+            if let Some(audio_decoder) = self.audio_decoder.as_mut() {
+                self.draining_state.audio_drained =
+                    collect_audio_frames(audio_decoder, &mut self.pending_outputs, true)?;
+            } else {
+                self.draining_state.audio_drained = true;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn has_fully_drained(&self) -> bool {
+        self.draining_state.video_drained && self.draining_state.audio_drained
     }
 }
 
@@ -182,6 +266,7 @@ fn open_video_decoder(
     Ok(Some(OpenedVideoDecoder {
         index: stream_index,
         decoder,
+        scaler: None,
     }))
 }
 
@@ -212,63 +297,136 @@ fn open_audio_decoder(
 fn decode_video_packet(
     decoder: &mut OpenedVideoDecoder,
     packet: &Packet,
-) -> Result<Option<DecodedOutput>, MediaOpenError> {
-    match decoder.decoder.send_packet(packet) {
-        Ok(()) => {}
-        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {}
-        Err(error) => return Err(MediaOpenError::SendPacket(error)),
-    }
-
-    let mut frame = frame::Video::empty();
-    match decoder.decoder.receive_frame(&mut frame) {
-        Ok(()) => Ok(Some(DecodedOutput::Video(map_video_frame(
-            &decoder.decoder,
-            &frame,
-        )))),
-        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(None),
-        Err(ffmpeg::Error::Eof) => Ok(None),
-        Err(error) => Err(MediaOpenError::ReceiveFrame(error)),
+    outputs: &mut VecDeque<DecodedOutput>,
+) -> Result<(), MediaOpenError> {
+    loop {
+        match decoder.decoder.send_packet(packet) {
+            Ok(()) => {
+                let _ = collect_video_frames(decoder, outputs, false)?;
+                return Ok(());
+            }
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
+                let output_count_before = outputs.len();
+                let drained = collect_video_frames(decoder, outputs, false)?;
+                if drained || outputs.len() == output_count_before {
+                    return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
+                        errno: ffmpeg::error::EAGAIN,
+                    }));
+                }
+            }
+            Err(error) => return Err(MediaOpenError::SendPacket(error)),
+        }
     }
 }
 
 fn decode_audio_packet(
     decoder: &mut OpenedAudioDecoder,
     packet: &Packet,
-) -> Result<Option<DecodedOutput>, MediaOpenError> {
-    match decoder.decoder.send_packet(packet) {
-        Ok(()) => {}
-        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {}
-        Err(error) => return Err(MediaOpenError::SendPacket(error)),
+    outputs: &mut VecDeque<DecodedOutput>,
+) -> Result<(), MediaOpenError> {
+    loop {
+        match decoder.decoder.send_packet(packet) {
+            Ok(()) => {
+                let _ = collect_audio_frames(decoder, outputs, false)?;
+                return Ok(());
+            }
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
+                let output_count_before = outputs.len();
+                let drained = collect_audio_frames(decoder, outputs, false)?;
+                if drained || outputs.len() == output_count_before {
+                    return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
+                        errno: ffmpeg::error::EAGAIN,
+                    }));
+                }
+            }
+            Err(error) => return Err(MediaOpenError::SendPacket(error)),
+        }
+    }
+}
+
+fn collect_video_frames(
+    decoder: &mut OpenedVideoDecoder,
+    outputs: &mut VecDeque<DecodedOutput>,
+    draining: bool,
+) -> Result<bool, MediaOpenError> {
+    let mut reached_decoder_eof = false;
+
+    loop {
+        let mut frame = frame::Video::empty();
+        match decoder.decoder.receive_frame(&mut frame) {
+            Ok(()) => outputs.push_back(DecodedOutput::Video(map_video_frame(decoder, &frame)?)),
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
+            Err(ffmpeg::Error::Eof) => {
+                reached_decoder_eof = true;
+                break;
+            }
+            Err(error) => return Err(MediaOpenError::ReceiveFrame(error)),
+        }
     }
 
-    let mut frame = frame::Audio::empty();
-    match decoder.decoder.receive_frame(&mut frame) {
-        Ok(()) => Ok(Some(DecodedOutput::Audio(map_audio_frame(
-            &decoder.decoder,
-            &frame,
-        )))),
-        Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => Ok(None),
-        Err(ffmpeg::Error::Eof) => Ok(None),
-        Err(error) => Err(MediaOpenError::ReceiveFrame(error)),
+    Ok(draining && reached_decoder_eof)
+}
+
+fn collect_audio_frames(
+    decoder: &mut OpenedAudioDecoder,
+    outputs: &mut VecDeque<DecodedOutput>,
+    draining: bool,
+) -> Result<bool, MediaOpenError> {
+    let mut reached_decoder_eof = false;
+
+    loop {
+        let mut frame = frame::Audio::empty();
+        match decoder.decoder.receive_frame(&mut frame) {
+            Ok(()) => outputs.push_back(DecodedOutput::Audio(map_audio_frame(&decoder.decoder, &frame))),
+            Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
+            Err(ffmpeg::Error::Eof) => {
+                reached_decoder_eof = true;
+                break;
+            }
+            Err(error) => return Err(MediaOpenError::ReceiveFrame(error)),
+        }
+    }
+
+    Ok(draining && reached_decoder_eof)
+}
+
+fn send_video_decoder_eof(decoder: &mut ffmpeg::decoder::Video) -> Result<(), MediaOpenError> {
+    match decoder.send_eof() {
+        Ok(()) => Ok(()),
+        Err(ffmpeg::Error::Eof) => Ok(()),
+        Err(error) => Err(MediaOpenError::SendPacket(error)),
+    }
+}
+
+fn send_audio_decoder_eof(decoder: &mut ffmpeg::decoder::Audio) -> Result<(), MediaOpenError> {
+    match decoder.send_eof() {
+        Ok(()) => Ok(()),
+        Err(ffmpeg::Error::Eof) => Ok(()),
+        Err(error) => Err(MediaOpenError::SendPacket(error)),
     }
 }
 
 fn map_video_frame(
-    decoder: &ffmpeg::decoder::Video,
+    decoder: &mut OpenedVideoDecoder,
     frame: &frame::Video,
-) -> VideoFrame {
-    let time_base = decoder.packet_time_base();
+) -> Result<VideoFrame, MediaOpenError> {
+    let time_base = decoder.decoder.packet_time_base();
     let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
     let duration_us = frame_duration_us(frame.packet().duration, time_base);
+    let converted = convert_video_frame_to_bgra(decoder, frame)?;
+    let stride = converted.stride(0);
+    let data = copy_packed_plane(&converted);
 
-    VideoFrame {
+    Ok(VideoFrame {
         pts_us,
         duration_us,
-        width: frame.width(),
-        height: frame.height(),
-        pixel_format: map_pixel_format(frame.format()),
+        width: converted.width(),
+        height: converted.height(),
+        pixel_format: PixelFormatCategory::Bgra8,
+        stride,
+        data,
         is_key_frame: frame.is_key(),
-    }
+    })
 }
 
 fn map_audio_frame(
@@ -334,4 +492,65 @@ fn map_sample_format(sample: format::Sample) -> AudioSampleFormatCategory {
         format::Sample::F64(_) => AudioSampleFormatCategory::F64,
         format::Sample::None => AudioSampleFormatCategory::Unknown,
     }
+}
+
+fn convert_video_frame_to_bgra(
+    decoder: &mut OpenedVideoDecoder,
+    input: &frame::Video,
+) -> Result<frame::Video, MediaOpenError> {
+    ensure_video_scaler(decoder, input)?;
+
+    let mut output = frame::Video::empty();
+    decoder
+        .scaler
+        .as_mut()
+        .expect("video scaler initialized")
+        .run(input, &mut output)
+        .map_err(MediaOpenError::ScaleFrame)?;
+
+    Ok(output)
+}
+
+fn ensure_video_scaler(
+    decoder: &mut OpenedVideoDecoder,
+    input: &frame::Video,
+) -> Result<(), MediaOpenError> {
+    let needs_rebuild = decoder
+        .scaler
+        .as_ref()
+        .map(|scaler| {
+            scaler.input().format != input.format()
+                || scaler.input().width != input.width()
+                || scaler.input().height != input.height()
+                || scaler.output().format != format::Pixel::BGRA
+                || scaler.output().width != input.width()
+                || scaler.output().height != input.height()
+        })
+        .unwrap_or(true);
+
+    if needs_rebuild {
+        decoder.scaler = Some(
+            ScalingContext::get(
+                input.format(),
+                input.width(),
+                input.height(),
+                format::Pixel::BGRA,
+                input.width(),
+                input.height(),
+                ScalingFlags::BILINEAR,
+            )
+            .map_err(MediaOpenError::ScaleFrame)?,
+        );
+    }
+
+    Ok(())
+}
+
+fn copy_packed_plane(frame: &frame::Video) -> Vec<u8> {
+    let stride = frame.stride(0);
+    let height = usize::try_from(frame.height()).unwrap_or(0);
+    let byte_len = stride.saturating_mul(height);
+    let data = frame.data(0);
+
+    data[..byte_len.min(data.len())].to_vec()
 }

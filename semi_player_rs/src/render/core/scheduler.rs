@@ -92,7 +92,9 @@ mod tests {
             duration_us,
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Nv12,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 1920 * 1080 * 4],
             is_key_frame: false,
         }
     }

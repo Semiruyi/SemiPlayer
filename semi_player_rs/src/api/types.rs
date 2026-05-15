@@ -81,3 +81,16 @@ pub struct SemiPlaybackSnapshot {
     pub last_audio_pts_ms: i64,
     pub end_of_stream: u32,
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SemiVideoFrameInfo {
+    pub pts_ms: i64,
+    pub duration_ms: i64,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub pixel_format: u32,
+    pub byte_len: u32,
+    pub flags: u32,
+}

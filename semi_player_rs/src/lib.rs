@@ -14,10 +14,12 @@ use crate::api::error::{
 };
 use crate::api::types::{
     PlayerState, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo, SemiPlaybackSnapshot,
+    SemiVideoFrameInfo,
 };
 use crate::core::media::{open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
+use crate::render::core::frame::VideoFrame;
 use crate::util::time::{ms_to_us, us_to_ms};
 
 fn with_player_mut<T>(
@@ -129,6 +131,19 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     }
 }
 
+fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
+    SemiVideoFrameInfo {
+        pts_ms: us_to_ms(frame.pts_us),
+        duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+        width: frame.width,
+        height: frame.height,
+        stride: u32::try_from(frame.stride).unwrap_or(u32::MAX),
+        pixel_format: frame.pixel_format.as_raw(),
+        byte_len: u32::try_from(frame.byte_len()).unwrap_or(u32::MAX),
+        flags: u32::from(frame.is_key_frame),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn semi_free_string(s: *mut c_char) {
     if !s.is_null() {
@@ -179,7 +194,8 @@ pub extern "C" fn semi_player_open(
         }
         Err(MediaOpenError::ReadPacket(_))
         | Err(MediaOpenError::SendPacket(_))
-        | Err(MediaOpenError::ReceiveFrame(_)) => {
+        | Err(MediaOpenError::ReceiveFrame(_))
+        | Err(MediaOpenError::ScaleFrame(_)) => {
             return SEMI_E_DECODER_OPEN_FAILED;
         }
         Err(MediaOpenError::Seek(_)) => {
@@ -478,6 +494,71 @@ pub extern "C" fn semi_player_get_playback_snapshot(
 
         unsafe {
             *out_snapshot = build_playback_snapshot(player);
+        }
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_get_current_video_frame_info(
+    player: *mut SemiPlayerHandle,
+    out_frame_info: *mut SemiVideoFrameInfo,
+) -> c_int {
+    if out_frame_info.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let Some(frame) = player.runtime.current_video_frame() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        unsafe {
+            *out_frame_info = build_video_frame_info(frame);
+        }
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_copy_current_video_frame_bgra(
+    player: *mut SemiPlayerHandle,
+    destination: *mut u8,
+    destination_len: u32,
+) -> c_int {
+    if destination.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let Some(frame) = player.runtime.current_video_frame() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        let required_len = frame.byte_len();
+        let destination_len = usize::try_from(destination_len).unwrap_or(usize::MAX);
+        if destination_len < required_len {
+            return SEMI_E_INVALID_ARG;
+        }
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(frame.data.as_ptr(), destination, required_len);
         }
 
         SEMI_OK
