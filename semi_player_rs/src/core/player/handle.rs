@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
-use crate::core::media::MediaInfo;
+use crate::core::media::OpenedMedia;
 use crate::render::core::scheduler::VideoScheduler;
 use crate::util::time::MediaTimeUs;
 
@@ -11,9 +11,7 @@ use crate::util::time::MediaTimeUs;
 pub struct SemiPlayerHandle {
     state: AtomicU32,
     pub(crate) speed: c_double,
-    pub(crate) duration_us: MediaTimeUs,
-    pub(crate) media_path: Option<String>,
-    pub(crate) media_info: Option<MediaInfo>,
+    pub(crate) opened_media: Option<OpenedMedia>,
     pub(crate) subtitles_visible: bool,
     pub(crate) video_presentation_bias_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
@@ -25,9 +23,7 @@ impl SemiPlayerHandle {
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             speed: 1.0,
-            duration_us: 0,
-            media_path: None,
-            media_info: None,
+            opened_media: None,
             subtitles_visible: true,
             video_presentation_bias_us: 0,
             audio_clock: AudioClock::new(),
@@ -36,7 +32,7 @@ impl SemiPlayerHandle {
     }
 
     pub fn is_media_loaded(&self) -> bool {
-        self.media_path.is_some()
+        self.opened_media.is_some()
     }
 
     pub fn reset_runtime_state(&mut self) {
@@ -48,9 +44,7 @@ impl SemiPlayerHandle {
     }
 
     pub fn clear_media(&mut self) {
-        self.duration_us = 0;
-        self.media_path = None;
-        self.media_info = None;
+        self.opened_media = None;
         self.reset_runtime_state();
     }
 

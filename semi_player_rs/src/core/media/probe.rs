@@ -52,7 +52,12 @@ pub fn probe_media(path: &str) -> Result<MediaInfo, MediaProbeError> {
     ffmpeg::init().map_err(MediaProbeError::FfmpegInit)?;
 
     let context = ffmpeg::format::input(&path).map_err(MediaProbeError::OpenInput)?;
+    collect_media_info(&context)
+}
 
+pub(crate) fn collect_media_info(
+    context: &ffmpeg::format::context::Input,
+) -> Result<MediaInfo, MediaProbeError> {
     let best_video_stream_index = context
         .streams()
         .best(ffmpeg::media::Type::Video)

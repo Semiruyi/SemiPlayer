@@ -9,11 +9,11 @@ mod util;
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
 use crate::api::error::{
-    ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_E_MEDIA_OPEN_FAILED,
-    SEMI_E_MEDIA_PROBE_FAILED, SEMI_OK,
+    ResultCode, SEMI_E_DECODER_OPEN_FAILED, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE,
+    SEMI_E_MEDIA_OPEN_FAILED, SEMI_E_MEDIA_PROBE_FAILED, SEMI_E_SEEK_FAILED, SEMI_OK,
 };
 use crate::api::types::{PlayerState, SemiMediaInfo};
-use crate::core::media::{probe_media, MediaInfo, MediaProbeError};
+use crate::core::media::{open_media, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::util::time::{ms_to_us, us_to_ms};
 
@@ -109,18 +109,23 @@ pub extern "C" fn semi_player_open(
         Err(code) => return code,
     };
 
-    let media_info = match probe_media(&path) {
-        Ok(media_info) => media_info,
-        Err(MediaProbeError::OpenInput(_)) => return SEMI_E_MEDIA_OPEN_FAILED,
-        Err(MediaProbeError::FfmpegInit(_)) | Err(MediaProbeError::Decoder(_)) => {
+    let opened_media = match open_media(&path) {
+        Ok(opened_media) => opened_media,
+        Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => return SEMI_E_MEDIA_OPEN_FAILED,
+        Err(MediaOpenError::Probe(MediaProbeError::FfmpegInit(_)))
+        | Err(MediaOpenError::Probe(MediaProbeError::Decoder(_))) => {
+            return SEMI_E_MEDIA_PROBE_FAILED;
+        }
+        Err(MediaOpenError::VideoDecoder(_)) | Err(MediaOpenError::AudioDecoder(_)) => {
+            return SEMI_E_DECODER_OPEN_FAILED;
+        }
+        Err(MediaOpenError::Seek(_)) => {
             return SEMI_E_MEDIA_PROBE_FAILED;
         }
     };
 
     match with_player_mut(player, |player| {
-        player.media_path = Some(path);
-        player.duration_us = media_info.duration_us.unwrap_or(0);
-        player.media_info = Some(media_info);
+        player.opened_media = Some(opened_media);
         player.reset_runtime_state();
         player.set_state(PlayerState::Ready);
     }) {
@@ -175,7 +180,16 @@ pub extern "C" fn semi_player_seek(
             return SEMI_E_INVALID_ARG;
         }
 
-        player.audio_clock.seek(ms_to_us(position_ms));
+        let target_us = ms_to_us(position_ms);
+        let Some(opened_media) = player.opened_media.as_mut() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        if opened_media.seek(target_us).is_err() {
+            return SEMI_E_SEEK_FAILED;
+        }
+
+        player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         SEMI_OK
     }) {
@@ -296,7 +310,12 @@ pub extern "C" fn semi_player_get_duration_ms(
 
     match with_player_mut(player, |player| {
         unsafe {
-            *out_duration_ms = us_to_ms(player.duration_us);
+            *out_duration_ms = player
+                .opened_media
+                .as_ref()
+                .and_then(|opened_media| opened_media.duration_us())
+                .map(us_to_ms)
+                .unwrap_or(0);
         }
     }) {
         Ok(_) => SEMI_OK,
@@ -318,7 +337,7 @@ pub extern "C" fn semi_player_get_media_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(media_info) = player.media_info.as_ref() else {
+        let Some(media_info) = player.opened_media.as_ref().map(|opened_media| opened_media.info()) else {
             return SEMI_E_INVALID_STATE;
         };
 
