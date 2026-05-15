@@ -7,3 +7,7 @@ pub const fn ms_to_us(ms: i64) -> MediaTimeUs {
 pub const fn us_to_ms(us: MediaTimeUs) -> i64 {
     us / 1_000
 }
+
+pub const fn add_media_time_us(lhs: MediaTimeUs, rhs: MediaTimeUs) -> MediaTimeUs {
+    lhs.saturating_add(rhs)
+}

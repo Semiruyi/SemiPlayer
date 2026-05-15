@@ -74,10 +74,8 @@ pub extern "C" fn semi_player_open(
 
     match with_player_mut(player, |player| {
         player.media_path = Some(path);
-        player.position_us = 0;
         player.duration_us = 0;
-        player.speed = 1.0;
-        player.subtitles_visible = true;
+        player.reset_runtime_state();
         player.set_state(PlayerState::Ready);
     }) {
         Ok(_) => SEMI_OK,
@@ -92,6 +90,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
             return SEMI_E_INVALID_STATE;
         }
 
+        player.audio_clock.play();
         player.set_state(PlayerState::Playing);
         SEMI_OK
     }) {
@@ -107,6 +106,7 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
             return SEMI_E_INVALID_STATE;
         }
 
+        player.audio_clock.pause();
         player.set_state(PlayerState::Paused);
         SEMI_OK
     }) {
@@ -129,7 +129,8 @@ pub extern "C" fn semi_player_seek(
             return SEMI_E_INVALID_ARG;
         }
 
-        player.position_us = ms_to_us(position_ms);
+        player.audio_clock.seek(ms_to_us(position_ms));
+        player.video_scheduler = Default::default();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -141,10 +142,8 @@ pub extern "C" fn semi_player_seek(
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
     match with_player_mut(player, |player| {
         player.media_path = None;
-        player.position_us = 0;
         player.duration_us = 0;
-        player.speed = 1.0;
-        player.subtitles_visible = true;
+        player.reset_runtime_state();
         player.set_state(PlayerState::Idle);
         SEMI_OK
     }) {
@@ -164,6 +163,21 @@ pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_
         }
 
         player.speed = speed;
+        player.audio_clock.set_speed(speed);
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_set_video_presentation_bias_ms(
+    player: *mut SemiPlayerHandle,
+    bias_ms: i32,
+) -> c_int {
+    match with_player_mut(player, |player| {
+        player.video_presentation_bias_us = ms_to_us(i64::from(bias_ms));
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -219,7 +233,7 @@ pub extern "C" fn semi_player_get_position_ms(
 
     match with_player_mut(player, |player| {
         unsafe {
-            *out_position_ms = us_to_ms(player.position_us);
+            *out_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
         }
     }) {
         Ok(_) => SEMI_OK,
