@@ -12,8 +12,8 @@ use crate::api::error::{
     ResultCode, SEMI_E_DECODER_OPEN_FAILED, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE,
     SEMI_E_MEDIA_OPEN_FAILED, SEMI_E_MEDIA_PROBE_FAILED, SEMI_E_SEEK_FAILED, SEMI_OK,
 };
-use crate::api::types::{PlayerState, SemiMediaInfo};
-use crate::core::media::{open_media, MediaInfo, MediaOpenError, MediaProbeError};
+use crate::api::types::{PlayerState, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo};
+use crate::core::media::{open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::util::time::{ms_to_us, us_to_ms};
 
@@ -71,6 +71,44 @@ fn build_media_info_view(media_info: &MediaInfo) -> SemiMediaInfo {
     }
 }
 
+fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
+    match output {
+        DecodedOutput::Video(frame) => SemiDecodedOutput {
+            kind: SemiDecodedKind::Video.as_raw(),
+            pts_ms: us_to_ms(frame.pts_us),
+            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            width: frame.width,
+            height: frame.height,
+            sample_rate: 0,
+            channels: 0,
+            sample_count: 0,
+            flags: u32::from(frame.is_key_frame),
+        },
+        DecodedOutput::Audio(frame) => SemiDecodedOutput {
+            kind: SemiDecodedKind::Audio.as_raw(),
+            pts_ms: us_to_ms(frame.pts_us),
+            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            width: 0,
+            height: 0,
+            sample_rate: frame.sample_rate,
+            channels: frame.channels,
+            sample_count: u32::try_from(frame.sample_count).unwrap_or(u32::MAX),
+            flags: u32::from(frame.is_planar),
+        },
+        DecodedOutput::EndOfStream => SemiDecodedOutput {
+            kind: SemiDecodedKind::EndOfStream.as_raw(),
+            pts_ms: 0,
+            duration_ms: 0,
+            width: 0,
+            height: 0,
+            sample_rate: 0,
+            channels: 0,
+            sample_count: 0,
+            flags: 0,
+        },
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn semi_free_string(s: *mut c_char) {
     if !s.is_null() {
@@ -117,6 +155,11 @@ pub extern "C" fn semi_player_open(
             return SEMI_E_MEDIA_PROBE_FAILED;
         }
         Err(MediaOpenError::VideoDecoder(_)) | Err(MediaOpenError::AudioDecoder(_)) => {
+            return SEMI_E_DECODER_OPEN_FAILED;
+        }
+        Err(MediaOpenError::ReadPacket(_))
+        | Err(MediaOpenError::SendPacket(_))
+        | Err(MediaOpenError::ReceiveFrame(_)) => {
             return SEMI_E_DECODER_OPEN_FAILED;
         }
         Err(MediaOpenError::Seek(_)) => {
@@ -343,6 +386,41 @@ pub extern "C" fn semi_player_get_media_info(
 
         unsafe {
             *out_media_info = build_media_info_view(media_info);
+        }
+
+        SEMI_OK
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_debug_decode_next(
+    player: *mut SemiPlayerHandle,
+    out_output: *mut SemiDecodedOutput,
+) -> c_int {
+    if out_output.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    match with_player_mut(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let Some(opened_media) = player.opened_media.as_mut() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        let output = match opened_media.next_decoded_output() {
+            Ok(Some(output)) => output,
+            Ok(None) => DecodedOutput::EndOfStream,
+            Err(_) => return SEMI_E_INVALID_STATE,
+        };
+
+        unsafe {
+            *out_output = build_decoded_output_view(output);
         }
 
         SEMI_OK

@@ -93,6 +93,7 @@ mod tests {
             width: 1920,
             height: 1080,
             pixel_format: PixelFormatCategory::Nv12,
+            is_key_frame: false,
         }
     }
 

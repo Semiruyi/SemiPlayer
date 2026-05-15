@@ -40,3 +40,32 @@ pub struct SemiMediaInfo {
     pub audio_channels: u16,
     pub reserved0: u16,
 }
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemiDecodedKind {
+    None = 0,
+    Video = 1,
+    Audio = 2,
+    EndOfStream = 3,
+}
+
+impl SemiDecodedKind {
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SemiDecodedOutput {
+    pub kind: u32,
+    pub pts_ms: i64,
+    pub duration_ms: i64,
+    pub width: u32,
+    pub height: u32,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub sample_count: u32,
+    pub flags: u32,
+}

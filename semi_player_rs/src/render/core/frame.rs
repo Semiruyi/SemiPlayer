@@ -17,6 +17,7 @@ pub struct VideoFrame {
     pub width: u32,
     pub height: u32,
     pub pixel_format: PixelFormatCategory,
+    pub is_key_frame: bool,
 }
 
 impl VideoFrame {

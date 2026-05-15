@@ -43,6 +43,25 @@ try
     Console.WriteLine($"[audio_sample_rate] {mediaInfo.AudioSampleRate}");
     Console.WriteLine($"[audio_channels] {mediaInfo.AudioChannels}");
 
+    for (int i = 0; i < 8; i++)
+    {
+        EnsureOk(Native.semi_player_debug_decode_next(player, out SemiDecodedOutput decoded), "semi_player_debug_decode_next");
+        Console.WriteLine($"[decoded.kind] {decoded.Kind}");
+        Console.WriteLine($"[decoded.pts_ms] {decoded.PtsMs}");
+        Console.WriteLine($"[decoded.duration_ms] {decoded.DurationMs}");
+        Console.WriteLine($"[decoded.width] {decoded.Width}");
+        Console.WriteLine($"[decoded.height] {decoded.Height}");
+        Console.WriteLine($"[decoded.sample_rate] {decoded.SampleRate}");
+        Console.WriteLine($"[decoded.channels] {decoded.Channels}");
+        Console.WriteLine($"[decoded.sample_count] {decoded.SampleCount}");
+        Console.WriteLine($"[decoded.flags] {decoded.Flags}");
+
+        if (decoded.Kind == 3)
+        {
+            break;
+        }
+    }
+
     EnsureOk(Native.semi_player_reset(player), "semi_player_reset");
     Console.WriteLine("=== All player skeleton tests passed ===");
 }
@@ -100,6 +119,9 @@ internal static class Native
     internal static extern int semi_player_get_media_info(IntPtr player, out SemiMediaInfo mediaInfo);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_debug_decode_next(IntPtr player, out SemiDecodedOutput decodedOutput);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void semi_player_destroy(IntPtr player);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -125,4 +147,18 @@ internal struct SemiMediaInfo
     internal uint AudioSampleRate;
     internal ushort AudioChannels;
     internal ushort Reserved0;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiDecodedOutput
+{
+    internal uint Kind;
+    internal long PtsMs;
+    internal long DurationMs;
+    internal uint Width;
+    internal uint Height;
+    internal uint SampleRate;
+    internal ushort Channels;
+    internal uint SampleCount;
+    internal uint Flags;
 }
