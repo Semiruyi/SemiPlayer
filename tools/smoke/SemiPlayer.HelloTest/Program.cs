@@ -184,6 +184,8 @@ internal sealed class PlayerSmokeWindow : Window
     private const double DefaultTickIntervalMs = 15.0;
     private const double MinTickIntervalMs = 4.0;
     private const double MaxTickIntervalMs = 33.0;
+    private const double MinAdaptiveTickIntervalMs = 1.0;
+    private const double MaxAdaptiveTickIntervalMs = 33.0;
     private const uint MinTickPumpIterations = 1;
     private const uint MaxTickPumpIterations = 256;
 
@@ -205,6 +207,7 @@ internal sealed class PlayerSmokeWindow : Window
     private readonly PlaybackDiagnostics _diagnostics = new();
     private readonly StringBuilder _pumpSweepLog = new();
     private int _pumpSweepIndex = -1;
+    private bool _useAdaptivePump = true;
 
     public PlayerSmokeWindow(string mediaPath, SmokeOptions options)
     {
@@ -472,7 +475,23 @@ internal sealed class PlayerSmokeWindow : Window
             frameCopied: shouldCopyFrame,
             isPlaying: _isPlaying);
 
+        ApplyAdaptivePumpInterval(snapshot);
+
         _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo);
+    }
+
+    private void ApplyAdaptivePumpInterval(SemiPlaybackSnapshot snapshot)
+    {
+        if (!_useAdaptivePump || _options.PumpSweep is not null)
+        {
+            return;
+        }
+
+        double nextMs = Math.Clamp(
+            snapshot.SuggestedPumpWaitMs <= 0 ? DefaultTickIntervalMs : snapshot.SuggestedPumpWaitMs,
+            MinAdaptiveTickIntervalMs,
+            MaxAdaptiveTickIntervalMs);
+        _tickTimer.Interval = TimeSpan.FromMilliseconds(nextMs);
     }
 
     private void EnsureBitmap(SemiVideoFrameInfo frameInfo)
@@ -521,7 +540,15 @@ internal sealed class PlayerSmokeWindow : Window
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
             $"Pump {_diagnostics.PumpsPerSecond:F1}/s @{_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
+            $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}  " +
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
+        string syncLoopPart =
+            $"WakeAt {snapshot.NextVideoWakeDeadlineMs} ms  FrameEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
+            $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  PumpAt {snapshot.NextPumpDeadlineMs} ms  " +
+            $"SuggestWait {snapshot.SuggestedPumpWaitMs} ms  " +
+            $"SyncTicks {snapshot.VideoSyncTicks}  Runs {snapshot.VideoSyncRuns}  " +
+            $"Presents {snapshot.VideoSyncPresents}  Drops {snapshot.VideoSyncDrops}  " +
+            $"Underflows {snapshot.VideoSyncUnderflows}  LateHits {snapshot.VideoSyncLateHits}";
         string avPart =
             $"Core A-V {snapshot.CoreAVDeltaMs} ms  CoreSyncErr {snapshot.CoreSyncErrorMs} ms  " +
             $"HostOffset {snapshot.HostPresentationOffsetMs} ms  " +
@@ -533,12 +560,13 @@ internal sealed class PlayerSmokeWindow : Window
             $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
             $"{avPart}{Environment.NewLine}" +
             $"{coreSyncPart}{Environment.NewLine}" +
+            $"{syncLoopPart}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
             $"{audioProgressPart}{Environment.NewLine}" +
             $"{framePart}{Environment.NewLine}" +
             $"{diagnosticsPart}{Environment.NewLine}" +
-            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters";
+            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump";
     }
 
     private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -572,6 +600,10 @@ internal sealed class PlayerSmokeWindow : Window
                     AdjustTickInterval(1.0);
                     e.Handled = true;
                     break;
+                case Key.A:
+                    ToggleAdaptivePump();
+                    e.Handled = true;
+                    break;
                 case Key.OemPlus:
                 case Key.Add:
                     AdjustTickPumpIterations(8);
@@ -592,6 +624,7 @@ internal sealed class PlayerSmokeWindow : Window
 
     private void AdjustTickInterval(double deltaMs)
     {
+        _useAdaptivePump = false;
         double nextMs = Math.Clamp(_tickTimer.Interval.TotalMilliseconds + deltaMs, MinTickIntervalMs, MaxTickIntervalMs);
         _tickTimer.Interval = TimeSpan.FromMilliseconds(nextMs);
         _diagnostics.ResetCoreSyncStats();
@@ -602,6 +635,13 @@ internal sealed class PlayerSmokeWindow : Window
     {
         int next = (int)_tickPumpIterations + delta;
         _tickPumpIterations = (uint)Math.Clamp(next, (int)MinTickPumpIterations, (int)MaxTickPumpIterations);
+        _diagnostics.ResetCoreSyncStats();
+        RefreshVideoFrame(forceCopy: false);
+    }
+
+    private void ToggleAdaptivePump()
+    {
+        _useAdaptivePump = !_useAdaptivePump;
         _diagnostics.ResetCoreSyncStats();
         RefreshVideoFrame(forceCopy: false);
     }
@@ -1041,11 +1081,22 @@ internal struct SemiPlaybackSnapshot
     internal uint HasCurrentVideoFrame;
     internal long CurrentVideoPtsMs;
     internal long CurrentVideoDurationMs;
+    internal long CurrentVideoEffectiveEndMs;
+    internal long NextVideoWakeDeadlineMs;
     internal long LastAudioPtsMs;
     internal int HostPresentationOffsetMs;
     internal long CoreAVDeltaMs;
     internal long CoreSyncErrorMs;
     internal long ExpectedEndToEndAVDeltaMs;
+    internal ulong VideoSyncTicks;
+    internal ulong VideoSyncRuns;
+    internal ulong VideoSyncPresents;
+    internal ulong VideoSyncDrops;
+    internal ulong VideoSyncUnderflows;
+    internal ulong VideoSyncLateHits;
+    internal long SuggestedPumpWaitMs;
+    internal long NextAudioRefillDeadlineMs;
+    internal long NextPumpDeadlineMs;
     internal uint EndOfStream;
 }
 

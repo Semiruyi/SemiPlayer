@@ -6,6 +6,14 @@ use crate::render::core::frame::VideoFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VideoSelectionStats {
+    pub kept_current: bool,
+    pub presented_frames: u32,
+    pub dropped_frames: u32,
+    pub needs_more_frames: bool,
+}
+
 pub struct PlayerRuntime {
     queued_audio_frames: VecDeque<AudioFrame>,
     queued_audio_sample_offset: usize,
@@ -185,7 +193,9 @@ impl PlayerRuntime {
         &mut self,
         scheduler: &VideoScheduler,
         target_time_us: MediaTimeUs,
-    ) -> Option<&VideoFrame> {
+    ) -> VideoSelectionStats {
+        let mut stats = VideoSelectionStats::default();
+
         loop {
             let decision = scheduler.decide(
                 target_time_us,
@@ -195,18 +205,22 @@ impl PlayerRuntime {
 
             match decision {
                 VideoScheduleDecision::KeepCurrent => {
-                    return self.current_video_frame.as_ref();
+                    stats.kept_current = true;
+                    return stats;
                 }
                 VideoScheduleDecision::PresentFrame => {
                     self.current_video_frame = self.queued_video_frames.pop_front();
+                    stats.presented_frames = stats.presented_frames.saturating_add(1);
                     continue;
                 }
                 VideoScheduleDecision::DropFrame => {
                     let _ = self.queued_video_frames.pop_front();
+                    stats.dropped_frames = stats.dropped_frames.saturating_add(1);
                     continue;
                 }
                 VideoScheduleDecision::NeedMoreFrames => {
-                    return self.current_video_frame.as_ref();
+                    stats.needs_more_frames = true;
+                    return stats;
                 }
             }
         }
@@ -221,7 +235,7 @@ impl Default for PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::PlayerRuntime;
+    use super::{PlayerRuntime, VideoSelectionStats};
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
@@ -243,10 +257,18 @@ mod tests {
             is_key_frame: true,
         });
 
-        let current = runtime
-            .select_video_frame(&scheduler, 10_000)
-            .expect("current frame");
+        let stats = runtime.select_video_frame(&scheduler, 10_000);
+        let current = runtime.current_video_frame().expect("current frame");
 
+        assert_eq!(
+            stats,
+            VideoSelectionStats {
+                kept_current: true,
+                presented_frames: 1,
+                dropped_frames: 0,
+                needs_more_frames: false,
+            }
+        );
         assert_eq!(current.pts_us, 10_000);
         assert_eq!(runtime.video_queue_len(), 0);
     }

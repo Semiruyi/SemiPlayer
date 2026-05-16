@@ -1,7 +1,7 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::core::media::DecodedOutput;
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::util::time::add_media_time_us;
+use crate::core::player::video_sync::VideoSyncService;
 
 const DEFAULT_PUMP_ITERATIONS: u32 = 256;
 const TARGET_AUDIO_QUEUE_LEN: usize = 8;
@@ -26,7 +26,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
-    select_video_frame(player, playback_time_us);
+    let _ = VideoSyncService::tick(player, playback_time_us);
     sync_audio_output(player);
 
     if has_sufficient_buffer(player) {
@@ -49,6 +49,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         match output {
             DecodedOutput::Video(frame) => {
                 player.runtime.push_video_frame(frame);
+                VideoSyncService::mark_dirty(player);
             }
             DecodedOutput::Audio(frame) => {
                 player.runtime.push_audio_frame(frame);
@@ -63,7 +64,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         player
             .runtime
             .discard_consumed_audio_frames(playback_time_us);
-        select_video_frame(player, playback_time_us);
+        let _ = VideoSyncService::tick(player, playback_time_us);
         sync_audio_output(player);
 
         if has_sufficient_buffer(player) {
@@ -75,17 +76,9 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
     player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
-    select_video_frame(player, playback_time_us);
+    let _ = VideoSyncService::tick(player, playback_time_us);
     sync_audio_output(player);
     SEMI_OK
-}
-
-fn select_video_frame(player: &mut SemiPlayerHandle, playback_time_us: i64) {
-    let target_video_time_us =
-        add_media_time_us(playback_time_us, player.host_presentation_offset_us);
-    let _ = player
-        .runtime
-        .select_video_frame(&player.video_scheduler, target_video_time_us);
 }
 
 fn has_sufficient_buffer(player: &SemiPlayerHandle) -> bool {

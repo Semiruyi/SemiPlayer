@@ -110,5 +110,6 @@ That is the main reason a player-owned internal video sync system is the next ar
 
 - move from `pump`-driven frame promotion toward a player-owned internal video sync loop
 - preserve `pump` as a control-plane and decode-supply API
+- use player-owned schedule hints to reduce fixed host polling cadence even before a dedicated sync worker exists
 - continue refining late/early frame handling thresholds
 - evolve host presentation offset into a richer feedback model only after the internal sync loop exists

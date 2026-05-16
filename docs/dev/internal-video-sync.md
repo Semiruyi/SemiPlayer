@@ -6,6 +6,28 @@ It is a forward-looking design note for the next stage of the player core.
 
 For the current synchronization model, see [sync.md](sync.md).
 
+## Current Implementation Status
+
+The codebase is now partway through this migration.
+
+Implemented today:
+
+- a dedicated `VideoSyncService`
+- player-owned sync state:
+  - last snapshot
+  - next wake deadline
+  - dirty flag
+  - cumulative counters for tick, sync, present, drop, underflow, and late-hit events
+- deadline-aware `tick(...)` behavior:
+  - the host may still call `pump`
+  - but the sync subsystem now decides whether a real frame-selection pass is needed
+
+Not implemented yet:
+
+- a dedicated internal sync thread
+- queue-refill ownership inside the sync subsystem
+- active wake/sleep by the player without host-triggered entry
+
 ## Why This Exists
 
 The current prototype still relies on an external `pump` loop to advance video frame selection.

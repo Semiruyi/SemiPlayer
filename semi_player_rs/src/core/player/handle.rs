@@ -6,6 +6,7 @@ use crate::audio::core::clock::AudioClock;
 use crate::audio::core::output_controller::AudioOutputController;
 use crate::core::media::OpenedMedia;
 use crate::core::player::runtime::PlayerRuntime;
+use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::scheduler::VideoScheduler;
 use crate::util::time::MediaTimeUs;
 
@@ -20,6 +21,7 @@ pub struct SemiPlayerHandle {
     pub(crate) audio_output: AudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
     pub(crate) runtime: PlayerRuntime,
+    pub(crate) video_sync: VideoSyncState,
 }
 
 impl SemiPlayerHandle {
@@ -34,6 +36,7 @@ impl SemiPlayerHandle {
             audio_output: AudioOutputController::new(),
             video_scheduler: VideoScheduler::new(),
             runtime: PlayerRuntime::new(),
+            video_sync: VideoSyncState::default(),
         }
     }
 
@@ -49,6 +52,7 @@ impl SemiPlayerHandle {
         self.audio_output.stop();
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
+        self.video_sync.reset();
     }
 
     pub fn clear_media(&mut self) {
