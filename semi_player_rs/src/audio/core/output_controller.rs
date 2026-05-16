@@ -17,7 +17,9 @@ pub struct AudioOutputSnapshot {
     pub configured_format: Option<AudioStreamFormat>,
     pub target_buffer_frames: usize,
     pub buffered_frames: usize,
-    pub played_frames_total: u64,
+    pub pending_device_frames: usize,
+    pub rendered_frames_total: u64,
+    pub audible_frames_total: u64,
     pub submitted_frames_total: u64,
     pub started: bool,
     pub device_timing: Option<DevicePlaybackTiming>,
@@ -93,7 +95,9 @@ impl AudioOutputController {
             configured_format: self.backend.configured_format(),
             target_buffer_frames: self.backend.target_buffer_frames(),
             buffered_frames: backend_timing.buffered_frames,
-            played_frames_total: backend_timing.played_frames_total,
+            pending_device_frames: backend_timing.pending_device_frames,
+            rendered_frames_total: backend_timing.rendered_frames_total,
+            audible_frames_total: backend_timing.audible_frames_total,
             submitted_frames_total: self.timing_state.submitted_frames_total,
             started: backend_timing.started,
             device_timing: self.timing_state.to_device_timing(backend_timing),
@@ -149,7 +153,7 @@ impl AudioOutputTimingState {
         let base_pts_us = self.base_pts_us?;
         let format = self.format?;
         let played_frames = backend_timing
-            .played_frames_total
+            .audible_frames_total
             .min(self.submitted_frames_total);
 
         Some(DevicePlaybackTiming {

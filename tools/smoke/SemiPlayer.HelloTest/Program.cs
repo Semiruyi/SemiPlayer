@@ -302,8 +302,10 @@ internal sealed class PlayerSmokeWindow : Window
             $"Started {audioOutput.Started}  DeviceTiming {audioOutput.HasDeviceTiming}  " +
             $"DevBase {audioOutput.BasePtsMs} ms  DevPlayed {audioOutput.DevicePlayedFrames}";
         string audioBufferPart =
-            $"DevBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames} frames  " +
-            $"QueuedTotal {audioOutput.SubmittedFramesTotal}  PlayedTotal {audioOutput.PlayedFramesTotal}";
+            $"MixBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames} frames  " +
+            $"DevPending {audioOutput.PendingDeviceFrames}  Submitted {audioOutput.SubmittedFramesTotal}";
+        string audioProgressPart =
+            $"Rendered {audioOutput.RenderedFramesTotal}  Audible {audioOutput.AudibleFramesTotal}";
         string diagnosticsPart =
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
@@ -318,6 +320,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
+            $"{audioProgressPart}{Environment.NewLine}" +
             $"{framePart}{Environment.NewLine}" +
             $"{diagnosticsPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s";
@@ -574,7 +577,9 @@ internal struct SemiAudioOutputSnapshot
     internal ushort Reserved0;
     internal uint TargetBufferFrames;
     internal uint BufferedFrames;
-    internal ulong PlayedFramesTotal;
+    internal uint PendingDeviceFrames;
+    internal ulong RenderedFramesTotal;
+    internal ulong AudibleFramesTotal;
     internal ulong SubmittedFramesTotal;
     internal uint Started;
     internal uint HasDeviceTiming;

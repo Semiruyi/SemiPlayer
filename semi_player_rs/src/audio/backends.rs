@@ -1,17 +1,21 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
-    BufferSize, SampleFormat, SampleRate, Stream, StreamConfig, SupportedStreamConfigRange,
+    BufferSize, OutputCallbackInfo, SampleFormat, SampleRate, Stream, StreamConfig,
+    SupportedStreamConfigRange,
 };
 
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AudioBackendTiming {
-    pub played_frames_total: u64,
+    pub rendered_frames_total: u64,
+    pub audible_frames_total: u64,
     pub buffered_frames: usize,
+    pub pending_device_frames: usize,
     pub started: bool,
 }
 
@@ -91,7 +95,7 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         let stream = device
             .build_output_stream(
                 &stream_config,
-                move |output: &mut [f32], _| fill_output_buffer(output, &shared),
+                move |output: &mut [f32], info| fill_output_buffer(output, info, &shared),
                 |_error| {},
                 None,
             )
@@ -105,7 +109,9 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         shared.format = Some(format);
         shared.samples.clear();
         shared.buffered_frames = 0;
-        shared.played_frames_total = 0;
+        shared.rendered_frames_total = 0;
+        shared.completed_audible_frames_total = 0;
+        shared.scheduled_blocks.clear();
         Ok(())
     }
 
@@ -147,7 +153,9 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         let mut shared = self.shared.lock().unwrap();
         shared.samples.clear();
         shared.buffered_frames = 0;
-        shared.played_frames_total = 0;
+        shared.rendered_frames_total = 0;
+        shared.completed_audible_frames_total = 0;
+        shared.scheduled_blocks.clear();
         Ok(())
     }
 
@@ -171,10 +179,13 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
     }
 
     fn timing(&self) -> AudioBackendTiming {
-        let shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().unwrap();
+        let progress = shared.playback_progress(Instant::now());
         AudioBackendTiming {
-            played_frames_total: shared.played_frames_total,
+            rendered_frames_total: shared.rendered_frames_total,
+            audible_frames_total: progress.audible_frames_total,
             buffered_frames: shared.buffered_frames,
+            pending_device_frames: progress.pending_device_frames,
             started: self.started,
         }
     }
@@ -185,7 +196,83 @@ struct SharedAudioBuffer {
     format: Option<AudioStreamFormat>,
     samples: VecDeque<f32>,
     buffered_frames: usize,
-    played_frames_total: u64,
+    rendered_frames_total: u64,
+    completed_audible_frames_total: u64,
+    scheduled_blocks: VecDeque<ScheduledPlaybackBlock>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScheduledPlaybackBlock {
+    playback_start: Instant,
+    frame_count: usize,
+    sample_rate: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct PlaybackProgress {
+    audible_frames_total: u64,
+    pending_device_frames: usize,
+}
+
+impl SharedAudioBuffer {
+    fn playback_progress(&mut self, now: Instant) -> PlaybackProgress {
+        while let Some(front) = self.scheduled_blocks.front() {
+            if !front.is_finished(now) {
+                break;
+            }
+
+            self.completed_audible_frames_total = self
+                .completed_audible_frames_total
+                .saturating_add(front.frame_count as u64);
+            self.scheduled_blocks.pop_front();
+        }
+
+        let mut partially_audible_frames_total = 0u64;
+        let mut pending_device_frames = 0usize;
+
+        for block in &self.scheduled_blocks {
+            let audible_frames = block.audible_frames_at(now);
+            partially_audible_frames_total =
+                partially_audible_frames_total.saturating_add(audible_frames as u64);
+            pending_device_frames =
+                pending_device_frames.saturating_add(block.frame_count.saturating_sub(audible_frames));
+        }
+
+        PlaybackProgress {
+            audible_frames_total: self
+                .completed_audible_frames_total
+                .saturating_add(partially_audible_frames_total),
+            pending_device_frames,
+        }
+    }
+}
+
+impl ScheduledPlaybackBlock {
+    fn new(playback_start: Instant, frame_count: usize, sample_rate: u32) -> Self {
+        Self {
+            playback_start,
+            frame_count,
+            sample_rate,
+        }
+    }
+
+    fn is_finished(&self, now: Instant) -> bool {
+        now >= self.playback_end()
+    }
+
+    fn audible_frames_at(&self, now: Instant) -> usize {
+        if now <= self.playback_start {
+            return 0;
+        }
+
+        let elapsed = now.duration_since(self.playback_start);
+        let audible_frames = duration_to_frames(elapsed, self.sample_rate);
+        audible_frames.min(self.frame_count)
+    }
+
+    fn playback_end(&self) -> Instant {
+        self.playback_start + frames_to_duration(self.frame_count, self.sample_rate)
+    }
 }
 
 fn find_matching_output_config(
@@ -207,7 +294,11 @@ fn find_matching_output_config(
         .ok_or(AudioBackendError::InvalidFormat)
 }
 
-fn fill_output_buffer(output: &mut [f32], shared: &Arc<Mutex<SharedAudioBuffer>>) {
+fn fill_output_buffer(
+    output: &mut [f32],
+    info: &OutputCallbackInfo,
+    shared: &Arc<Mutex<SharedAudioBuffer>>,
+) {
     let mut shared = shared.lock().unwrap();
     let channel_count = shared
         .format
@@ -221,9 +312,29 @@ fn fill_output_buffer(output: &mut [f32], shared: &Arc<Mutex<SharedAudioBuffer>>
 
     let consumed_frames = output.len() / channel_count;
     shared.buffered_frames = shared.buffered_frames.saturating_sub(consumed_frames);
-    shared.played_frames_total = shared
-        .played_frames_total
+    shared.rendered_frames_total = shared
+        .rendered_frames_total
         .saturating_add(consumed_frames as u64);
+
+    if consumed_frames == 0 {
+        return;
+    }
+
+    let Some(format) = shared.format else {
+        return;
+    };
+
+    let timestamp = info.timestamp();
+    let playback_delay = timestamp
+        .playback
+        .duration_since(&timestamp.callback)
+        .unwrap_or(Duration::ZERO);
+    let playback_start = Instant::now() + playback_delay;
+    shared.scheduled_blocks.push_back(ScheduledPlaybackBlock::new(
+        playback_start,
+        consumed_frames,
+        format.sample_rate,
+    ));
 }
 
 fn select_buffer_size(config: &SupportedStreamConfigRange, preferred_frames: usize) -> BufferSize {
@@ -233,5 +344,63 @@ fn select_buffer_size(config: &SupportedStreamConfigRange, preferred_frames: usi
             BufferSize::Fixed(preferred.clamp(*min, *max))
         }
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
+    }
+}
+
+fn frames_to_duration(frame_count: usize, sample_rate: u32) -> Duration {
+    if frame_count == 0 || sample_rate == 0 {
+        return Duration::ZERO;
+    }
+
+    let nanos = (frame_count as u128)
+        .saturating_mul(1_000_000_000)
+        .saturating_div(sample_rate as u128);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+
+fn duration_to_frames(duration: Duration, sample_rate: u32) -> usize {
+    if sample_rate == 0 {
+        return 0;
+    }
+
+    let frames = duration
+        .as_nanos()
+        .saturating_mul(sample_rate as u128)
+        .saturating_div(1_000_000_000);
+    usize::try_from(frames).unwrap_or(usize::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::VecDeque;
+    use std::time::{Duration, Instant};
+
+    use super::{ScheduledPlaybackBlock, SharedAudioBuffer};
+
+    #[test]
+    fn scheduled_block_reports_partial_audibility() {
+        let start = Instant::now() - Duration::from_millis(10);
+        let block = ScheduledPlaybackBlock::new(start, 4_800, 48_000);
+
+        assert_eq!(block.audible_frames_at(Instant::now()), 480);
+    }
+
+    #[test]
+    fn playback_progress_keeps_future_frames_pending() {
+        let now = Instant::now();
+        let mut shared = SharedAudioBuffer {
+            completed_audible_frames_total: 1_000,
+            scheduled_blocks: VecDeque::from([
+                ScheduledPlaybackBlock::new(now - Duration::from_millis(5), 480, 48_000),
+                ScheduledPlaybackBlock::new(now + Duration::from_millis(5), 480, 48_000),
+            ]),
+            ..Default::default()
+        };
+
+        let progress = shared.playback_progress(now);
+
+        assert!(progress.audible_frames_total >= 1_240);
+        assert!(progress.audible_frames_total < 1_480);
+        assert!(progress.pending_device_frames >= 480);
     }
 }
