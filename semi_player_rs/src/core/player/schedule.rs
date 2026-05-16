@@ -29,42 +29,19 @@ pub struct DecodeScheduleHint {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScheduledWork {
-    AdvancePlayback { deadline_us: Option<MediaTimeUs> },
-    DecodeSupply,
-    AdvanceAndDecode { deadline_us: Option<MediaTimeUs> },
-    WaitFor { wait_us: MediaTimeUs },
-}
-
-impl ScheduledWork {
-    pub fn deadline_us(self) -> Option<MediaTimeUs> {
-        match self {
-            ScheduledWork::AdvancePlayback { deadline_us }
-            | ScheduledWork::AdvanceAndDecode { deadline_us } => deadline_us,
-            ScheduledWork::DecodeSupply | ScheduledWork::WaitFor { .. } => None,
-        }
-    }
+pub struct ScheduledWork {
+    pub should_advance_playback: bool,
+    pub should_request_decode: bool,
+    pub deadline_us: Option<MediaTimeUs>,
+    pub wait_us: MediaTimeUs,
 }
 
 impl PumpScheduleHint {
     pub fn scheduled_work(self) -> ScheduledWork {
-        if self.playback_due_now && self.decode_supply_needed {
-            return ScheduledWork::AdvanceAndDecode {
-                deadline_us: self.next_pump_deadline_us,
-            };
-        }
-
-        if self.playback_due_now {
-            return ScheduledWork::AdvancePlayback {
-                deadline_us: self.next_pump_deadline_us,
-            };
-        }
-
-        if self.decode_supply_needed {
-            return ScheduledWork::DecodeSupply;
-        }
-
-        ScheduledWork::WaitFor {
+        ScheduledWork {
+            should_advance_playback: self.playback_due_now,
+            should_request_decode: self.decode_supply_needed,
+            deadline_us: self.next_pump_deadline_us,
             wait_us: self.suggested_wait_us.max(1),
         }
     }
@@ -222,7 +199,7 @@ fn min_optional_time(lhs: Option<MediaTimeUs>, rhs: Option<MediaTimeUs>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_decode_schedule_hint, PlayerScheduleService};
+    use super::{compute_decode_schedule_hint, PlayerScheduleService, PumpScheduleHint};
     use crate::api::types::PlayerState;
     use crate::audio::core::output::AudioOutputChunk;
     use crate::core::player::handle::SemiPlayerHandle;
@@ -332,6 +309,23 @@ mod tests {
         let hint = PlayerScheduleService::evaluate(&player);
 
         assert!(hint.decode_supply_needed);
+    }
+
+    #[test]
+    fn scheduled_work_separates_playback_and_decode_axes() {
+        let work = PumpScheduleHint {
+            playback_due_now: true,
+            decode_supply_needed: true,
+            next_pump_deadline_us: Some(12_345),
+            suggested_wait_us: 7_000,
+            ..PumpScheduleHint::default()
+        }
+        .scheduled_work();
+
+        assert!(work.should_advance_playback);
+        assert!(work.should_request_decode);
+        assert_eq!(work.deadline_us, Some(12_345));
+        assert_eq!(work.wait_us, 7_000);
     }
 
     #[test]

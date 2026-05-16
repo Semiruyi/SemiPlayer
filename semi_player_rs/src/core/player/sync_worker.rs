@@ -7,7 +7,7 @@ use crate::core::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
-use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
+use crate::core::player::schedule::PlayerScheduleService;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]
@@ -131,30 +131,22 @@ fn execute_worker_step(player: &mut SemiPlayerHandle, mode: WorkerMode) -> Worke
     }
 
     let scheduled_work = hint.scheduled_work();
-    let deadline_us = scheduled_work.deadline_us();
+    if scheduled_work.should_request_decode {
+        player.notify_decode_worker();
+    }
 
-    match scheduled_work {
-        ScheduledWork::AdvanceAndDecode { .. } | ScheduledWork::AdvancePlayback { .. } => {
-            observe_worker_deadline_slip(player, deadline_us);
-            WorkerAction::AdvancePlayback {
-                phase_lock: player.playback_phase_lock(),
-            }
-        }
-        ScheduledWork::DecodeSupply => {
-            player.notify_decode_worker();
-            match mode {
-                WorkerMode::Playing => WorkerAction::WaitFor(Duration::from_micros(
-                    u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
-                )),
-                WorkerMode::Stabilizing => WorkerAction::WaitIndefinitely,
-            }
-        }
-        ScheduledWork::WaitFor { wait_us } => match mode {
-            WorkerMode::Playing => WorkerAction::WaitFor(Duration::from_micros(
-                u64::try_from(wait_us.max(1)).unwrap_or(u64::MAX),
-            )),
-            WorkerMode::Stabilizing => WorkerAction::WaitIndefinitely,
-        },
+    if scheduled_work.should_advance_playback {
+        observe_worker_deadline_slip(player, scheduled_work.deadline_us);
+        return WorkerAction::AdvancePlayback {
+            phase_lock: player.playback_phase_lock(),
+        };
+    }
+
+    match mode {
+        WorkerMode::Playing => WorkerAction::WaitFor(Duration::from_micros(
+            u64::try_from(scheduled_work.wait_us.max(1)).unwrap_or(u64::MAX),
+        )),
+        WorkerMode::Stabilizing => WorkerAction::WaitIndefinitely,
     }
 }
 
