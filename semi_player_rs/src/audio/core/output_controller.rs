@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use crate::api::types::PlayerState;
 use crate::audio::backends::{AudioBackendTiming, AudioOutputBackend, CpalAudioOutputBackend};
 use crate::audio::core::clock::DevicePlaybackTiming;
@@ -10,6 +12,11 @@ const CHUNK_FRAME_COUNT: usize = 1_024;
 pub struct AudioOutputController {
     backend: CpalAudioOutputBackend,
     timing_state: AudioOutputTimingState,
+}
+
+#[derive(Clone)]
+pub struct SharedAudioOutputController {
+    inner: Arc<Mutex<AudioOutputController>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -118,6 +125,30 @@ impl AudioOutputController {
 impl Default for AudioOutputController {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl SharedAudioOutputController {
+    pub fn new(controller: AudioOutputController) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(controller)),
+        }
+    }
+
+    pub fn with_ref<T>(&self, f: impl FnOnce(&AudioOutputController) -> T) -> T {
+        let guard = self.inner.lock().unwrap();
+        f(&guard)
+    }
+
+    pub fn with_mut<T>(&self, f: impl FnOnce(&mut AudioOutputController) -> T) -> T {
+        let mut guard = self.inner.lock().unwrap();
+        f(&mut guard)
+    }
+}
+
+impl Default for SharedAudioOutputController {
+    fn default() -> Self {
+        Self::new(AudioOutputController::new())
     }
 }
 

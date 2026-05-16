@@ -70,12 +70,15 @@ internal sealed class SmokeAnomalyLogger
 
         if (afterStartupGrace
             && (snapshot.FfiLockWaitLastUs >= LockWaitWarnThresholdUs
-                || snapshot.WorkerLockWaitLastUs >= LockWaitWarnThresholdUs))
+                || snapshot.SyncWorkerLockWaitLastUs >= LockWaitWarnThresholdUs
+                || snapshot.DecodeWorkerLockWaitLastUs >= LockWaitWarnThresholdUs))
         {
             _activeAnomalies.Add("lock-wait");
             LogThrottled(
                 "lock-wait",
-                $"lock-wait ffiLastUs={snapshot.FfiLockWaitLastUs} ffiMaxUs={snapshot.FfiLockWaitMaxUs} workerLastUs={snapshot.WorkerLockWaitLastUs} workerMaxUs={snapshot.WorkerLockWaitMaxUs}");
+                $"lock-wait ffiLastUs={snapshot.FfiLockWaitLastUs} ffiMaxUs={snapshot.FfiLockWaitMaxUs} " +
+                $"syncLastUs={snapshot.SyncWorkerLockWaitLastUs} syncMaxUs={snapshot.SyncWorkerLockWaitMaxUs} " +
+                $"decodeLastUs={snapshot.DecodeWorkerLockWaitLastUs} decodeMaxUs={snapshot.DecodeWorkerLockWaitMaxUs}");
         }
 
         if (afterStartupGrace && snapshot.WorkerDeadlineSlipLastUs >= WorkerSlipWarnThresholdUs)
@@ -1555,8 +1558,10 @@ internal struct SemiPlaybackSnapshot
     internal long NextPumpDeadlineMs;
     internal long FfiLockWaitLastUs;
     internal long FfiLockWaitMaxUs;
-    internal long WorkerLockWaitLastUs;
-    internal long WorkerLockWaitMaxUs;
+    internal long SyncWorkerLockWaitLastUs;
+    internal long SyncWorkerLockWaitMaxUs;
+    internal long DecodeWorkerLockWaitLastUs;
+    internal long DecodeWorkerLockWaitMaxUs;
     internal long WorkerDeadlineSlipLastUs;
     internal long WorkerDeadlineSlipMaxUs;
     internal ulong StaleAudioDiscardEventCount;

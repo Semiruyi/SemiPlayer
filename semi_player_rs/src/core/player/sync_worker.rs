@@ -62,7 +62,11 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     loop {
         let action = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::Worker, evaluate_worker_action)
+            SemiPlayerHandle::with_locked_ptr_as(
+                player_ptr,
+                LockOwner::SyncWorker,
+                evaluate_worker_action,
+            )
         };
 
         match action {

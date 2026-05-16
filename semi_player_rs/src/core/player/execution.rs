@@ -5,6 +5,7 @@ use crate::api::error::{ResultCode, SEMI_OK};
 use crate::core::player::handle::SemiPlayerHandle;
 
 pub use decode_supply::decode_supply;
+pub(crate) use decode_supply::{apply_decoded_output, poll_decoded_output_once};
 pub use playback_advance::advance_playback;
 
 pub fn execute_playback_cycle(

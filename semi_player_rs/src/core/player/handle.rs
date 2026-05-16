@@ -5,10 +5,11 @@ use std::time::Instant;
 
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
-use crate::audio::core::output_controller::AudioOutputController;
-use crate::core::media::OpenedMedia;
+use crate::audio::core::output_controller::SharedAudioOutputController;
+use crate::core::media::SharedOpenedMedia;
 use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
+use crate::core::player::schedule::PlayerScheduleService;
 use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::scheduler::VideoScheduler;
@@ -18,8 +19,10 @@ use crate::util::time::MediaTimeUs;
 pub struct PlayerDiagnosticsSnapshot {
     pub ffi_lock_wait_last_us: MediaTimeUs,
     pub ffi_lock_wait_max_us: MediaTimeUs,
-    pub worker_lock_wait_last_us: MediaTimeUs,
-    pub worker_lock_wait_max_us: MediaTimeUs,
+    pub sync_worker_lock_wait_last_us: MediaTimeUs,
+    pub sync_worker_lock_wait_max_us: MediaTimeUs,
+    pub decode_worker_lock_wait_last_us: MediaTimeUs,
+    pub decode_worker_lock_wait_max_us: MediaTimeUs,
     pub worker_deadline_slip_last_us: MediaTimeUs,
     pub worker_deadline_slip_max_us: MediaTimeUs,
     pub stale_audio_discard_event_count: u64,
@@ -33,8 +36,10 @@ pub struct PlayerDiagnosticsSnapshot {
 struct PlayerDiagnostics {
     ffi_lock_wait_last_us: AtomicI64,
     ffi_lock_wait_max_us: AtomicI64,
-    worker_lock_wait_last_us: AtomicI64,
-    worker_lock_wait_max_us: AtomicI64,
+    sync_worker_lock_wait_last_us: AtomicI64,
+    sync_worker_lock_wait_max_us: AtomicI64,
+    decode_worker_lock_wait_last_us: AtomicI64,
+    decode_worker_lock_wait_max_us: AtomicI64,
     worker_deadline_slip_last_us: AtomicI64,
     worker_deadline_slip_max_us: AtomicI64,
     stale_audio_discard_event_count: AtomicU64,
@@ -47,7 +52,8 @@ struct PlayerDiagnostics {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LockOwner {
     Ffi,
-    Worker,
+    SyncWorker,
+    DecodeWorker,
 }
 
 #[repr(C)]
@@ -57,12 +63,13 @@ pub struct SemiPlayerHandle {
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
+    media_generation: AtomicU64,
     pub(crate) speed: c_double,
-    pub(crate) opened_media: Option<OpenedMedia>,
+    pub(crate) opened_media: Option<SharedOpenedMedia>,
     pub(crate) subtitles_visible: bool,
     pub(crate) host_presentation_offset_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
-    pub(crate) audio_output: AudioOutputController,
+    pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
     pub(crate) runtime: PlayerRuntime,
     pub(crate) video_sync: VideoSyncState,
@@ -76,12 +83,13 @@ impl SemiPlayerHandle {
             sync_worker: None,
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
+            media_generation: AtomicU64::new(0),
             speed: 1.0,
             opened_media: None,
             subtitles_visible: true,
             host_presentation_offset_us: 0,
             audio_clock: AudioClock::new(),
-            audio_output: AudioOutputController::new(),
+            audio_output: SharedAudioOutputController::default(),
             video_scheduler: VideoScheduler::new(),
             runtime: PlayerRuntime::new(),
             video_sync: VideoSyncState::default(),
@@ -126,9 +134,7 @@ impl SemiPlayerHandle {
             sync_worker.notify();
         }
 
-        if let Some(decode_worker) = self.decode_worker.as_ref() {
-            decode_worker.notify();
-        }
+        self.request_decode_if_needed();
     }
 
     pub fn stop_workers(&mut self) {
@@ -148,8 +154,17 @@ impl SemiPlayerHandle {
     }
 
     pub fn notify_decode_worker(&self) {
+        self.request_decode_if_needed();
+    }
+
+    pub fn request_decode_if_needed(&self) {
+        let hint = PlayerScheduleService::evaluate_decode(self);
+        if !hint.should_decode_now {
+            return;
+        }
+
         if let Some(decode_worker) = self.decode_worker.as_ref() {
-            decode_worker.notify();
+            decode_worker.request_decode();
         }
     }
 
@@ -158,7 +173,7 @@ impl SemiPlayerHandle {
         self.subtitles_visible = true;
         self.host_presentation_offset_us = 0;
         self.audio_clock.reset();
-        self.audio_output.stop();
+        self.audio_output.with_mut(|audio_output| audio_output.stop());
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
         self.video_sync.reset();
@@ -181,6 +196,14 @@ impl SemiPlayerHandle {
         self.diagnostics.snapshot()
     }
 
+    pub fn media_generation(&self) -> u64 {
+        self.media_generation.load(Ordering::SeqCst)
+    }
+
+    pub fn bump_media_generation(&self) -> u64 {
+        self.media_generation.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
     pub fn observe_worker_deadline_slip(&self, slip_us: MediaTimeUs) {
         self.diagnostics.observe_worker_deadline_slip(slip_us);
     }
@@ -197,10 +220,15 @@ impl PlayerDiagnostics {
                 self.ffi_lock_wait_last_us.store(wait_us, Ordering::Relaxed);
                 update_atomic_max(&self.ffi_lock_wait_max_us, wait_us);
             }
-            LockOwner::Worker => {
-                self.worker_lock_wait_last_us
+            LockOwner::SyncWorker => {
+                self.sync_worker_lock_wait_last_us
                     .store(wait_us, Ordering::Relaxed);
-                update_atomic_max(&self.worker_lock_wait_max_us, wait_us);
+                update_atomic_max(&self.sync_worker_lock_wait_max_us, wait_us);
+            }
+            LockOwner::DecodeWorker => {
+                self.decode_worker_lock_wait_last_us
+                    .store(wait_us, Ordering::Relaxed);
+                update_atomic_max(&self.decode_worker_lock_wait_max_us, wait_us);
             }
         }
     }
@@ -235,8 +263,18 @@ impl PlayerDiagnostics {
         PlayerDiagnosticsSnapshot {
             ffi_lock_wait_last_us: self.ffi_lock_wait_last_us.load(Ordering::Relaxed),
             ffi_lock_wait_max_us: self.ffi_lock_wait_max_us.load(Ordering::Relaxed),
-            worker_lock_wait_last_us: self.worker_lock_wait_last_us.load(Ordering::Relaxed),
-            worker_lock_wait_max_us: self.worker_lock_wait_max_us.load(Ordering::Relaxed),
+            sync_worker_lock_wait_last_us: self
+                .sync_worker_lock_wait_last_us
+                .load(Ordering::Relaxed),
+            sync_worker_lock_wait_max_us: self
+                .sync_worker_lock_wait_max_us
+                .load(Ordering::Relaxed),
+            decode_worker_lock_wait_last_us: self
+                .decode_worker_lock_wait_last_us
+                .load(Ordering::Relaxed),
+            decode_worker_lock_wait_max_us: self
+                .decode_worker_lock_wait_max_us
+                .load(Ordering::Relaxed),
             worker_deadline_slip_last_us: self.worker_deadline_slip_last_us.load(Ordering::Relaxed),
             worker_deadline_slip_max_us: self.worker_deadline_slip_max_us.load(Ordering::Relaxed),
             stale_audio_discard_event_count: self

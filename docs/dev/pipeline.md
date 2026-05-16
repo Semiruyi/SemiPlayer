@@ -24,6 +24,7 @@ Important current rule:
 - `semi_player_pump(...)` still exists and is still useful
 - decode supply now has its own internal worker lane
 - decode supply still shares the same serialized player lock, so it is not yet an independently concurrent pipeline
+- lock-wait diagnostics are now split by `ffi`, `sync worker`, and `decode worker`
 
 That means the player has already crossed the line from:
 
@@ -114,7 +115,7 @@ Current audio path:
 decoded AudioFrame
   -> runtime audio queue
   -> pull_audio_chunk()
-  -> AudioOutputController
+  -> SharedAudioOutputController
   -> CPAL backend
   -> backend timing snapshot
   -> AudioClock
@@ -124,6 +125,7 @@ Important current behavior:
 
 - the player uses audio as the master clock
 - `AudioClock` prefers backend playback timing when available
+- audio output control now has its own shared handle boundary, like decode media state
 - the CPAL backend exposes:
   - buffered frames
   - pending device frames
@@ -196,11 +198,15 @@ Decode worker loop:
 
 ```text
 lock player
-  -> inspect current buffer state
-  -> if decode supply is needed:
-       run synchronous decode refill
-       wake sync worker if new frames arrived
-  -> otherwise wait for explicit wake
+  -> build a decode plan
+  -> capture shared media handle + generation
+unlock player
+  -> poll FFmpeg decode with a small packet budget
+lock player
+  -> discard stale results if media generation changed
+  -> apply decoded output into runtime queues
+  -> wake sync worker if new frames arrived
+  -> decide whether to continue or sleep
 repeat
 ```
 
@@ -232,6 +238,10 @@ Current scheduling input combines:
 - next video sync deadline
 - next audio refill deadline
 - decode-supply-needed state
+- a dedicated decode-schedule hint used by:
+  - decode worker
+  - manual pump path
+  - internal decode wake requests
 - immediate wake conditions such as:
   - dirty sync state
   - stale current video frame
@@ -270,6 +280,12 @@ Current rule:
 
 - one player operation runs at a time
 
+Current observability:
+
+- FFI lock wait is measured separately
+- sync-worker lock wait is measured separately
+- decode-worker lock wait is measured separately
+
 That is intentionally conservative. It is a good first boundary before deeper task splitting.
 
 ## 9. Host Read Path
@@ -304,7 +320,9 @@ The current pipeline is much healthier than the original pump-only prototype, bu
 
 Main limitations:
 
-- decode supply is still synchronous and still shares the same serialized player lock
+- runtime queue mutation and FFmpeg media control are now split, but media open/seek/reset still coordinate through the player handle
+- decode output application still serializes with other player mutations
+- audio output access is now independently lockable, but playback advancement still runs under the sync worker's player-locked execution path
 - audio output, decode supply, and sync decisions still share one serialized handle lock
 - video frame delivery is still CPU-copy BGRA, not GPU-native
 - subtitle timing and composition are not yet integrated into the worker-driven pipeline

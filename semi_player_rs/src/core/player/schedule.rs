@@ -20,6 +20,14 @@ pub struct PumpScheduleHint {
     pub suggested_wait_us: MediaTimeUs,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DecodeScheduleHint {
+    pub media_loaded: bool,
+    pub worker_active: bool,
+    pub needs_decode_supply: bool,
+    pub should_decode_now: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScheduledWork {
     AdvancePlayback { deadline_us: Option<MediaTimeUs> },
@@ -85,6 +93,14 @@ impl PlayerScheduleService {
             suggested_wait_us,
         }
     }
+
+    pub fn evaluate_decode(player: &SemiPlayerHandle) -> DecodeScheduleHint {
+        compute_decode_schedule_hint(
+            player.is_media_loaded(),
+            player.state(),
+            player.runtime.decode_supply_status(),
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -109,7 +125,7 @@ impl<'a> ScheduleContext<'a> {
             video_sync_dirty: player.video_sync.is_dirty(),
             runtime_video: player.runtime.video_snapshot(),
             video_snapshot: VideoSyncService::evaluate(player, playback_time_us),
-            audio_output: player.audio_output.snapshot(),
+            audio_output: player.audio_output.with_ref(|audio_output| audio_output.snapshot()),
         }
     }
 }
@@ -169,6 +185,22 @@ fn compute_suggested_wait_us(
     wait_us.clamp(MIN_PUMP_INTERVAL_US, MAX_PUMP_INTERVAL_US)
 }
 
+fn compute_decode_schedule_hint(
+    media_loaded: bool,
+    state: PlayerState,
+    decode_supply: DecodeSupplyStatus,
+) -> DecodeScheduleHint {
+    let worker_active = media_loaded && state != PlayerState::Idle;
+    let should_decode_now = worker_active && decode_supply.needs_decode_supply;
+
+    DecodeScheduleHint {
+        media_loaded,
+        worker_active,
+        needs_decode_supply: decode_supply.needs_decode_supply,
+        should_decode_now,
+    }
+}
+
 fn frames_to_us(frame_count: usize, sample_rate: u32) -> MediaTimeUs {
     if frame_count == 0 || sample_rate == 0 {
         return 0;
@@ -190,10 +222,11 @@ fn min_optional_time(lhs: Option<MediaTimeUs>, rhs: Option<MediaTimeUs>) -> Opti
 
 #[cfg(test)]
 mod tests {
-    use super::PlayerScheduleService;
+    use super::{compute_decode_schedule_hint, PlayerScheduleService};
     use crate::api::types::PlayerState;
     use crate::audio::core::output::AudioOutputChunk;
     use crate::core::player::handle::SemiPlayerHandle;
+    use crate::core::player::runtime::DecodeSupplyStatus;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
@@ -230,16 +263,18 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Ready);
         player.audio_clock.play();
-        player.audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
-            sample_rate: 48_000,
-            channels: 2,
-        }));
-        player.audio_output.submit_chunk(&AudioOutputChunk {
-            pts_us: Some(0),
-            sample_rate: 48_000,
-            channels: 2,
-            frame_count: 2_560,
-            samples: vec![0.0; 2_560 * 2],
+        player.audio_output.with_mut(|audio_output| {
+            audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }));
+            audio_output.submit_chunk(&AudioOutputChunk {
+                pts_us: Some(0),
+                sample_rate: 48_000,
+                channels: 2,
+                frame_count: 2_560,
+                samples: vec![0.0; 2_560 * 2],
+            });
         });
 
         let hint = PlayerScheduleService::evaluate(&player);
@@ -275,10 +310,12 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Playing);
         player.audio_clock.play();
-        player.audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
-            sample_rate: 48_000,
-            channels: 2,
-        }));
+        player.audio_output.with_mut(|audio_output| {
+            audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
+                sample_rate: 48_000,
+                channels: 2,
+            }));
+        });
 
         let hint = PlayerScheduleService::evaluate(&player);
 
@@ -295,5 +332,36 @@ mod tests {
         let hint = PlayerScheduleService::evaluate(&player);
 
         assert!(hint.decode_supply_needed);
+    }
+
+    #[test]
+    fn decode_hint_stays_inactive_without_loaded_media() {
+        let hint = compute_decode_schedule_hint(
+            false,
+            PlayerState::Ready,
+            DecodeSupplyStatus {
+                needs_decode_supply: true,
+                ..DecodeSupplyStatus::default()
+            },
+        );
+
+        assert_eq!(hint.media_loaded, false);
+        assert_eq!(hint.worker_active, false);
+        assert_eq!(hint.needs_decode_supply, true);
+        assert_eq!(hint.should_decode_now, false);
+    }
+
+    #[test]
+    fn decode_hint_runs_only_for_active_non_idle_states() {
+        let status = DecodeSupplyStatus {
+            needs_decode_supply: true,
+            ..DecodeSupplyStatus::default()
+        };
+
+        let idle_hint = compute_decode_schedule_hint(true, PlayerState::Idle, status);
+        let playing_hint = compute_decode_schedule_hint(true, PlayerState::Playing, status);
+
+        assert!(!idle_hint.should_decode_now);
+        assert!(playing_hint.should_decode_now);
     }
 }

@@ -1,9 +1,10 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
-use crate::core::media::DecodedOutput;
+use crate::core::media::{DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::video_sync::VideoSyncService;
 
 const DEFAULT_PUMP_ITERATIONS: u32 = 256;
+pub(crate) const DECODE_POLL_PACKET_BUDGET: usize = 4;
 
 pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
     let iterations = if max_iterations == 0 {
@@ -11,32 +12,19 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     } else {
         max_iterations
     };
+    let Some(opened_media) = player.opened_media.as_ref().cloned() else {
+        return SEMI_E_INVALID_STATE;
+    };
 
     for _ in 0..iterations {
-        let output = {
-            let Some(opened_media) = player.opened_media.as_mut() else {
-                return SEMI_E_INVALID_STATE;
-            };
-
-            match opened_media.next_decoded_output() {
-                Ok(Some(output)) => output,
-                Ok(None) => break,
-                Err(_) => return SEMI_E_INVALID_STATE,
-            }
+        let output = match poll_decoded_output_once(&opened_media) {
+            Ok(DecodedOutputPoll::Output(output)) => output,
+            Ok(DecodedOutputPoll::Pending) | Ok(DecodedOutputPoll::Finished) => break,
+            Err(code) => return code,
         };
 
-        match output {
-            DecodedOutput::Video(frame) => {
-                player.runtime.push_video_frame(frame);
-                VideoSyncService::mark_dirty(player);
-            }
-            DecodedOutput::Audio(frame) => {
-                player.runtime.push_audio_frame(frame);
-            }
-            DecodedOutput::EndOfStream => {
-                player.runtime.mark_end_of_stream();
-                break;
-            }
+        if apply_decoded_output(player, output) {
+            break;
         }
 
         if !player.runtime.decode_supply_status().needs_decode_supply {
@@ -45,6 +33,32 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     }
 
     SEMI_OK
+}
+
+pub(crate) fn poll_decoded_output_once(
+    opened_media: &SharedOpenedMedia,
+) -> Result<DecodedOutputPoll, ResultCode> {
+    opened_media
+        .with_mut(|opened_media| opened_media.poll_decoded_output(DECODE_POLL_PACKET_BUDGET))
+        .map_err(|_| SEMI_E_INVALID_STATE)
+}
+
+pub(crate) fn apply_decoded_output(player: &mut SemiPlayerHandle, output: DecodedOutput) -> bool {
+    match output {
+        DecodedOutput::Video(frame) => {
+            player.runtime.push_video_frame(frame);
+            VideoSyncService::mark_dirty(player);
+            false
+        }
+        DecodedOutput::Audio(frame) => {
+            player.runtime.push_audio_frame(frame);
+            false
+        }
+        DecodedOutput::EndOfStream => {
+            player.runtime.mark_end_of_stream();
+            true
+        }
+    }
 }
 
 #[cfg(test)]

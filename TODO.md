@@ -27,11 +27,13 @@ Already done:
 - presentation bias API exists
 - `VideoSyncService` owns core video sync decisions
 - player-owned sync worker is active
+- player-owned decode worker is active
+- worker-vs-UI pump comparison tooling exists in smoke
 - FFI and worker mutations are serialized through the player handle
 
 Not done yet:
 
-- decode supply promoted from a logical split to a dedicated execution path
+- lock-independent decode pipeline beyond the shared player handle lock
 - real render backend / output surface abstraction
 - subtitle pipeline and libass integration
 - real host adapter projects beyond the smoke app
@@ -49,12 +51,12 @@ Not done yet:
 
 ### P0.1 Measure worker-driven sync directly
 
-Status: next active task
+Status: baseline done, keep for regression tracking
 
 Tasks:
 
-- add worker-vs-UI-driver comparison in smoke tooling
-- measure:
+- keep worker-vs-UI-driver comparison in smoke tooling healthy
+- keep measuring:
   - `CoreSyncErr` mean
   - absolute mean
   - positive spikes
@@ -63,7 +65,7 @@ Tasks:
 
 ### P0.2 Split decode supply from `pump_player(...)`
 
-Status: in progress
+Status: baseline done, concurrency split still pending
 
 Tasks:
 
@@ -74,7 +76,7 @@ Tasks:
 
 Why this matters:
 
-- current worker is real, and decode is logically split, but it still shares the same execution lane
+- decode now has its own worker lane, but it still shares the same serialized player lock
 
 ### P0.3 Tighten sync worker wake policy
 
@@ -93,6 +95,8 @@ Status: after worker behavior is stable
 Tasks:
 
 - identify hot paths currently blocked by the single handle operation lock
+- keep decode refill packet-budgeted while deeper lock splitting is pending
+- move playback-side audio output work onto the new shared audio-output boundary
 - split read-mostly and write-heavy responsibilities where safe
 - preserve correctness first
 
@@ -168,6 +172,7 @@ Tasks:
 
 Tasks:
 
+- keep sync-worker and decode-worker contention visible separately
 - expose richer worker diagnostics if needed
 - keep smoke and automated measurement paths aligned
 
@@ -221,8 +226,8 @@ Rule:
 
 Do these next, in order:
 
-1. measure worker-driven sync against UI-driven pumping
-2. turn decode supply into a dedicated execution path
+1. keep worker-vs-host sync measurement as a regression tool
+2. reduce decode worker coupling to the shared player lock
 3. define render output surface abstraction
 4. start the first real Windows render backend
 5. integrate subtitle timing into the worker-owned playback model

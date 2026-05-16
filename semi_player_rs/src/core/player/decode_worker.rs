@@ -1,14 +1,16 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::api::types::PlayerState;
-use crate::core::player::execution::decode_supply;
+use crate::core::media::{DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
+use crate::core::player::schedule::PlayerScheduleService;
 
 #[derive(Default)]
 struct DecodeWorkerControl {
     shutdown: bool,
     wake_requested: bool,
+    decode_requested: bool,
 }
 
 pub struct DecodeWorkerHandle {
@@ -33,9 +35,10 @@ impl DecodeWorkerHandle {
         }
     }
 
-    pub fn notify(&self) {
+    pub fn request_decode(&self) {
         let (lock, condvar) = &*self.control;
         let mut control = lock.lock().unwrap();
+        control.decode_requested = true;
         control.wake_requested = true;
         condvar.notify_all();
     }
@@ -57,16 +60,38 @@ impl DecodeWorkerHandle {
 
 fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Condvar)>) {
     loop {
-        let action = unsafe {
+        let plan = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::Worker, |player| {
-                evaluate_decode_action(player)
+            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::DecodeWorker, |player| {
+                plan_decode_action(player)
             })
         };
 
-        match action {
-            DecodeWorkerAction::ContinueSoon => continue,
-            DecodeWorkerAction::WaitIndefinitely => {
+        match plan {
+            DecodeWorkerPlan::Decode {
+                opened_media,
+                generation,
+            } => {
+                let polled_output = poll_decoded_output_once(&opened_media);
+                let action = unsafe {
+                    let player_ptr = player_addr as *mut SemiPlayerHandle;
+                    SemiPlayerHandle::with_locked_ptr_as(
+                        player_ptr,
+                        LockOwner::DecodeWorker,
+                        |player| complete_decode_action(player, generation, polled_output),
+                    )
+                };
+
+                match action {
+                    DecodeWorkerAction::ContinueSoon => continue,
+                    DecodeWorkerAction::WaitIndefinitely => {
+                        if wait_for_signal(&control) {
+                            break;
+                        }
+                    }
+                }
+            }
+            DecodeWorkerPlan::WaitIndefinitely => {
                 if wait_for_signal(&control) {
                     break;
                 }
@@ -75,27 +100,55 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
     }
 }
 
-fn evaluate_decode_action(player: &mut SemiPlayerHandle) -> DecodeWorkerAction {
-    if !player.is_media_loaded() {
-        return DecodeWorkerAction::WaitIndefinitely;
+fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
+    let hint = PlayerScheduleService::evaluate_decode(player);
+    if !hint.worker_active {
+        return DecodeWorkerPlan::WaitIndefinitely;
     }
 
-    match player.state() {
-        PlayerState::Idle => DecodeWorkerAction::WaitIndefinitely,
-        PlayerState::Ready | PlayerState::Paused | PlayerState::Playing => {
-            if !player.runtime.decode_supply_status().needs_decode_supply {
+    if !hint.should_decode_now {
+        return DecodeWorkerPlan::WaitIndefinitely;
+    }
+
+    let Some(opened_media) = player.opened_media.as_ref().cloned() else {
+        return DecodeWorkerPlan::WaitIndefinitely;
+    };
+
+    DecodeWorkerPlan::Decode {
+        opened_media,
+        generation: player.media_generation(),
+    }
+}
+
+fn complete_decode_action(
+    player: &mut SemiPlayerHandle,
+    generation: u64,
+    polled_output: Result<DecodedOutputPoll, i32>,
+) -> DecodeWorkerAction {
+    if generation != player.media_generation() {
+        return next_decode_action(player);
+    }
+
+    match polled_output {
+        Ok(DecodedOutputPoll::Output(output)) => {
+            let reached_end = apply_decoded_output(player, output);
+            player.notify_sync_worker();
+            if reached_end {
                 return DecodeWorkerAction::WaitIndefinitely;
             }
-
-            let _ = decode_supply(player, 0);
-            player.notify_sync_worker();
-
-            if player.runtime.decode_supply_status().needs_decode_supply {
-                DecodeWorkerAction::ContinueSoon
-            } else {
-                DecodeWorkerAction::WaitIndefinitely
-            }
         }
+        Ok(DecodedOutputPoll::Pending) | Ok(DecodedOutputPoll::Finished) => {}
+        Err(_) => return DecodeWorkerAction::WaitIndefinitely,
+    }
+
+    next_decode_action(player)
+}
+
+fn next_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerAction {
+    if PlayerScheduleService::evaluate_decode(player).should_decode_now {
+        DecodeWorkerAction::ContinueSoon
+    } else {
+        DecodeWorkerAction::WaitIndefinitely
     }
 }
 
@@ -107,22 +160,36 @@ fn wait_for_signal(control: &Arc<(Mutex<DecodeWorkerControl>, Condvar)>) -> bool
         return true;
     }
 
+    if !state.decode_requested {
+        loop {
+            state = condvar.wait(state).unwrap();
+            if state.shutdown {
+                return true;
+            }
+            if state.decode_requested || state.wake_requested {
+                break;
+            }
+        }
+    }
+
     if state.wake_requested {
         state.wake_requested = false;
-        return false;
     }
 
-    state = condvar.wait(state).unwrap();
-
-    if state.shutdown {
-        return true;
-    }
-
+    state.decode_requested = false;
     state.wake_requested = false;
     false
 }
 
 enum DecodeWorkerAction {
     ContinueSoon,
+    WaitIndefinitely,
+}
+
+enum DecodeWorkerPlan {
+    Decode {
+        opened_media: SharedOpenedMedia,
+        generation: u64,
+    },
     WaitIndefinitely,
 }

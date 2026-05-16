@@ -20,26 +20,47 @@ fn sync_audio_output(player: &mut SemiPlayerHandle) {
     let audio_format = player.runtime.current_audio_format();
     let state = player.state();
 
-    player.audio_output.ensure_backend_format(audio_format);
-    player.audio_output.sync_started_state(state);
+    player.audio_output.with_mut(|audio_output| {
+        audio_output.ensure_backend_format(audio_format);
+        audio_output.sync_started_state(state);
+    });
 
-    let configured_format = player.audio_output.configured_format();
-    while player.audio_output.needs_more_frames() {
-        let Some(chunk) = player
-            .runtime
-            .pull_audio_chunk(player.audio_output.next_request_frame_count())
-        else {
+    let configured_format = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.configured_format());
+    loop {
+        let request_frame_count = player
+            .audio_output
+            .with_ref(|audio_output| {
+                if audio_output.needs_more_frames() {
+                    Some(audio_output.next_request_frame_count())
+                } else {
+                    None
+                }
+            });
+        let Some(request_frame_count) = request_frame_count else {
             break;
         };
 
-        if chunk.format() != configured_format {
-            player.audio_output.clear_buffer();
+        let Some(chunk) = player.runtime.pull_audio_chunk(request_frame_count) else {
+            break;
+        };
+
+        let format_mismatch = chunk.format() != configured_format;
+        player.audio_output.with_mut(|audio_output| {
+            if format_mismatch {
+                audio_output.clear_buffer();
+            } else {
+                audio_output.submit_chunk(&chunk);
+            }
+        });
+        if format_mismatch {
             break;
         }
-
-        player.audio_output.submit_chunk(&chunk);
     }
 
-    let device_timing = player.audio_output.playback_timing();
+    let device_timing = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.playback_timing());
     player.audio_clock.update_from_device(device_timing);
 }

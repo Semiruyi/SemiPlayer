@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::software::scaling::{context::Context as ScalingContext, Flags as ScalingFlags};
@@ -19,6 +20,11 @@ pub struct OpenedMedia {
     audio_decoder: Option<OpenedAudioDecoder>,
     pending_outputs: VecDeque<DecodedOutput>,
     draining_state: DecoderDrainingState,
+}
+
+#[derive(Clone)]
+pub struct SharedOpenedMedia {
+    inner: Arc<Mutex<OpenedMedia>>,
 }
 
 pub struct OpenedVideoDecoder {
@@ -60,6 +66,12 @@ pub enum DecodedOutput {
     Video(VideoFrame),
     Audio(AudioFrame),
     EndOfStream,
+}
+
+pub enum DecodedOutputPoll {
+    Output(DecodedOutput),
+    Pending,
+    Finished,
 }
 
 pub fn open_media(path: &str) -> Result<OpenedMedia, MediaOpenError> {
@@ -150,28 +162,46 @@ impl OpenedMedia {
 
     pub fn next_decoded_output(&mut self) -> Result<Option<DecodedOutput>, MediaOpenError> {
         loop {
+            match self.poll_decoded_output(usize::MAX)? {
+                DecodedOutputPoll::Output(output) => return Ok(Some(output)),
+                DecodedOutputPoll::Pending => continue,
+                DecodedOutputPoll::Finished => return Ok(None),
+            }
+        }
+    }
+
+    pub fn poll_decoded_output(
+        &mut self,
+        max_packets: usize,
+    ) -> Result<DecodedOutputPoll, MediaOpenError> {
+        if let Some(output) = self.pending_outputs.pop_front() {
+            return Ok(DecodedOutputPoll::Output(output));
+        }
+
+        if self.draining_state.input_exhausted {
+            self.collect_drained_outputs()?;
+
             if let Some(output) = self.pending_outputs.pop_front() {
-                return Ok(Some(output));
+                return Ok(DecodedOutputPoll::Output(output));
             }
 
-            if self.draining_state.input_exhausted {
-                self.collect_drained_outputs()?;
-
-                if let Some(output) = self.pending_outputs.pop_front() {
-                    return Ok(Some(output));
-                }
-
-                if self.has_fully_drained() && !self.draining_state.end_of_stream_emitted {
-                    self.draining_state.end_of_stream_emitted = true;
-                    return Ok(Some(DecodedOutput::EndOfStream));
-                }
-
-                return Ok(None);
+            if self.has_fully_drained() && !self.draining_state.end_of_stream_emitted {
+                self.draining_state.end_of_stream_emitted = true;
+                return Ok(DecodedOutputPoll::Output(DecodedOutput::EndOfStream));
             }
 
+            return Ok(if self.has_fully_drained() {
+                DecodedOutputPoll::Finished
+            } else {
+                DecodedOutputPoll::Pending
+            });
+        }
+
+        let packet_budget = max_packets.max(1);
+        for _ in 0..packet_budget {
             let Some(media_packet) = self.read_next_packet()? else {
                 self.enter_draining_mode()?;
-                continue;
+                return Ok(DecodedOutputPoll::Pending);
             };
 
             if self
@@ -186,10 +216,7 @@ impl OpenedMedia {
                     &media_packet.packet,
                     &mut self.pending_outputs,
                 )?;
-                continue;
-            }
-
-            if self
+            } else if self
                 .audio_decoder
                 .as_ref()
                 .map(|decoder| decoder.index == media_packet.stream_index)
@@ -201,9 +228,14 @@ impl OpenedMedia {
                     &media_packet.packet,
                     &mut self.pending_outputs,
                 )?;
-                continue;
+            }
+
+            if let Some(output) = self.pending_outputs.pop_front() {
+                return Ok(DecodedOutputPoll::Output(output));
             }
         }
+
+        Ok(DecodedOutputPoll::Pending)
     }
 
     fn enter_draining_mode(&mut self) -> Result<(), MediaOpenError> {
@@ -250,6 +282,24 @@ impl OpenedMedia {
 
     fn has_fully_drained(&self) -> bool {
         self.draining_state.video_drained && self.draining_state.audio_drained
+    }
+}
+
+impl SharedOpenedMedia {
+    pub fn new(opened_media: OpenedMedia) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(opened_media)),
+        }
+    }
+
+    pub fn with_ref<T>(&self, f: impl FnOnce(&OpenedMedia) -> T) -> T {
+        let guard = self.inner.lock().unwrap();
+        f(&guard)
+    }
+
+    pub fn with_mut<T>(&self, f: impl FnOnce(&mut OpenedMedia) -> T) -> T {
+        let mut guard = self.inner.lock().unwrap();
+        f(&mut guard)
     }
 }
 

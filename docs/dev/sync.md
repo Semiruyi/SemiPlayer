@@ -140,6 +140,10 @@ The worker currently wakes for:
 
 Decode refill is now owned by a separate decode worker.
 The sync worker can request decode wakeups, but no longer needs to perform decode work itself.
+Whether decode should actually run is now normalized through a shared decode-schedule hint,
+so `idle` / unloaded states do not spuriously wake decode work.
+The decode worker now polls FFmpeg outside the main player lock and only re-enters the player
+lock to apply decoded outputs, guarded by a media-generation check.
 
 ## 7. Pump Role Now
 
@@ -166,6 +170,7 @@ Playback snapshots expose:
 - next audio refill deadline
 - next combined pump deadline
 - sync worker counters
+- `ffi` / `sync worker` / `decode worker` lock-wait diagnostics
 
 Interpretation:
 
