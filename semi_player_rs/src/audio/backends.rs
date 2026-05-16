@@ -112,6 +112,7 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         shared.rendered_frames_total = 0;
         shared.completed_audible_frames_total = 0;
         shared.scheduled_blocks.clear();
+        shared.paused_at = None;
         Ok(())
     }
 
@@ -120,6 +121,10 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
             .stream
             .as_ref()
             .ok_or(AudioBackendError::NotConfigured)?;
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.resume_playback_clock(Instant::now());
+        }
         stream
             .play()
             .map_err(|_| AudioBackendError::BackendFailure)?;
@@ -135,6 +140,10 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         stream
             .pause()
             .map_err(|_| AudioBackendError::BackendFailure)?;
+        {
+            let mut shared = self.shared.lock().unwrap();
+            shared.pause_playback_clock(Instant::now());
+        }
         self.started = false;
         Ok(())
     }
@@ -156,6 +165,7 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         shared.rendered_frames_total = 0;
         shared.completed_audible_frames_total = 0;
         shared.scheduled_blocks.clear();
+        shared.paused_at = None;
         Ok(())
     }
 
@@ -199,6 +209,7 @@ struct SharedAudioBuffer {
     rendered_frames_total: u64,
     completed_audible_frames_total: u64,
     scheduled_blocks: VecDeque<ScheduledPlaybackBlock>,
+    paused_at: Option<Instant>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -216,8 +227,10 @@ struct PlaybackProgress {
 
 impl SharedAudioBuffer {
     fn playback_progress(&mut self, now: Instant) -> PlaybackProgress {
+        let effective_now = self.paused_at.unwrap_or(now);
+
         while let Some(front) = self.scheduled_blocks.front() {
-            if !front.is_finished(now) {
+            if !front.is_finished(effective_now) {
                 break;
             }
 
@@ -231,7 +244,7 @@ impl SharedAudioBuffer {
         let mut pending_device_frames = 0usize;
 
         for block in &self.scheduled_blocks {
-            let audible_frames = block.audible_frames_at(now);
+            let audible_frames = block.audible_frames_at(effective_now);
             partially_audible_frames_total =
                 partially_audible_frames_total.saturating_add(audible_frames as u64);
             pending_device_frames =
@@ -243,6 +256,30 @@ impl SharedAudioBuffer {
                 .completed_audible_frames_total
                 .saturating_add(partially_audible_frames_total),
             pending_device_frames,
+        }
+    }
+
+    fn pause_playback_clock(&mut self, now: Instant) {
+        if self.paused_at.is_some() {
+            return;
+        }
+
+        let _ = self.playback_progress(now);
+        self.paused_at = Some(now);
+    }
+
+    fn resume_playback_clock(&mut self, now: Instant) {
+        let Some(paused_at) = self.paused_at.take() else {
+            return;
+        };
+
+        let paused_duration = now.saturating_duration_since(paused_at);
+        if paused_duration.is_zero() {
+            return;
+        }
+
+        for block in &mut self.scheduled_blocks {
+            block.shift_forward(paused_duration);
         }
     }
 }
@@ -272,6 +309,10 @@ impl ScheduledPlaybackBlock {
 
     fn playback_end(&self) -> Instant {
         self.playback_start + frames_to_duration(self.frame_count, self.sample_rate)
+    }
+
+    fn shift_forward(&mut self, duration: Duration) {
+        self.playback_start += duration;
     }
 }
 
@@ -402,5 +443,41 @@ mod tests {
         assert!(progress.audible_frames_total >= 1_240);
         assert!(progress.audible_frames_total < 1_480);
         assert!(progress.pending_device_frames >= 480);
+    }
+
+    #[test]
+    fn pause_playback_clock_freezes_pending_progress() {
+        let now = Instant::now();
+        let mut shared = SharedAudioBuffer {
+            scheduled_blocks: VecDeque::from([
+                ScheduledPlaybackBlock::new(now - Duration::from_millis(5), 960, 48_000),
+            ]),
+            ..Default::default()
+        };
+
+        let before_pause = shared.playback_progress(now);
+        shared.pause_playback_clock(now);
+        let after_pause = shared.playback_progress(now + Duration::from_millis(20));
+
+        assert_eq!(after_pause.audible_frames_total, before_pause.audible_frames_total);
+        assert_eq!(after_pause.pending_device_frames, before_pause.pending_device_frames);
+    }
+
+    #[test]
+    fn resume_playback_clock_shifts_scheduled_blocks_forward() {
+        let now = Instant::now();
+        let mut shared = SharedAudioBuffer {
+            scheduled_blocks: VecDeque::from([
+                ScheduledPlaybackBlock::new(now + Duration::from_millis(5), 960, 48_000),
+            ]),
+            ..Default::default()
+        };
+
+        shared.pause_playback_clock(now);
+        shared.resume_playback_clock(now + Duration::from_millis(20));
+
+        let progress_before_new_start = shared.playback_progress(now + Duration::from_millis(10));
+        assert_eq!(progress_before_new_start.audible_frames_total, 0);
+        assert_eq!(progress_before_new_start.pending_device_frames, 960);
     }
 }

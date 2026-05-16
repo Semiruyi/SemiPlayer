@@ -132,6 +132,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
     let diagnostics = player.diagnostics_snapshot();
+    let audio_output_snapshot = player.audio_output.snapshot();
     let host_presentation_offset_ms =
         i32::try_from(us_to_ms(player.host_presentation_offset_us)).unwrap_or_else(|_| {
             if player.host_presentation_offset_us.is_negative() {
@@ -220,6 +221,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         stale_audio_discard_last_frame_count: diagnostics.stale_audio_discard_last_frame_count,
         stale_audio_discard_last_lag_us: diagnostics.stale_audio_discard_last_lag_us,
         stale_audio_discard_max_lag_us: diagnostics.stale_audio_discard_max_lag_us,
+        audio_output_started: u32::from(audio_output_snapshot.started),
+        pending_device_frames: u32::try_from(audio_output_snapshot.pending_device_frames)
+            .unwrap_or(u32::MAX),
+        rendered_frames_total: audio_output_snapshot.rendered_frames_total,
+        audible_frames_total: audio_output_snapshot.audible_frames_total,
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
 }
@@ -355,8 +361,9 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
         }
 
         player.audio_clock.play();
-        VideoSyncService::mark_dirty(player);
         player.set_state(PlayerState::Playing);
+        player.audio_output.sync_started_state(player.state());
+        VideoSyncService::mark_dirty(player);
         player.notify_sync_worker();
         SEMI_OK
     }) {
@@ -373,8 +380,9 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
         }
 
         player.audio_clock.pause();
-        VideoSyncService::mark_dirty(player);
         player.set_state(PlayerState::Paused);
+        player.audio_output.sync_started_state(player.state());
+        VideoSyncService::mark_dirty(player);
         player.notify_sync_worker();
         SEMI_OK
     }) {

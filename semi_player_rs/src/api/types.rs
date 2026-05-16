@@ -118,6 +118,10 @@ pub struct SemiPlaybackSnapshot {
     pub stale_audio_discard_last_frame_count: u64,
     pub stale_audio_discard_last_lag_us: i64,
     pub stale_audio_discard_max_lag_us: i64,
+    pub audio_output_started: u32,
+    pub pending_device_frames: u32,
+    pub rendered_frames_total: u64,
+    pub audible_frames_total: u64,
     pub end_of_stream: u32,
 }
 

@@ -23,6 +23,7 @@ internal sealed class SmokeAnomalyLogger
     private const long StaleAudioDiscardLagWarnThresholdUs = 2_000;
     private const long LockWaitWarnThresholdUs = 8_000;
     private const long WorkerSlipWarnThresholdUs = 5_000;
+    private const uint PausedPendingFramesWarnThreshold = 128;
     private static readonly TimeSpan StartupGracePeriod = TimeSpan.FromMilliseconds(1_500);
     private static readonly TimeSpan ThrottleWindow = TimeSpan.FromMilliseconds(500);
 
@@ -91,6 +92,16 @@ internal sealed class SmokeAnomalyLogger
             LogThrottled(
                 "video-drop",
                 $"video-drop totalDrops={snapshot.VideoSyncDrops} lastDropped={snapshot.LastSyncDroppedFrames} maxDroppedRun={snapshot.MaxSyncDroppedFrames}");
+        }
+
+        if (afterStartupGrace
+            && snapshot.AudioOutputStarted == 0
+            && snapshot.PendingDeviceFrames > PausedPendingFramesWarnThreshold)
+        {
+            _activeAnomalies.Add("paused-pending");
+            LogThrottled(
+                "paused-pending",
+                $"paused-pending pendingFrames={snapshot.PendingDeviceFrames} rendered={snapshot.RenderedFramesTotal} audible={snapshot.AudibleFramesTotal}");
         }
     }
 
@@ -166,6 +177,19 @@ internal static class Program
                 }
 
                 options.AutoCloseMs = parsed;
+                i++;
+                continue;
+            }
+
+            if (args[i] == "--auto-pause-ms")
+            {
+                if (i + 1 >= args.Length || !int.TryParse(args[i + 1], out int parsed))
+                {
+                    error = "Expected integer after --auto-pause-ms.";
+                    return false;
+                }
+
+                options.AutoPauseMs = parsed;
                 i++;
                 continue;
             }
@@ -358,6 +382,7 @@ internal sealed class PlayerSmokeWindow : Window
     private readonly TextBlock _statusText;
     private readonly DispatcherTimer _tickTimer;
     private readonly DispatcherTimer? _autoCloseTimer;
+    private readonly DispatcherTimer? _autoPauseTimer;
     private readonly DispatcherTimer? _pumpSweepTimer;
 
     private IntPtr _player;
@@ -428,6 +453,21 @@ internal sealed class PlayerSmokeWindow : Window
                 Close();
             };
         }
+        if (_options.AutoPauseMs is int pauseDelayMs)
+        {
+            _autoPauseTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(pauseDelayMs),
+            };
+            _autoPauseTimer.Tick += (_, _) =>
+            {
+                _autoPauseTimer.Stop();
+                if (_isPlaying)
+                {
+                    TogglePlayback();
+                }
+            };
+        }
 
         if (_options.PumpSweep is not null)
         {
@@ -467,6 +507,7 @@ internal sealed class PlayerSmokeWindow : Window
             _isPlaying = true;
             InitializePumpSweepIfNeeded();
             _tickTimer.Start();
+            _autoPauseTimer?.Start();
             _autoCloseTimer?.Start();
         }
         catch (Exception ex)
@@ -889,6 +930,7 @@ internal sealed class PlayerSmokeWindow : Window
     private void DisposePlayer()
     {
         _tickTimer.Stop();
+        _autoPauseTimer?.Stop();
         _autoCloseTimer?.Stop();
 
         if (_player != IntPtr.Zero)
@@ -1131,6 +1173,8 @@ internal sealed class PlaybackDiagnostics
 internal sealed class SmokeOptions
 {
     public int? AutoCloseMs { get; set; }
+
+    public int? AutoPauseMs { get; set; }
 
     public PumpSweepOptions? PumpSweep { get; set; }
 }
@@ -1520,6 +1564,10 @@ internal struct SemiPlaybackSnapshot
     internal ulong StaleAudioDiscardLastFrameCount;
     internal long StaleAudioDiscardLastLagUs;
     internal long StaleAudioDiscardMaxLagUs;
+    internal uint AudioOutputStarted;
+    internal uint PendingDeviceFrames;
+    internal ulong RenderedFramesTotal;
+    internal ulong AudibleFramesTotal;
     internal uint EndOfStream;
 }
 
