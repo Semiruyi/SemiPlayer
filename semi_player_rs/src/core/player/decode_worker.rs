@@ -131,9 +131,11 @@ fn complete_decode_action(
 
     match polled_output {
         Ok(DecodedOutputPoll::Output(output)) => {
-            let reached_end = apply_decoded_output(player, output);
-            player.notify_sync_worker();
-            if reached_end {
+            let apply_result = apply_decoded_output(player, output);
+            if apply_result.should_wake_sync {
+                player.notify_sync_worker();
+            }
+            if apply_result.reached_end {
                 return DecodeWorkerAction::WaitIndefinitely;
             }
         }

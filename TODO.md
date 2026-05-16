@@ -101,6 +101,27 @@ Tasks:
 - split read-mostly and write-heavy responsibilities where safe
 - preserve correctness first
 
+### P0.5 Improve seek responsiveness and seek-path cost
+
+Status: add after current worker wake/stability tuning
+
+Tasks:
+
+- measure end-to-end seek latency from API call to first stable post-seek frame/audio
+- separate seek correctness from seek speed so regressions are visible
+- reduce work done while holding the shared player handle during seek
+- review which state must be cleared immediately vs lazily rebuilt after seek
+- avoid unnecessary wake storms or duplicate refill work right after seek
+- define a practical short-term seek target for local files:
+  - fast preview / first frame response
+  - stable A/V resettling shortly after
+
+Why this matters:
+
+- seek responsiveness is part of the core player feel
+- poor seek behavior will be much more visible to users than many backend details
+- seek touches decode, runtime reset, audio output, and sync wake policy together, so it is worth treating as a first-class performance track
+
 ## P1 - Real Output and Backend Boundaries
 
 ### P1.1 Define render output surface abstraction
@@ -229,6 +250,7 @@ Do these next, in order:
 
 1. keep worker-vs-host sync measurement as a regression tool
 2. reduce decode worker coupling to the shared player lock
-3. define render output surface abstraction
-4. start the first real Windows render backend
-5. integrate subtitle timing into the worker-owned playback model
+3. improve seek responsiveness and reduce seek-path cost
+4. define render output surface abstraction
+5. start the first real Windows render backend
+6. integrate subtitle timing into the worker-owned playback model
