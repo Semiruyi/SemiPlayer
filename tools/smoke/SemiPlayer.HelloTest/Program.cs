@@ -271,6 +271,7 @@ internal sealed class PlayerSmokeWindow : Window
     private bool _isPlayerCreated;
     private bool _isPlaying;
     private long _durationMs;
+    private SemiMediaInfo _mediaInfo;
     private long _lastPresentedPtsMs = long.MinValue;
     private uint _tickPumpIterations = DefaultTickPumpIterations;
     private WriteableBitmap? _bitmap;
@@ -361,6 +362,7 @@ internal sealed class PlayerSmokeWindow : Window
 
             EnsureOk(Native.semi_player_open(_player, _mediaPath), "semi_player_open");
             EnsureOk(Native.semi_player_get_duration_ms(_player, out _durationMs), "semi_player_get_duration_ms");
+            EnsureOk(Native.semi_player_get_media_info(_player, out _mediaInfo), "semi_player_get_media_info");
             _diagnostics.Reset();
 
             EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
@@ -434,6 +436,7 @@ internal sealed class PlayerSmokeWindow : Window
             double intervalMs = _options.PumpSweep.TickIntervalsMs[_pumpSweepIndex];
             string line =
                 $"interval={intervalMs:F1}ms iterations={_tickPumpIterations} pumpRate={snapshot.PumpsPerSecond:F1}/s " +
+                $"advRate={snapshot.AdvancesPerSecond:F1}/s presents={snapshot.PresentsDelta} drops={snapshot.DropsDelta} p+d={snapshot.PresentDropRunsDelta} " +
                 $"coreSyncMean={snapshot.CoreSyncErrorMeanMs:F2}ms absMean={snapshot.CoreSyncErrorAbsMeanMs:F2}ms " +
                 $"maxPos={snapshot.CoreSyncErrorMaxPositiveMs}ms maxNeg={snapshot.CoreSyncErrorMaxNegativeMs}ms " +
                 $"samples={snapshot.SampleCount}";
@@ -514,6 +517,7 @@ internal sealed class PlayerSmokeWindow : Window
                 videoPtsMs: null,
                 coreSyncErrorMs: snapshot.CoreSyncErrorMs,
                 frameCopied: false,
+                copyDecision: "no-frame",
                 isPlaying: _isPlaying,
                 pumpTriggered: false);
             _statusText.Text = BuildStatusText(snapshot, audioOutput, null);
@@ -528,6 +532,10 @@ internal sealed class PlayerSmokeWindow : Window
             frameInfo.PtsMs != _lastPresentedPtsMs ||
             _bitmap.PixelWidth != frameInfo.Width ||
             _bitmap.PixelHeight != frameInfo.Height;
+
+        string copyDecision = shouldCopyFrame
+            ? (forceCopy ? "force" : frameInfo.PtsMs != _lastPresentedPtsMs ? "new-pts" : "resize")
+            : "same-pts";
 
         if (shouldCopyFrame)
         {
@@ -551,6 +559,7 @@ internal sealed class PlayerSmokeWindow : Window
             videoPtsMs: frameInfo.PtsMs,
             coreSyncErrorMs: snapshot.CoreSyncErrorMs,
             frameCopied: shouldCopyFrame,
+            copyDecision: copyDecision,
             isPlaying: _isPlaying,
             pumpTriggered: _drivePumpFromUi);
 
@@ -613,6 +622,7 @@ internal sealed class PlayerSmokeWindow : Window
         string framePart = frameInfo is SemiVideoFrameInfo frame
             ? $"Frame {frame.PtsMs} ms  {frame.Width}x{frame.Height}  stride {frame.Stride}  bytes {frame.ByteLen}"
             : "Frame unavailable";
+        string sourcePart = BuildSourcePart();
         string audioOutputPart =
             $"Out {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
             $"Started {audioOutput.Started}  DeviceTiming {audioOutput.HasDeviceTiming}  " +
@@ -629,10 +639,25 @@ internal sealed class PlayerSmokeWindow : Window
         string diagnosticsPart =
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
+            $"StepMean {_diagnostics.AverageVideoStepMs:F1} ms  " +
             $"Pump {_diagnostics.PumpsPerSecond:F1}/s @{_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
             $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}  " +
             $"Driver {(_drivePumpFromUi ? "UI" : "Worker")}  " +
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
+        string frameTimelinePart =
+            $"CurDur {snapshot.CurrentVideoDurationMs} ms  CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
+            $"NextPts {snapshot.NextVideoPtsMs} ms  CurToNext {snapshot.CurrentToNextVideoDeltaMs} ms";
+        string lockPart =
+            $"Lock FFI {snapshot.FfiLockWaitLastUs}/{snapshot.FfiLockWaitMaxUs} us  " +
+            $"Worker {snapshot.WorkerLockWaitLastUs}/{snapshot.WorkerLockWaitMaxUs} us  " +
+            $"Slip {snapshot.WorkerDeadlineSlipLastUs}/{snapshot.WorkerDeadlineSlipMaxUs} us";
+        string runPatternPart =
+            $"LastRun P{snapshot.LastSyncPresentedFrames}/D{snapshot.LastSyncDroppedFrames}  " +
+            $"MaxRun P{snapshot.MaxSyncPresentedFrames}/D{snapshot.MaxSyncDroppedFrames}  " +
+            $"Runs P {snapshot.SyncRunPresentOnlyCount}  D {snapshot.SyncRunDropOnlyCount}  P+D {snapshot.SyncRunPresentDropCount}  Other {snapshot.SyncRunOtherCount}";
+        string copyPart =
+            $"CopyDecision {_diagnostics.LastCopyDecision}  Force {_diagnostics.ForceCopyCount}  " +
+            $"NewPts {_diagnostics.NewPtsCopyCount}  Resize {_diagnostics.ResizeCopyCount}  SamePtsSkip {_diagnostics.SamePtsSkipCount}";
         string syncLoopPart =
             $"WakeAt {snapshot.NextVideoWakeDeadlineMs} ms  FrameEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
             $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  PumpAt {snapshot.NextPumpDeadlineMs} ms  " +
@@ -649,15 +674,31 @@ internal sealed class PlayerSmokeWindow : Window
             $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
             $"AudioPos {snapshot.AudioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  " +
             $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
+            $"{sourcePart}{Environment.NewLine}" +
             $"{avPart}{Environment.NewLine}" +
             $"{coreSyncPart}{Environment.NewLine}" +
+            $"{frameTimelinePart}{Environment.NewLine}" +
+            $"{lockPart}{Environment.NewLine}" +
+            $"{runPatternPart}{Environment.NewLine}" +
             $"{syncLoopPart}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
             $"{audioProgressPart}{Environment.NewLine}" +
             $"{framePart}{Environment.NewLine}" +
+            $"{copyPart}{Environment.NewLine}" +
             $"{diagnosticsPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
+    }
+
+    private string BuildSourcePart()
+    {
+        if (_mediaInfo.VideoFrameRateNum > 0 && _mediaInfo.VideoFrameRateDen > 0)
+        {
+            double fps = (double)_mediaInfo.VideoFrameRateNum / _mediaInfo.VideoFrameRateDen;
+            return $"Source {_mediaInfo.VideoWidth}x{_mediaInfo.VideoHeight}  AvgFps {fps:F3}  ({_mediaInfo.VideoFrameRateNum}/{_mediaInfo.VideoFrameRateDen})";
+        }
+
+        return $"Source {_mediaInfo.VideoWidth}x{_mediaInfo.VideoHeight}  AvgFps unknown";
     }
 
     private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -816,6 +857,8 @@ internal sealed class PlaybackDiagnostics
     private long _coreSyncErrorAbsSumMs;
     private long _coreSyncErrorMaxPositiveMs;
     private long _coreSyncErrorMaxNegativeMs;
+    private long _videoStepCount;
+    private long _videoStepSumMs;
 
     public double UiTicksPerSecond { get; private set; }
 
@@ -841,6 +884,18 @@ internal sealed class PlaybackDiagnostics
 
     public long CoreSyncErrorSampleCount => _coreSyncErrorCount;
 
+    public double AverageVideoStepMs { get; private set; }
+
+    public string LastCopyDecision { get; private set; } = "none";
+
+    public long ForceCopyCount { get; private set; }
+
+    public long NewPtsCopyCount { get; private set; }
+
+    public long ResizeCopyCount { get; private set; }
+
+    public long SamePtsSkipCount { get; private set; }
+
     public void Reset()
     {
         _windowStartMs = ElapsedMs;
@@ -858,6 +913,14 @@ internal sealed class PlaybackDiagnostics
         LastVideoStepMs = 0;
         IsStalled = false;
         StallDurationMs = 0;
+        AverageVideoStepMs = 0;
+        LastCopyDecision = "none";
+        ForceCopyCount = 0;
+        NewPtsCopyCount = 0;
+        ResizeCopyCount = 0;
+        SamePtsSkipCount = 0;
+        _videoStepCount = 0;
+        _videoStepSumMs = 0;
         ResetCoreSyncStats();
     }
 
@@ -878,17 +941,22 @@ internal sealed class PlaybackDiagnostics
             "ui",
             "ui",
             PumpsPerSecond,
+            FrameAdvancesPerSecond,
             CoreSyncErrorMeanMs,
             CoreSyncErrorAbsMeanMs,
             _coreSyncErrorMaxPositiveMs,
             _coreSyncErrorMaxNegativeMs,
-            _coreSyncErrorCount);
+            _coreSyncErrorCount,
+            0,
+            0,
+            0);
     }
 
-    public void ObserveTick(long audioPositionMs, long? videoPtsMs, long coreSyncErrorMs, bool frameCopied, bool isPlaying, bool pumpTriggered)
+    public void ObserveTick(long audioPositionMs, long? videoPtsMs, long coreSyncErrorMs, bool frameCopied, string copyDecision, bool isPlaying, bool pumpTriggered)
     {
         long nowMs = ElapsedMs;
         _ticksInWindow++;
+        LastCopyDecision = copyDecision;
         if (pumpTriggered)
         {
             _pumpsInWindow++;
@@ -920,9 +988,28 @@ internal sealed class PlaybackDiagnostics
             {
                 videoAdvanced = true;
                 LastVideoStepMs = currentVideoPtsMs - previousVideoPtsMs;
+                _videoStepCount++;
+                _videoStepSumMs += LastVideoStepMs;
+                AverageVideoStepMs = _videoStepCount == 0 ? 0 : (double)_videoStepSumMs / _videoStepCount;
             }
 
             _lastVideoPtsMs = currentVideoPtsMs;
+        }
+
+        switch (copyDecision)
+        {
+            case "force":
+                ForceCopyCount++;
+                break;
+            case "new-pts":
+                NewPtsCopyCount++;
+                break;
+            case "resize":
+                ResizeCopyCount++;
+                break;
+            case "same-pts":
+                SamePtsSkipCount++;
+                break;
         }
 
         if (videoAdvanced)
@@ -1027,11 +1114,15 @@ internal readonly record struct PumpSweepDiagnosticsSnapshot(
     string Mode,
     string Driver,
     double PumpsPerSecond,
+    double AdvancesPerSecond,
     double CoreSyncErrorMeanMs,
     double CoreSyncErrorAbsMeanMs,
     long CoreSyncErrorMaxPositiveMs,
     long CoreSyncErrorMaxNegativeMs,
-    long SampleCount);
+    long SampleCount,
+    ulong PresentsDelta,
+    ulong DropsDelta,
+    ulong PresentDropRunsDelta);
 
 internal static class PumpSweepRunner
 {
@@ -1076,6 +1167,7 @@ internal static class PumpSweepRunner
                             driver);
                         string line =
                             $"driver={result.Driver} mode={result.Mode} interval={intervalMs:F1}ms iterations={options.TickPumpIterations} pumpRate={result.PumpsPerSecond:F1}/s " +
+                            $"advRate={result.AdvancesPerSecond:F1}/s presents={result.PresentsDelta} drops={result.DropsDelta} p+d={result.PresentDropRunsDelta} " +
                             $"coreSyncMean={result.CoreSyncErrorMeanMs:F2}ms absMean={result.CoreSyncErrorAbsMeanMs:F2}ms " +
                             $"maxPos={result.CoreSyncErrorMaxPositiveMs}ms maxNeg={result.CoreSyncErrorMaxNegativeMs}ms " +
                             $"samples={result.SampleCount}";
@@ -1131,6 +1223,11 @@ internal static class PumpSweepRunner
         long maxNegativeMs = 0;
         long sampleCount = 0;
         long pumpCount = 0;
+        long advanceCount = 0;
+        long? lastVideoPtsMs = null;
+        SemiPlaybackSnapshot baselineSnapshot = default;
+        bool baselineCaptured = false;
+        SemiPlaybackSnapshot latestSnapshot = default;
 
         while (stopwatch.ElapsedMilliseconds < warmupMs + segmentMs)
         {
@@ -1146,15 +1243,32 @@ internal static class PumpSweepRunner
                 pumpCount++;
             }
             EnsureOk(Native.semi_player_get_playback_snapshot(player, out SemiPlaybackSnapshot snapshot), "semi_player_get_playback_snapshot");
+            latestSnapshot = snapshot;
 
-            if (stopwatch.ElapsedMilliseconds >= warmupMs && snapshot.HasCurrentVideoFrame != 0)
+            if (stopwatch.ElapsedMilliseconds >= warmupMs)
             {
-                long value = snapshot.CoreSyncErrorMs;
-                sumMs += value;
-                absSumMs += Math.Abs(value);
-                maxPositiveMs = Math.Max(maxPositiveMs, value);
-                maxNegativeMs = Math.Min(maxNegativeMs, value);
-                sampleCount++;
+                if (!baselineCaptured)
+                {
+                    baselineSnapshot = snapshot;
+                    baselineCaptured = true;
+                }
+
+                if (snapshot.HasCurrentVideoFrame != 0)
+                {
+                    if (lastVideoPtsMs is long previousVideoPtsMs && snapshot.CurrentVideoPtsMs != previousVideoPtsMs)
+                    {
+                        advanceCount++;
+                    }
+
+                    lastVideoPtsMs = snapshot.CurrentVideoPtsMs;
+
+                    long value = snapshot.CoreSyncErrorMs;
+                    sumMs += value;
+                    absSumMs += Math.Abs(value);
+                    maxPositiveMs = Math.Max(maxPositiveMs, value);
+                    maxNegativeMs = Math.Min(maxNegativeMs, value);
+                    sampleCount++;
+                }
             }
 
             TimeSpan nextInterval = mode == PumpSweepMode.Adaptive
@@ -1170,16 +1284,24 @@ internal static class PumpSweepRunner
         double meanMs = sampleCount == 0 ? 0 : (double)sumMs / sampleCount;
         double absMeanMs = sampleCount == 0 ? 0 : (double)absSumMs / sampleCount;
         double pumpsPerSecond = pumpCount / ((warmupMs + segmentMs) / 1000.0);
+        double advancesPerSecond = advanceCount / seconds;
+        ulong presentsDelta = baselineCaptured ? latestSnapshot.VideoSyncPresents - baselineSnapshot.VideoSyncPresents : 0;
+        ulong dropsDelta = baselineCaptured ? latestSnapshot.VideoSyncDrops - baselineSnapshot.VideoSyncDrops : 0;
+        ulong presentDropRunsDelta = baselineCaptured ? latestSnapshot.SyncRunPresentDropCount - baselineSnapshot.SyncRunPresentDropCount : 0;
 
         return new PumpSweepDiagnosticsSnapshot(
             mode.ToString().ToLowerInvariant(),
             driver.ToString().ToLowerInvariant(),
             pumpsPerSecond,
+            advancesPerSecond,
             meanMs,
             absMeanMs,
             maxPositiveMs,
             maxNegativeMs,
-            sampleCount);
+            sampleCount,
+            presentsDelta,
+            dropsDelta,
+            presentDropRunsDelta);
     }
 
     private static IEnumerable<PumpSweepMode> ExpandModes(PumpSweepMode mode)
@@ -1241,6 +1363,9 @@ internal static class Native
     internal static extern int semi_player_get_duration_ms(IntPtr player, out long durationMs);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_media_info(IntPtr player, out SemiMediaInfo mediaInfo);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_get_playback_snapshot(IntPtr player, out SemiPlaybackSnapshot snapshot);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -1260,6 +1385,26 @@ internal static class Native
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct SemiMediaInfo
+{
+    internal long DurationMs;
+    internal uint StreamCount;
+    internal uint VideoStreamCount;
+    internal uint AudioStreamCount;
+    internal uint SubtitleStreamCount;
+    internal int BestVideoStreamIndex;
+    internal int BestAudioStreamIndex;
+    internal int BestSubtitleStreamIndex;
+    internal uint VideoWidth;
+    internal uint VideoHeight;
+    internal uint VideoFrameRateNum;
+    internal uint VideoFrameRateDen;
+    internal uint AudioSampleRate;
+    internal ushort AudioChannels;
+    internal ushort Reserved0;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct SemiPlaybackSnapshot
 {
     internal long AudioPositionMs;
@@ -1269,6 +1414,8 @@ internal struct SemiPlaybackSnapshot
     internal long CurrentVideoPtsMs;
     internal long CurrentVideoDurationMs;
     internal long CurrentVideoEffectiveEndMs;
+    internal long NextVideoPtsMs;
+    internal long CurrentToNextVideoDeltaMs;
     internal long NextVideoWakeDeadlineMs;
     internal long LastAudioPtsMs;
     internal int HostPresentationOffsetMs;
@@ -1281,9 +1428,23 @@ internal struct SemiPlaybackSnapshot
     internal ulong VideoSyncDrops;
     internal ulong VideoSyncUnderflows;
     internal ulong VideoSyncLateHits;
+    internal ulong LastSyncPresentedFrames;
+    internal ulong LastSyncDroppedFrames;
+    internal ulong MaxSyncPresentedFrames;
+    internal ulong MaxSyncDroppedFrames;
+    internal ulong SyncRunPresentOnlyCount;
+    internal ulong SyncRunDropOnlyCount;
+    internal ulong SyncRunPresentDropCount;
+    internal ulong SyncRunOtherCount;
     internal long SuggestedPumpWaitMs;
     internal long NextAudioRefillDeadlineMs;
     internal long NextPumpDeadlineMs;
+    internal long FfiLockWaitLastUs;
+    internal long FfiLockWaitMaxUs;
+    internal long WorkerLockWaitLastUs;
+    internal long WorkerLockWaitMaxUs;
+    internal long WorkerDeadlineSlipLastUs;
+    internal long WorkerDeadlineSlipMaxUs;
     internal uint EndOfStream;
 }
 

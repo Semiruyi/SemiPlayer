@@ -205,6 +205,7 @@ impl PlayerRuntime {
                 target_time_us,
                 self.current_video_frame.as_ref(),
                 self.queued_video_frames.front(),
+                self.queued_video_frames.get(1),
             );
 
             match decision {
@@ -215,7 +216,8 @@ impl PlayerRuntime {
                 VideoScheduleDecision::PresentFrame => {
                     self.current_video_frame = self.queued_video_frames.pop_front();
                     stats.presented_frames = stats.presented_frames.saturating_add(1);
-                    continue;
+                    stats.kept_current = true;
+                    return stats;
                 }
                 VideoScheduleDecision::DropFrame => {
                     let _ = self.queued_video_frames.pop_front();
@@ -274,6 +276,47 @@ mod tests {
             }
         );
         assert_eq!(current.pts_us, 10_000);
+        assert_eq!(runtime.video_queue_len(), 0);
+    }
+
+    #[test]
+    fn scheduler_stops_after_presenting_one_frame_in_single_run() {
+        let mut runtime = PlayerRuntime::new();
+        let scheduler = VideoScheduler::new();
+
+        runtime.push_video_frame(VideoFrame {
+            pts_us: 41_000,
+            duration_us: Some(41_000),
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        });
+        runtime.push_video_frame(VideoFrame {
+            pts_us: 83_000,
+            duration_us: Some(41_000),
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        });
+
+        let stats = runtime.select_video_frame(&scheduler, 90_000);
+
+        assert_eq!(
+            stats,
+            VideoSelectionStats {
+                kept_current: true,
+                presented_frames: 1,
+                dropped_frames: 1,
+                needs_more_frames: false,
+            }
+        );
+        assert_eq!(runtime.current_video_frame().map(|frame| frame.pts_us), Some(83_000));
         assert_eq!(runtime.video_queue_len(), 0);
     }
 

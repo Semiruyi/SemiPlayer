@@ -3,9 +3,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
 use crate::core::player::pump::{advance_playback, decode_supply};
 use crate::core::player::schedule::PlayerScheduleService;
+use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]
 struct SyncWorkerControl {
@@ -61,44 +62,17 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     loop {
         let action = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr(player_ptr, |player| {
+            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::Worker, |player| {
                 if !player.is_media_loaded() || player.state() != PlayerState::Playing {
                     return WorkerAction::WaitIndefinitely;
                 }
 
-                let hint = PlayerScheduleService::evaluate(player);
-                if hint.playback_due_now && hint.decode_supply_needed {
-                    WorkerAction::AdvanceAndDecode
-                } else if hint.playback_due_now {
-                    WorkerAction::AdvancePlayback
-                } else if hint.decode_supply_needed {
-                    WorkerAction::DecodeSupply
-                } else {
-                    WorkerAction::WaitFor(Duration::from_micros(
-                        u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
-                    ))
-                }
+                execute_worker_step(player)
             })
         };
 
         match action {
-            WorkerAction::AdvancePlayback => unsafe {
-                let player_ptr = player_addr as *mut SemiPlayerHandle;
-                SemiPlayerHandle::with_locked_ptr(player_ptr, advance_playback);
-            },
-            WorkerAction::DecodeSupply => unsafe {
-                let player_ptr = player_addr as *mut SemiPlayerHandle;
-                let _ = SemiPlayerHandle::with_locked_ptr(player_ptr, |player| decode_supply(player, 0));
-            },
-            WorkerAction::AdvanceAndDecode => unsafe {
-                let player_ptr = player_addr as *mut SemiPlayerHandle;
-                let _ = SemiPlayerHandle::with_locked_ptr(player_ptr, |player| {
-                    advance_playback(player);
-                    let code = decode_supply(player, 0);
-                    advance_playback(player);
-                    code
-                });
-            },
+            WorkerAction::ContinueSoon => continue,
             WorkerAction::WaitFor(duration) => {
                 if wait_for_signal(&control, Some(duration)) {
                     break;
@@ -111,6 +85,33 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
             }
         }
     }
+}
+
+fn execute_worker_step(player: &mut SemiPlayerHandle) -> WorkerAction {
+    let hint = PlayerScheduleService::evaluate(player);
+
+    if hint.playback_due_now && hint.decode_supply_needed {
+        observe_worker_deadline_slip(player, hint.next_pump_deadline_us);
+        advance_playback(player);
+        let _ = decode_supply(player, 0);
+        advance_playback(player);
+        return WorkerAction::ContinueSoon;
+    }
+
+    if hint.playback_due_now {
+        observe_worker_deadline_slip(player, hint.next_pump_deadline_us);
+        advance_playback(player);
+        return WorkerAction::ContinueSoon;
+    }
+
+    if hint.decode_supply_needed {
+        let _ = decode_supply(player, 0);
+        return WorkerAction::ContinueSoon;
+    }
+
+    WorkerAction::WaitFor(Duration::from_micros(
+        u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
+    ))
 }
 
 fn wait_for_signal(
@@ -147,10 +148,18 @@ fn wait_for_signal(
     false
 }
 
+fn observe_worker_deadline_slip(player: &SemiPlayerHandle, deadline_us: Option<MediaTimeUs>) {
+    let Some(deadline_us) = deadline_us else {
+        return;
+    };
+
+    let playback_time_us = player.audio_clock.presentation_time_us();
+    let slip_us = playback_time_us.saturating_sub(deadline_us).max(0);
+    player.observe_worker_deadline_slip(slip_us);
+}
+
 enum WorkerAction {
-    AdvancePlayback,
-    DecodeSupply,
-    AdvanceAndDecode,
+    ContinueSoon,
     WaitFor(Duration),
     WaitIndefinitely,
 }

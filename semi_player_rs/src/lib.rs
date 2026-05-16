@@ -69,6 +69,12 @@ fn build_media_info_view(media_info: &MediaInfo) -> SemiMediaInfo {
         video_height: best_video_stream
             .and_then(|stream| stream.video.map(|video| video.height))
             .unwrap_or(0),
+        video_frame_rate_num: best_video_stream
+            .and_then(|stream| stream.video.map(|video| video.avg_frame_rate_num))
+            .unwrap_or(0),
+        video_frame_rate_den: best_video_stream
+            .and_then(|stream| stream.video.map(|video| video.avg_frame_rate_den))
+            .unwrap_or(0),
         audio_sample_rate: best_audio_stream
             .and_then(|stream| stream.audio.map(|audio| audio.sample_rate))
             .unwrap_or(0),
@@ -119,12 +125,14 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
 
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let current_video_frame = player.runtime.current_video_frame();
+    let next_video_frame = player.runtime.next_video_frame();
     let last_audio_frame = player.runtime.last_audio_frame();
     let audio_position_us = player.audio_clock.presentation_time_us();
     let audio_position_ms = us_to_ms(audio_position_us);
     let sync_snapshot = VideoSyncService::evaluate(player, audio_position_us);
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
+    let diagnostics = player.diagnostics_snapshot();
     let host_presentation_offset_ms =
         i32::try_from(us_to_ms(player.host_presentation_offset_us)).unwrap_or_else(|_| {
             if player.host_presentation_offset_us.is_negative() {
@@ -135,6 +143,13 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         });
     let core_av_delta_ms = current_video_frame
         .map(|frame| audio_position_ms - us_to_ms(frame.pts_us))
+        .unwrap_or(0);
+    let next_video_pts_ms = next_video_frame
+        .map(|frame| us_to_ms(frame.pts_us))
+        .unwrap_or(0);
+    let current_to_next_video_delta_ms = current_video_frame
+        .zip(next_video_frame)
+        .map(|(current, next)| us_to_ms(next.pts_us.saturating_sub(current.pts_us)))
         .unwrap_or(0);
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms =
@@ -155,6 +170,8 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
             .current_video_effective_end_us
             .map(us_to_ms)
             .unwrap_or(0),
+        next_video_pts_ms,
+        current_to_next_video_delta_ms,
         next_video_wake_deadline_ms: sync_snapshot
             .next_wake_deadline_us
             .map(us_to_ms)
@@ -172,6 +189,14 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         video_sync_drops: sync_stats.drop_count,
         video_sync_underflows: sync_stats.underflow_count,
         video_sync_late_hits: sync_stats.late_count,
+        last_sync_presented_frames: sync_stats.last_presented_frames,
+        last_sync_dropped_frames: sync_stats.last_dropped_frames,
+        max_sync_presented_frames: sync_stats.max_presented_frames_in_run,
+        max_sync_dropped_frames: sync_stats.max_dropped_frames_in_run,
+        sync_run_present_only_count: sync_stats.run_present_only_count,
+        sync_run_drop_only_count: sync_stats.run_drop_only_count,
+        sync_run_present_drop_count: sync_stats.run_present_drop_count,
+        sync_run_other_count: sync_stats.run_other_count,
         suggested_pump_wait_ms: us_to_ms(schedule_hint.suggested_wait_us),
         next_audio_refill_deadline_ms: schedule_hint
             .next_audio_refill_deadline_us
@@ -181,6 +206,12 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
             .next_pump_deadline_us
             .map(us_to_ms)
             .unwrap_or(0),
+        ffi_lock_wait_last_us: diagnostics.ffi_lock_wait_last_us,
+        ffi_lock_wait_max_us: diagnostics.ffi_lock_wait_max_us,
+        worker_lock_wait_last_us: diagnostics.worker_lock_wait_last_us,
+        worker_lock_wait_max_us: diagnostics.worker_lock_wait_max_us,
+        worker_deadline_slip_last_us: diagnostics.worker_deadline_slip_last_us,
+        worker_deadline_slip_max_us: diagnostics.worker_deadline_slip_max_us,
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
 }

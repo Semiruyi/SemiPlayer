@@ -1,6 +1,7 @@
 use std::ffi::c_double;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::time::Instant;
 
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
@@ -12,11 +13,38 @@ use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::scheduler::VideoScheduler;
 use crate::util::time::MediaTimeUs;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayerDiagnosticsSnapshot {
+    pub ffi_lock_wait_last_us: MediaTimeUs,
+    pub ffi_lock_wait_max_us: MediaTimeUs,
+    pub worker_lock_wait_last_us: MediaTimeUs,
+    pub worker_lock_wait_max_us: MediaTimeUs,
+    pub worker_deadline_slip_last_us: MediaTimeUs,
+    pub worker_deadline_slip_max_us: MediaTimeUs,
+}
+
+#[derive(Default)]
+struct PlayerDiagnostics {
+    ffi_lock_wait_last_us: AtomicI64,
+    ffi_lock_wait_max_us: AtomicI64,
+    worker_lock_wait_last_us: AtomicI64,
+    worker_lock_wait_max_us: AtomicI64,
+    worker_deadline_slip_last_us: AtomicI64,
+    worker_deadline_slip_max_us: AtomicI64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum LockOwner {
+    Ffi,
+    Worker,
+}
+
 #[repr(C)]
 pub struct SemiPlayerHandle {
     state: AtomicU32,
     op_lock: Mutex<()>,
     sync_worker: Option<SyncWorkerHandle>,
+    diagnostics: PlayerDiagnostics,
     pub(crate) speed: c_double,
     pub(crate) opened_media: Option<OpenedMedia>,
     pub(crate) subtitles_visible: bool,
@@ -34,6 +62,7 @@ impl SemiPlayerHandle {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
             sync_worker: None,
+            diagnostics: PlayerDiagnostics::default(),
             speed: 1.0,
             opened_media: None,
             subtitles_visible: true,
@@ -54,7 +83,19 @@ impl SemiPlayerHandle {
         player_ptr: *mut SemiPlayerHandle,
         f: impl FnOnce(&mut SemiPlayerHandle) -> T,
     ) -> T {
-        let _guard = (&*player_ptr).op_lock.lock().unwrap();
+        Self::with_locked_ptr_as(player_ptr, LockOwner::Ffi, f)
+    }
+
+    pub(crate) unsafe fn with_locked_ptr_as<T>(
+        player_ptr: *mut SemiPlayerHandle,
+        owner: LockOwner,
+        f: impl FnOnce(&mut SemiPlayerHandle) -> T,
+    ) -> T {
+        let player_ref = &*player_ptr;
+        let wait_start = Instant::now();
+        let _guard = player_ref.op_lock.lock().unwrap();
+        let wait_us = i64::try_from(wait_start.elapsed().as_micros()).unwrap_or(i64::MAX);
+        player_ref.diagnostics.observe_lock_wait(owner, wait_us);
         f(&mut *player_ptr)
     }
 
@@ -100,5 +141,56 @@ impl SemiPlayerHandle {
 
     pub fn state(&self) -> PlayerState {
         PlayerState::from_raw(self.state.load(Ordering::SeqCst)).unwrap_or(PlayerState::Idle)
+    }
+
+    pub fn diagnostics_snapshot(&self) -> PlayerDiagnosticsSnapshot {
+        self.diagnostics.snapshot()
+    }
+
+    pub fn observe_worker_deadline_slip(&self, slip_us: MediaTimeUs) {
+        self.diagnostics.observe_worker_deadline_slip(slip_us);
+    }
+}
+
+impl PlayerDiagnostics {
+    fn observe_lock_wait(&self, owner: LockOwner, wait_us: MediaTimeUs) {
+        match owner {
+            LockOwner::Ffi => {
+                self.ffi_lock_wait_last_us.store(wait_us, Ordering::Relaxed);
+                update_atomic_max(&self.ffi_lock_wait_max_us, wait_us);
+            }
+            LockOwner::Worker => {
+                self.worker_lock_wait_last_us
+                    .store(wait_us, Ordering::Relaxed);
+                update_atomic_max(&self.worker_lock_wait_max_us, wait_us);
+            }
+        }
+    }
+
+    fn observe_worker_deadline_slip(&self, slip_us: MediaTimeUs) {
+        self.worker_deadline_slip_last_us
+            .store(slip_us, Ordering::Relaxed);
+        update_atomic_max(&self.worker_deadline_slip_max_us, slip_us);
+    }
+
+    fn snapshot(&self) -> PlayerDiagnosticsSnapshot {
+        PlayerDiagnosticsSnapshot {
+            ffi_lock_wait_last_us: self.ffi_lock_wait_last_us.load(Ordering::Relaxed),
+            ffi_lock_wait_max_us: self.ffi_lock_wait_max_us.load(Ordering::Relaxed),
+            worker_lock_wait_last_us: self.worker_lock_wait_last_us.load(Ordering::Relaxed),
+            worker_lock_wait_max_us: self.worker_lock_wait_max_us.load(Ordering::Relaxed),
+            worker_deadline_slip_last_us: self.worker_deadline_slip_last_us.load(Ordering::Relaxed),
+            worker_deadline_slip_max_us: self.worker_deadline_slip_max_us.load(Ordering::Relaxed),
+        }
+    }
+}
+
+fn update_atomic_max(target: &AtomicI64, value: MediaTimeUs) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => current = observed,
+        }
     }
 }

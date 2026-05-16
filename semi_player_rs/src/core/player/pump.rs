@@ -30,12 +30,16 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
 }
 
 pub fn advance_playback(player: &mut SemiPlayerHandle) {
+    let initial_playback_time_us = player.audio_clock.presentation_time_us();
+    player
+        .runtime
+        .discard_consumed_audio_frames(initial_playback_time_us);
+    sync_audio_output(player);
     let playback_time_us = player.audio_clock.presentation_time_us();
     player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
     let _ = VideoSyncService::tick(player, playback_time_us);
-    sync_audio_output(player);
 }
 
 pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {

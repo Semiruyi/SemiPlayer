@@ -23,6 +23,8 @@ pub struct StreamInfo {
 pub struct VideoStreamInfo {
     pub width: u32,
     pub height: u32,
+    pub avg_frame_rate_num: u32,
+    pub avg_frame_rate_den: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +83,10 @@ pub(crate) fn collect_media_info(
                 codec.decoder().video().ok().map(|video| VideoStreamInfo {
                     width: video.width(),
                     height: video.height(),
+                    avg_frame_rate_num: u32::try_from(stream.avg_frame_rate().numerator())
+                        .unwrap_or(0),
+                    avg_frame_rate_den: u32::try_from(stream.avg_frame_rate().denominator())
+                        .unwrap_or(0),
                 }),
                 None,
             ),

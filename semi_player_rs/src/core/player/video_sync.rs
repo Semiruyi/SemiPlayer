@@ -14,6 +14,14 @@ pub struct VideoSyncStats {
     pub drop_count: u64,
     pub underflow_count: u64,
     pub late_count: u64,
+    pub last_presented_frames: u64,
+    pub last_dropped_frames: u64,
+    pub max_presented_frames_in_run: u64,
+    pub max_dropped_frames_in_run: u64,
+    pub run_present_only_count: u64,
+    pub run_drop_only_count: u64,
+    pub run_present_drop_count: u64,
+    pub run_other_count: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -63,6 +71,10 @@ impl VideoSyncState {
             return false;
         }
 
+        if self.snapshot.core_sync_error_us > 0 {
+            return true;
+        }
+
         self.snapshot
             .next_wake_deadline_us
             .is_some_and(|deadline_us| playback_time_us >= deadline_us)
@@ -76,6 +88,16 @@ impl VideoSyncState {
     fn observe_sync(&mut self, snapshot: VideoSyncSnapshot, selection: VideoSelectionStats) {
         self.observe_tick(snapshot);
         self.stats.sync_count = self.stats.sync_count.saturating_add(1);
+        self.stats.last_presented_frames = u64::from(selection.presented_frames);
+        self.stats.last_dropped_frames = u64::from(selection.dropped_frames);
+        self.stats.max_presented_frames_in_run = self
+            .stats
+            .max_presented_frames_in_run
+            .max(u64::from(selection.presented_frames));
+        self.stats.max_dropped_frames_in_run = self
+            .stats
+            .max_dropped_frames_in_run
+            .max(u64::from(selection.dropped_frames));
         self.stats.present_count = self
             .stats
             .present_count
@@ -97,6 +119,24 @@ impl VideoSyncState {
             self.stats.late_count = self.stats.late_count.saturating_add(1);
         }
 
+        match (selection.presented_frames, selection.dropped_frames) {
+            (presented, 0) if presented > 0 => {
+                self.stats.run_present_only_count =
+                    self.stats.run_present_only_count.saturating_add(1);
+            }
+            (0, dropped) if dropped > 0 => {
+                self.stats.run_drop_only_count =
+                    self.stats.run_drop_only_count.saturating_add(1);
+            }
+            (presented, dropped) if presented > 0 && dropped > 0 => {
+                self.stats.run_present_drop_count =
+                    self.stats.run_present_drop_count.saturating_add(1);
+            }
+            _ => {
+                self.stats.run_other_count = self.stats.run_other_count.saturating_add(1);
+            }
+        }
+
         self.dirty = false;
     }
 }
@@ -115,12 +155,12 @@ impl VideoSyncService {
         let current_video_pts_us = current_video_frame.map(|frame| frame.pts_us).unwrap_or(0);
         let next_video_pts_us = next_video_frame.map(|frame| frame.pts_us);
         let current_video_effective_end_us = current_video_frame
-            .and_then(|frame| effective_frame_end_us(frame, next_video_pts_us));
+            .and_then(|frame| frame.effective_end_time_us(next_video_frame));
         let core_av_delta_us = playback_time_us.saturating_sub(current_video_pts_us);
         let core_sync_error_us = compute_core_sync_error_us(
             playback_time_us,
             current_video_frame,
-            next_video_pts_us,
+            next_video_frame,
         );
         let next_wake_deadline_us = compute_next_wake_deadline_us(
             target_video_time_us,
@@ -168,7 +208,7 @@ impl VideoSyncService {
 fn compute_core_sync_error_us(
     target_time_us: i64,
     current_frame: Option<&VideoFrame>,
-    next_video_pts_us: Option<i64>,
+    next_frame: Option<&VideoFrame>,
 ) -> i64 {
     let Some(frame) = current_frame else {
         return 0;
@@ -178,7 +218,7 @@ fn compute_core_sync_error_us(
         return target_time_us - frame.pts_us;
     }
 
-    let Some(frame_end_us) = effective_frame_end_us(frame, next_video_pts_us) else {
+    let Some(frame_end_us) = frame.effective_end_time_us(next_frame) else {
         return 0;
     };
 
@@ -188,18 +228,6 @@ fn compute_core_sync_error_us(
 
     0
 }
-
-fn effective_frame_end_us(frame: &VideoFrame, next_video_pts_us: Option<i64>) -> Option<i64> {
-    let next_pts_us = next_video_pts_us.filter(|next_pts_us| *next_pts_us > frame.pts_us);
-
-    match (frame.end_time_us(), next_pts_us) {
-        (Some(current_end_us), Some(next_pts_us)) => Some(current_end_us.max(next_pts_us)),
-        (Some(current_end_us), None) => Some(current_end_us),
-        (None, Some(next_pts_us)) => Some(next_pts_us),
-        (None, None) => None,
-    }
-}
-
 fn compute_next_wake_deadline_us(
     target_video_time_us: i64,
     current_frame: Option<&VideoFrame>,
@@ -270,6 +298,23 @@ mod tests {
 
         assert_eq!(snapshot.current_video_effective_end_us, Some(41_000));
         assert_eq!(snapshot.next_wake_deadline_us, Some(41_000));
+    }
+
+    #[test]
+    fn evaluate_prefers_next_pts_over_inflated_duration() {
+        let mut player = SemiPlayerHandle::new();
+        player.runtime.push_video_frame(frame(0, Some(83_000)));
+        player.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = player.runtime.select_video_frame(&player.video_scheduler, 0);
+
+        let snapshot_before_boundary = VideoSyncService::evaluate(&player, 40_000);
+        let snapshot_after_boundary = VideoSyncService::evaluate(&player, 41_000);
+
+        assert_eq!(snapshot_before_boundary.current_video_effective_end_us, Some(41_000));
+        assert_eq!(snapshot_before_boundary.core_sync_error_us, 0);
+        assert_eq!(snapshot_after_boundary.core_sync_error_us, 0);
+        assert_eq!(snapshot_after_boundary.current_video_effective_end_us, Some(41_000));
+        assert_eq!(snapshot_after_boundary.next_wake_deadline_us, None);
     }
 
     #[test]
