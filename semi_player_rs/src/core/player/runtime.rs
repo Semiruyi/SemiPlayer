@@ -6,6 +6,9 @@ use crate::render::core::frame::VideoFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
+pub const TARGET_AUDIO_QUEUE_LEN: usize = 8;
+pub const TARGET_FUTURE_VIDEO_QUEUE_LEN: usize = 2;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RuntimeVideoSnapshot<'a> {
     pub current_frame: Option<&'a VideoFrame>,
@@ -29,6 +32,17 @@ pub struct VideoSelectionStats {
     pub presented_frames: u32,
     pub dropped_frames: u32,
     pub needs_more_frames: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DecodeSupplyStatus {
+    pub audio_queue_len: usize,
+    pub buffered_video_frame_count: usize,
+    pub target_audio_queue_len: usize,
+    pub target_total_video_frames: usize,
+    pub end_of_stream: bool,
+    pub has_sufficient_buffer: bool,
+    pub needs_decode_supply: bool,
 }
 
 pub struct PlayerRuntime {
@@ -133,6 +147,25 @@ impl PlayerRuntime {
 
     pub fn has_buffered_future_video_frames(&self, min_count: usize) -> bool {
         self.queued_video_frames.len() >= min_count
+    }
+
+    pub fn decode_supply_status(&self) -> DecodeSupplyStatus {
+        let target_total_video_frames = 1 + TARGET_FUTURE_VIDEO_QUEUE_LEN;
+        let audio_queue_len = self.audio_queue_len();
+        let buffered_video_frame_count = self.buffered_video_frame_count();
+        let has_sufficient_buffer = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN
+            && buffered_video_frame_count >= target_total_video_frames;
+        let end_of_stream = self.has_reached_end_of_stream();
+
+        DecodeSupplyStatus {
+            audio_queue_len,
+            buffered_video_frame_count,
+            target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
+            target_total_video_frames,
+            end_of_stream,
+            has_sufficient_buffer,
+            needs_decode_supply: !end_of_stream && !has_sufficient_buffer,
+        }
     }
 
     pub fn discard_consumed_audio_frames(
@@ -283,7 +316,10 @@ impl Default for PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
-    use super::{PlayerRuntime, VideoSelectionStats};
+    use super::{
+        DecodeSupplyStatus, PlayerRuntime, VideoSelectionStats, TARGET_AUDIO_QUEUE_LEN,
+        TARGET_FUTURE_VIDEO_QUEUE_LEN,
+    };
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
@@ -516,5 +552,54 @@ mod tests {
                 .map(|frame| frame.sample_rate),
             Some(44_100)
         );
+    }
+
+    #[test]
+    fn decode_supply_status_reports_buffer_targets_and_need() {
+        let mut runtime = PlayerRuntime::new();
+
+        let empty = runtime.decode_supply_status();
+        assert_eq!(
+            empty,
+            DecodeSupplyStatus {
+                audio_queue_len: 0,
+                buffered_video_frame_count: 0,
+                target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
+                target_total_video_frames: 1 + TARGET_FUTURE_VIDEO_QUEUE_LEN,
+                end_of_stream: false,
+                has_sufficient_buffer: false,
+                needs_decode_supply: true,
+            }
+        );
+
+        for index in 0..TARGET_AUDIO_QUEUE_LEN {
+            runtime.push_audio_frame(AudioFrame {
+                pts_us: (index as i64) * 10_000,
+                duration_us: Some(10_000),
+                sample_rate: 48_000,
+                channels: 2,
+                sample_count: 480,
+                sample_format: AudioSampleFormatCategory::F32,
+                is_planar: false,
+                data: vec![0.0; 480 * 2],
+            });
+        }
+
+        for index in 0..(1 + TARGET_FUTURE_VIDEO_QUEUE_LEN) {
+            runtime.push_video_frame(VideoFrame {
+                pts_us: (index as i64) * 33_000,
+                duration_us: Some(33_000),
+                width: 1920,
+                height: 1080,
+                pixel_format: PixelFormatCategory::Bgra8,
+                stride: 1920 * 4,
+                data: vec![0; 16],
+                is_key_frame: false,
+            });
+        }
+
+        let filled = runtime.decode_supply_status();
+        assert!(filled.has_sufficient_buffer);
+        assert!(!filled.needs_decode_supply);
     }
 }

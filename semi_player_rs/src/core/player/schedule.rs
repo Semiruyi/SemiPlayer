@@ -1,7 +1,8 @@
 use crate::api::types::PlayerState;
+use crate::audio::core::output_controller::AudioOutputSnapshot;
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::runtime::RuntimeVideoSnapshot;
-use crate::core::player::video_sync::VideoSyncService;
+use crate::core::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
+use crate::core::player::video_sync::{VideoSyncService, VideoSyncSnapshot};
 use crate::util::time::MediaTimeUs;
 
 const MIN_PUMP_INTERVAL_US: MediaTimeUs = 1_000;
@@ -25,6 +26,16 @@ pub enum ScheduledWork {
     DecodeSupply,
     AdvanceAndDecode { deadline_us: Option<MediaTimeUs> },
     WaitFor { wait_us: MediaTimeUs },
+}
+
+impl ScheduledWork {
+    pub fn deadline_us(self) -> Option<MediaTimeUs> {
+        match self {
+            ScheduledWork::AdvancePlayback { deadline_us }
+            | ScheduledWork::AdvanceAndDecode { deadline_us } => deadline_us,
+            ScheduledWork::DecodeSupply | ScheduledWork::WaitFor { .. } => None,
+        }
+    }
 }
 
 impl PumpScheduleHint {
@@ -55,28 +66,19 @@ pub struct PlayerScheduleService;
 
 impl PlayerScheduleService {
     pub fn evaluate(player: &SemiPlayerHandle) -> PumpScheduleHint {
-        let playback_time_us = player.audio_clock.presentation_time_us();
-        let runtime_video = player.runtime.video_snapshot();
-        let video_snapshot = VideoSyncService::evaluate(player, playback_time_us);
-        let next_video_deadline_us =
-            compute_video_deadline_us(player, playback_time_us, runtime_video, video_snapshot);
-        let next_audio_refill_deadline_us =
-            compute_audio_refill_deadline_us(player, playback_time_us);
+        let context = ScheduleContext::capture(player);
+        let next_video_deadline_us = compute_video_deadline_us(&context);
+        let next_audio_refill_deadline_us = compute_audio_refill_deadline_us(&context);
         let next_pump_deadline_us =
             min_optional_time(next_video_deadline_us, next_audio_refill_deadline_us);
         let playback_due_now = next_pump_deadline_us
-            .is_some_and(|deadline_us| deadline_us <= playback_time_us);
-        let decode_supply_needed = crate::core::player::pump::needs_decode_supply(player);
-        let suggested_wait_us = compute_suggested_wait_us(
-            player.state(),
-            playback_time_us,
-            next_pump_deadline_us,
-        );
+            .is_some_and(|deadline_us| deadline_us <= context.playback_time_us);
+        let suggested_wait_us = compute_suggested_wait_us(&context, next_pump_deadline_us);
 
         PumpScheduleHint {
-            playback_time_us,
+            playback_time_us: context.playback_time_us,
             playback_due_now,
-            decode_supply_needed,
+            decode_supply_needed: context.decode_supply.needs_decode_supply,
             next_video_deadline_us,
             next_audio_refill_deadline_us,
             next_pump_deadline_us,
@@ -85,59 +87,77 @@ impl PlayerScheduleService {
     }
 }
 
-fn compute_video_deadline_us(
-    player: &SemiPlayerHandle,
+#[derive(Clone, Copy, Debug)]
+struct ScheduleContext<'a> {
+    state: PlayerState,
     playback_time_us: MediaTimeUs,
-    runtime_video: RuntimeVideoSnapshot<'_>,
-    video_snapshot: crate::core::player::video_sync::VideoSyncSnapshot,
-) -> Option<MediaTimeUs> {
-    if player.video_sync.is_dirty() {
-        return Some(playback_time_us);
-    }
-
-    if video_snapshot.core_sync_error_us > 0 {
-        return Some(playback_time_us);
-    }
-
-    if runtime_video.current_frame.is_none() && runtime_video.next_frame.is_some() {
-        return Some(playback_time_us);
-    }
-
-    video_snapshot.next_wake_deadline_us
+    decode_supply: DecodeSupplyStatus,
+    video_sync_dirty: bool,
+    runtime_video: RuntimeVideoSnapshot<'a>,
+    video_snapshot: VideoSyncSnapshot,
+    audio_output: AudioOutputSnapshot,
 }
 
-fn compute_audio_refill_deadline_us(
-    player: &SemiPlayerHandle,
-    playback_time_us: MediaTimeUs,
-) -> Option<MediaTimeUs> {
-    let snapshot = player.audio_output.snapshot();
+impl<'a> ScheduleContext<'a> {
+    fn capture(player: &'a SemiPlayerHandle) -> Self {
+        let playback_time_us = player.audio_clock.presentation_time_us();
+
+        Self {
+            state: player.state(),
+            playback_time_us,
+            decode_supply: player.runtime.decode_supply_status(),
+            video_sync_dirty: player.video_sync.is_dirty(),
+            runtime_video: player.runtime.video_snapshot(),
+            video_snapshot: VideoSyncService::evaluate(player, playback_time_us),
+            audio_output: player.audio_output.snapshot(),
+        }
+    }
+}
+
+fn compute_video_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeUs> {
+    if context.video_sync_dirty {
+        return Some(context.playback_time_us);
+    }
+
+    if context.video_snapshot.core_sync_error_us > 0 {
+        return Some(context.playback_time_us);
+    }
+
+    if context.runtime_video.current_frame.is_none() && context.runtime_video.next_frame.is_some() {
+        return Some(context.playback_time_us);
+    }
+
+    context.video_snapshot.next_wake_deadline_us
+}
+
+fn compute_audio_refill_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeUs> {
+    let snapshot = context.audio_output;
     let format = snapshot.configured_format?;
 
-    if player.state() == PlayerState::Playing && !snapshot.started {
-        return Some(playback_time_us);
+    if context.state == PlayerState::Playing && !snapshot.started {
+        return Some(context.playback_time_us);
     }
 
     if snapshot.target_buffer_frames == 0 {
-        return Some(playback_time_us);
+        return Some(context.playback_time_us);
     }
 
     if snapshot.buffered_frames <= AUDIO_REFILL_HEADROOM_FRAMES {
-        return Some(playback_time_us);
+        return Some(context.playback_time_us);
     }
 
     let frames_until_refill = snapshot
         .buffered_frames
         .saturating_sub(AUDIO_REFILL_HEADROOM_FRAMES);
     let refill_delta_us = frames_to_us(frames_until_refill, format.sample_rate);
-    Some(playback_time_us.saturating_add(refill_delta_us))
+    Some(context.playback_time_us.saturating_add(refill_delta_us))
 }
 
 fn compute_suggested_wait_us(
-    state: PlayerState,
-    playback_time_us: MediaTimeUs,
+    context: &ScheduleContext<'_>,
     next_pump_deadline_us: Option<MediaTimeUs>,
 ) -> MediaTimeUs {
-    if state != PlayerState::Playing {
+    if context.state != PlayerState::Playing {
         return MAX_PUMP_INTERVAL_US;
     }
 
@@ -145,7 +165,7 @@ fn compute_suggested_wait_us(
         return MIN_PUMP_INTERVAL_US;
     };
 
-    let wait_us = deadline_us.saturating_sub(playback_time_us);
+    let wait_us = deadline_us.saturating_sub(context.playback_time_us);
     wait_us.clamp(MIN_PUMP_INTERVAL_US, MAX_PUMP_INTERVAL_US)
 }
 

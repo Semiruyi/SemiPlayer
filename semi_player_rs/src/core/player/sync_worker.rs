@@ -3,8 +3,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
+use crate::core::player::execution::execute_scheduled_work;
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
-use crate::core::player::pump::{execute_scheduled_work, scheduled_work_deadline_us};
 use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
 use crate::util::time::MediaTimeUs;
 
@@ -90,7 +90,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
 fn execute_worker_step(player: &mut SemiPlayerHandle) -> WorkerAction {
     let hint = PlayerScheduleService::evaluate(player);
     let scheduled_work = hint.scheduled_work();
-    let deadline_us = scheduled_work_deadline_us(scheduled_work);
+    let deadline_us = scheduled_work.deadline_us();
 
     match scheduled_work {
         ScheduledWork::AdvanceAndDecode { .. } | ScheduledWork::AdvancePlayback { .. } => {
