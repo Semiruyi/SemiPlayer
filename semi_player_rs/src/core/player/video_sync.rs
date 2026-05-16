@@ -50,6 +50,10 @@ impl VideoSyncState {
         self.stats
     }
 
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     fn should_sync(&self, playback_time_us: i64, is_running: bool) -> bool {
         if self.dirty || self.stats.tick_count == 0 {
             return true;

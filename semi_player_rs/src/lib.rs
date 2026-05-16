@@ -24,7 +24,7 @@ use crate::util::time::{ms_to_us, us_to_ms};
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
 
-fn with_player_mut<T>(
+fn with_player_locked<T>(
     player: *mut SemiPlayerHandle,
     f: impl FnOnce(&mut SemiPlayerHandle) -> T,
 ) -> Result<T, ResultCode> {
@@ -32,8 +32,7 @@ fn with_player_mut<T>(
         return Err(SEMI_E_INVALID_ARG);
     }
 
-    let player = unsafe { &mut *player };
-    Ok(f(player))
+    Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
 }
 
 fn cstr_to_string(input: *const c_char) -> Result<String, c_int> {
@@ -244,9 +243,10 @@ pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> 
         return SEMI_E_INVALID_ARG;
     }
 
-    let player = Box::new(SemiPlayerHandle::new());
+    let player_ptr = Box::into_raw(Box::new(SemiPlayerHandle::new()));
     unsafe {
-        *out_player = Box::into_raw(player);
+        (*player_ptr).start_sync_worker(player_ptr);
+        *out_player = player_ptr;
     }
     SEMI_OK
 }
@@ -254,7 +254,10 @@ pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> 
 #[no_mangle]
 pub extern "C" fn semi_player_destroy(player: *mut SemiPlayerHandle) {
     if !player.is_null() {
-        unsafe { drop(Box::from_raw(player)) };
+        unsafe {
+            (*player).stop_sync_worker();
+            drop(Box::from_raw(player));
+        };
     }
 }
 
@@ -293,10 +296,11 @@ pub extern "C" fn semi_player_open(
         }
     };
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         player.opened_media = Some(opened_media);
         player.reset_runtime_state();
         VideoSyncService::mark_dirty(player);
+        player.notify_sync_worker();
         player.set_state(PlayerState::Ready);
     }) {
         Ok(_) => SEMI_OK,
@@ -306,7 +310,7 @@ pub extern "C" fn semi_player_open(
 
 #[no_mangle]
 pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -314,6 +318,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
         player.audio_clock.play();
         VideoSyncService::mark_dirty(player);
         player.set_state(PlayerState::Playing);
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -323,7 +328,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -331,6 +336,7 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
         player.audio_clock.pause();
         VideoSyncService::mark_dirty(player);
         player.set_state(PlayerState::Paused);
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -344,7 +350,7 @@ pub extern "C" fn semi_player_seek(
     position_ms: i64,
     _exact: c_int,
 ) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -366,6 +372,7 @@ pub extern "C" fn semi_player_seek(
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         player.video_sync.reset();
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -375,9 +382,10 @@ pub extern "C" fn semi_player_seek(
 
 #[no_mangle]
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         player.clear_media();
         player.set_state(PlayerState::Idle);
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -387,7 +395,7 @@ pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_double) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -398,6 +406,7 @@ pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_
         player.speed = speed;
         player.audio_clock.set_speed(speed);
         VideoSyncService::mark_dirty(player);
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -410,9 +419,10 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     player: *mut SemiPlayerHandle,
     bias_ms: i32,
 ) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
         VideoSyncService::mark_dirty(player);
+        player.notify_sync_worker();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -425,7 +435,7 @@ pub extern "C" fn semi_player_set_subtitle_visible(
     player: *mut SemiPlayerHandle,
     visible: c_int,
 ) -> c_int {
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -447,7 +457,7 @@ pub extern "C" fn semi_player_get_state(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| unsafe {
+    match with_player_locked(player, |player| unsafe {
         *out_state = player.state().as_raw();
     }) {
         Ok(_) => SEMI_OK,
@@ -464,7 +474,7 @@ pub extern "C" fn semi_player_get_position_ms(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| unsafe {
+    match with_player_locked(player, |player| unsafe {
         *out_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
     }) {
         Ok(_) => SEMI_OK,
@@ -481,7 +491,7 @@ pub extern "C" fn semi_player_get_duration_ms(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| unsafe {
+    match with_player_locked(player, |player| unsafe {
         *out_duration_ms = player
             .opened_media
             .as_ref()
@@ -503,7 +513,7 @@ pub extern "C" fn semi_player_get_media_info(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -536,7 +546,7 @@ pub extern "C" fn semi_player_debug_decode_next(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -564,7 +574,11 @@ pub extern "C" fn semi_player_debug_decode_next(
 
 #[no_mangle]
 pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
-    match with_player_mut(player, |player| pump_player(player, max_iterations)) {
+    match with_player_locked(player, |player| {
+        let code = pump_player(player, max_iterations);
+        player.notify_sync_worker();
+        code
+    }) {
         Ok(code) => code,
         Err(code) => code,
     }
@@ -579,7 +593,7 @@ pub extern "C" fn semi_player_get_playback_snapshot(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -604,7 +618,7 @@ pub extern "C" fn semi_player_get_audio_output_snapshot(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -629,7 +643,7 @@ pub extern "C" fn semi_player_get_current_video_frame_info(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -659,7 +673,7 @@ pub extern "C" fn semi_player_copy_current_video_frame_bgra(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_mut(player, |player| {
+    match with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }

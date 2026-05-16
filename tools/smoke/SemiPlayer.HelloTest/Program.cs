@@ -10,6 +10,12 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 
+internal static class PumpTimingConstants
+{
+    public const double MinAdaptiveTickIntervalMs = 1.0;
+    public const double MaxAdaptiveTickIntervalMs = 33.0;
+}
+
 internal static class Program
 {
     [STAThread]
@@ -53,6 +59,7 @@ internal static class Program
         int sweepSegmentMs = 3_000;
         uint sweepIterations = DefaultPumpSweepIterations;
         string? sweepLogPath = null;
+        PumpSweepMode sweepMode = PumpSweepMode.Fixed;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -124,6 +131,18 @@ internal static class Program
                 continue;
             }
 
+            if (args[i] == "--pump-sweep-mode")
+            {
+                if (i + 1 >= args.Length || !TryParsePumpSweepMode(args[i + 1], out sweepMode))
+                {
+                    error = "Expected one of: fixed, adaptive, both after --pump-sweep-mode.";
+                    return false;
+                }
+
+                i++;
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(mediaPath))
             {
                 mediaPath = args[i];
@@ -132,7 +151,7 @@ internal static class Program
 
         if (string.IsNullOrWhiteSpace(mediaPath))
         {
-            error = "Usage: dotnet run --project tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj -- <media-file> [--auto-close-ms 1500] [--pump-sweep-intervals-ms 15,12,10,8,6] [--pump-sweep-segment-ms 3000] [--pump-sweep-iterations 32] [--pump-sweep-log tools/smoke/pump_sweep.log]";
+            error = "Usage: dotnet run --project tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj -- <media-file> [--auto-close-ms 1500] [--pump-sweep-intervals-ms 15,12,10,8,6] [--pump-sweep-segment-ms 3000] [--pump-sweep-iterations 32] [--pump-sweep-mode fixed|adaptive|both] [--pump-sweep-log tools/smoke/pump_sweep.log]";
             return false;
         }
 
@@ -142,7 +161,8 @@ internal static class Program
                 sweepIntervalsMs,
                 sweepSegmentMs,
                 sweepIterations,
-                sweepLogPath);
+                sweepLogPath,
+                sweepMode);
             options.AutoCloseMs = null;
         }
 
@@ -175,6 +195,25 @@ internal static class Program
 
         return values;
     }
+
+    private static bool TryParsePumpSweepMode(string raw, out PumpSweepMode mode)
+    {
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "fixed":
+                mode = PumpSweepMode.Fixed;
+                return true;
+            case "adaptive":
+                mode = PumpSweepMode.Adaptive;
+                return true;
+            case "both":
+                mode = PumpSweepMode.Both;
+                return true;
+            default:
+                mode = PumpSweepMode.Fixed;
+                return false;
+        }
+    }
 }
 
 internal sealed class PlayerSmokeWindow : Window
@@ -184,8 +223,6 @@ internal sealed class PlayerSmokeWindow : Window
     private const double DefaultTickIntervalMs = 15.0;
     private const double MinTickIntervalMs = 4.0;
     private const double MaxTickIntervalMs = 33.0;
-    private const double MinAdaptiveTickIntervalMs = 1.0;
-    private const double MaxAdaptiveTickIntervalMs = 33.0;
     private const uint MinTickPumpIterations = 1;
     private const uint MaxTickPumpIterations = 256;
 
@@ -208,6 +245,7 @@ internal sealed class PlayerSmokeWindow : Window
     private readonly StringBuilder _pumpSweepLog = new();
     private int _pumpSweepIndex = -1;
     private bool _useAdaptivePump = true;
+    private bool _drivePumpFromUi;
 
     public PlayerSmokeWindow(string mediaPath, SmokeOptions options)
     {
@@ -273,6 +311,8 @@ internal sealed class PlayerSmokeWindow : Window
             ShowInTaskbar = false;
         }
 
+        _drivePumpFromUi = _options.PumpSweep is not null;
+
         Loaded += (_, _) => InitializePlayer();
         Closed += (_, _) => DisposePlayer();
         KeyDown += OnWindowKeyDown;
@@ -319,7 +359,10 @@ internal sealed class PlayerSmokeWindow : Window
 
         try
         {
-            EnsureOk(Native.semi_player_pump(_player, _tickPumpIterations), "semi_player_pump");
+            if (_drivePumpFromUi)
+            {
+                EnsureOk(Native.semi_player_pump(_player, _tickPumpIterations), "semi_player_pump");
+            }
             RefreshVideoFrame(forceCopy: false);
         }
         catch (Exception ex)
@@ -437,7 +480,8 @@ internal sealed class PlayerSmokeWindow : Window
                 videoPtsMs: null,
                 coreSyncErrorMs: snapshot.CoreSyncErrorMs,
                 frameCopied: false,
-                isPlaying: _isPlaying);
+                isPlaying: _isPlaying,
+                pumpTriggered: false);
             _statusText.Text = BuildStatusText(snapshot, audioOutput, null);
             return;
         }
@@ -473,7 +517,8 @@ internal sealed class PlayerSmokeWindow : Window
             videoPtsMs: frameInfo.PtsMs,
             coreSyncErrorMs: snapshot.CoreSyncErrorMs,
             frameCopied: shouldCopyFrame,
-            isPlaying: _isPlaying);
+            isPlaying: _isPlaying,
+            pumpTriggered: _drivePumpFromUi);
 
         ApplyAdaptivePumpInterval(snapshot);
 
@@ -489,8 +534,8 @@ internal sealed class PlayerSmokeWindow : Window
 
         double nextMs = Math.Clamp(
             snapshot.SuggestedPumpWaitMs <= 0 ? DefaultTickIntervalMs : snapshot.SuggestedPumpWaitMs,
-            MinAdaptiveTickIntervalMs,
-            MaxAdaptiveTickIntervalMs);
+            PumpTimingConstants.MinAdaptiveTickIntervalMs,
+            PumpTimingConstants.MaxAdaptiveTickIntervalMs);
         _tickTimer.Interval = TimeSpan.FromMilliseconds(nextMs);
     }
 
@@ -541,6 +586,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
             $"Pump {_diagnostics.PumpsPerSecond:F1}/s @{_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
             $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}  " +
+            $"Driver {(_drivePumpFromUi ? "UI" : "Worker")}  " +
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
         string syncLoopPart =
             $"WakeAt {snapshot.NextVideoWakeDeadlineMs} ms  FrameEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
@@ -566,7 +612,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"{audioProgressPart}{Environment.NewLine}" +
             $"{framePart}{Environment.NewLine}" +
             $"{diagnosticsPart}{Environment.NewLine}" +
-            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump";
+            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
     }
 
     private void OnWindowKeyDown(object sender, KeyEventArgs e)
@@ -602,6 +648,10 @@ internal sealed class PlayerSmokeWindow : Window
                     break;
                 case Key.A:
                     ToggleAdaptivePump();
+                    e.Handled = true;
+                    break;
+                case Key.P:
+                    ToggleUiPumpDriver();
                     e.Handled = true;
                     break;
                 case Key.OemPlus:
@@ -643,6 +693,13 @@ internal sealed class PlayerSmokeWindow : Window
     {
         _useAdaptivePump = !_useAdaptivePump;
         _diagnostics.ResetCoreSyncStats();
+        RefreshVideoFrame(forceCopy: false);
+    }
+
+    private void ToggleUiPumpDriver()
+    {
+        _drivePumpFromUi = !_drivePumpFromUi;
+        _diagnostics.Reset();
         RefreshVideoFrame(forceCopy: false);
     }
 
@@ -771,6 +828,7 @@ internal sealed class PlaybackDiagnostics
     public PumpSweepDiagnosticsSnapshot CreatePumpSweepSnapshot()
     {
         return new PumpSweepDiagnosticsSnapshot(
+            "ui",
             PumpsPerSecond,
             CoreSyncErrorMeanMs,
             CoreSyncErrorAbsMeanMs,
@@ -779,11 +837,14 @@ internal sealed class PlaybackDiagnostics
             _coreSyncErrorCount);
     }
 
-    public void ObserveTick(long audioPositionMs, long? videoPtsMs, long coreSyncErrorMs, bool frameCopied, bool isPlaying)
+    public void ObserveTick(long audioPositionMs, long? videoPtsMs, long coreSyncErrorMs, bool frameCopied, bool isPlaying, bool pumpTriggered)
     {
         long nowMs = ElapsedMs;
         _ticksInWindow++;
-        _pumpsInWindow++;
+        if (pumpTriggered)
+        {
+            _pumpsInWindow++;
+        }
 
         if (frameCopied)
         {
@@ -871,12 +932,18 @@ internal sealed class SmokeOptions
 
 internal sealed class PumpSweepOptions
 {
-    public PumpSweepOptions(List<double> tickIntervalsMs, int segmentMs, uint tickPumpIterations, string? logPath)
+    public PumpSweepOptions(
+        List<double> tickIntervalsMs,
+        int segmentMs,
+        uint tickPumpIterations,
+        string? logPath,
+        PumpSweepMode mode)
     {
         TickIntervalsMs = tickIntervalsMs;
         SegmentMs = segmentMs;
         TickPumpIterations = tickPumpIterations;
         LogPath = logPath;
+        Mode = mode;
     }
 
     public List<double> TickIntervalsMs { get; }
@@ -886,9 +953,19 @@ internal sealed class PumpSweepOptions
     public uint TickPumpIterations { get; }
 
     public string? LogPath { get; }
+
+    public PumpSweepMode Mode { get; }
+}
+
+internal enum PumpSweepMode
+{
+    Fixed,
+    Adaptive,
+    Both,
 }
 
 internal readonly record struct PumpSweepDiagnosticsSnapshot(
+    string Mode,
     double PumpsPerSecond,
     double CoreSyncErrorMeanMs,
     double CoreSyncErrorAbsMeanMs,
@@ -917,22 +994,31 @@ internal static class PumpSweepRunner
 
             StringBuilder summary = new();
             summary.AppendLine($"Pump sweep for {mediaPath}");
-            summary.AppendLine($"SegmentMs={options.SegmentMs} WarmupMs={WarmupMs} TickPumpIterations={options.TickPumpIterations}");
+            summary.AppendLine($"SegmentMs={options.SegmentMs} WarmupMs={WarmupMs} TickPumpIterations={options.TickPumpIterations} Mode={options.Mode}");
 
             foreach (double intervalMs in options.TickIntervalsMs)
             {
-                EnsureOk(Native.semi_player_seek(player, startPositionMs, 0), "semi_player_seek");
-                EnsureOk(Native.semi_player_pump(player, StartupPumpIterations), "semi_player_pump");
-                EnsureOk(Native.semi_player_play(player), "semi_player_play");
+                foreach (PumpSweepMode mode in ExpandModes(options.Mode))
+                {
+                    EnsureOk(Native.semi_player_seek(player, startPositionMs, 0), "semi_player_seek");
+                    EnsureOk(Native.semi_player_pump(player, StartupPumpIterations), "semi_player_pump");
+                    EnsureOk(Native.semi_player_play(player), "semi_player_play");
 
-                PumpSweepDiagnosticsSnapshot result = RunSegment(player, intervalMs, options.TickPumpIterations, options.SegmentMs, WarmupMs);
-                string line =
-                    $"interval={intervalMs:F1}ms iterations={options.TickPumpIterations} pumpRate={result.PumpsPerSecond:F1}/s " +
-                    $"coreSyncMean={result.CoreSyncErrorMeanMs:F2}ms absMean={result.CoreSyncErrorAbsMeanMs:F2}ms " +
-                    $"maxPos={result.CoreSyncErrorMaxPositiveMs}ms maxNeg={result.CoreSyncErrorMaxNegativeMs}ms " +
-                    $"samples={result.SampleCount}";
-                Console.WriteLine(line);
-                summary.AppendLine(line);
+                    PumpSweepDiagnosticsSnapshot result = RunSegment(
+                        player,
+                        intervalMs,
+                        options.TickPumpIterations,
+                        options.SegmentMs,
+                        WarmupMs,
+                        mode);
+                    string line =
+                        $"mode={result.Mode} interval={intervalMs:F1}ms iterations={options.TickPumpIterations} pumpRate={result.PumpsPerSecond:F1}/s " +
+                        $"coreSyncMean={result.CoreSyncErrorMeanMs:F2}ms absMean={result.CoreSyncErrorAbsMeanMs:F2}ms " +
+                        $"maxPos={result.CoreSyncErrorMaxPositiveMs}ms maxNeg={result.CoreSyncErrorMaxNegativeMs}ms " +
+                        $"samples={result.SampleCount}";
+                    Console.WriteLine(line);
+                    summary.AppendLine(line);
+                }
             }
 
             string finalLog = summary.ToString().TrimEnd();
@@ -968,7 +1054,8 @@ internal static class PumpSweepRunner
         double intervalMs,
         uint tickPumpIterations,
         int segmentMs,
-        int warmupMs)
+        int warmupMs,
+        PumpSweepMode mode)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
         TimeSpan interval = TimeSpan.FromMilliseconds(intervalMs);
@@ -1002,7 +1089,13 @@ internal static class PumpSweepRunner
                 sampleCount++;
             }
 
-            nextTick += interval;
+            TimeSpan nextInterval = mode == PumpSweepMode.Adaptive
+                ? TimeSpan.FromMilliseconds(Math.Clamp(
+                    snapshot.SuggestedPumpWaitMs <= 0 ? intervalMs : snapshot.SuggestedPumpWaitMs,
+                    PumpTimingConstants.MinAdaptiveTickIntervalMs,
+                    PumpTimingConstants.MaxAdaptiveTickIntervalMs))
+                : interval;
+            nextTick += nextInterval;
         }
 
         double seconds = Math.Max(segmentMs, 1) / 1000.0;
@@ -1011,12 +1104,25 @@ internal static class PumpSweepRunner
         double pumpsPerSecond = pumpCount / ((warmupMs + segmentMs) / 1000.0);
 
         return new PumpSweepDiagnosticsSnapshot(
+            mode.ToString().ToLowerInvariant(),
             pumpsPerSecond,
             meanMs,
             absMeanMs,
             maxPositiveMs,
             maxNegativeMs,
             sampleCount);
+    }
+
+    private static IEnumerable<PumpSweepMode> ExpandModes(PumpSweepMode mode)
+    {
+        if (mode == PumpSweepMode.Both)
+        {
+            yield return PumpSweepMode.Fixed;
+            yield return PumpSweepMode.Adaptive;
+            yield break;
+        }
+
+        yield return mode;
     }
 
     private static void EnsureOk(int code, string api)
