@@ -125,8 +125,7 @@ impl VideoSyncState {
                     self.stats.run_present_only_count.saturating_add(1);
             }
             (0, dropped) if dropped > 0 => {
-                self.stats.run_drop_only_count =
-                    self.stats.run_drop_only_count.saturating_add(1);
+                self.stats.run_drop_only_count = self.stats.run_drop_only_count.saturating_add(1);
             }
             (presented, dropped) if presented > 0 && dropped > 0 => {
                 self.stats.run_present_drop_count =
@@ -246,9 +245,13 @@ fn compute_next_wake_deadline_us(
         });
 
     match (wake_from_current, next_video_pts_us) {
-        (Some(current_deadline_us), Some(next_deadline_us)) => Some(current_deadline_us.min(next_deadline_us)),
+        (Some(current_deadline_us), Some(next_deadline_us)) => {
+            Some(current_deadline_us.min(next_deadline_us))
+        }
         (Some(current_deadline_us), None) => Some(current_deadline_us),
-        (None, Some(next_deadline_us)) if target_video_time_us < next_deadline_us => Some(next_deadline_us),
+        (None, Some(next_deadline_us)) if target_video_time_us < next_deadline_us => {
+            Some(next_deadline_us)
+        }
         (None, _) => None,
     }
 }
@@ -278,7 +281,9 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.runtime.push_video_frame(frame(0, Some(33_000)));
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = player.runtime.select_video_frame(&player.video_scheduler, 0);
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, 0);
 
         let snapshot = VideoSyncService::evaluate(&player, 48_000);
 
@@ -290,7 +295,9 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.runtime.push_video_frame(frame(0, Some(33_000)));
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = player.runtime.select_video_frame(&player.video_scheduler, 0);
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, 0);
 
         let snapshot = VideoSyncService::evaluate(&player, 10_000);
 
@@ -303,15 +310,23 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.runtime.push_video_frame(frame(0, Some(83_000)));
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = player.runtime.select_video_frame(&player.video_scheduler, 0);
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, 0);
 
         let snapshot_before_boundary = VideoSyncService::evaluate(&player, 40_000);
         let snapshot_after_boundary = VideoSyncService::evaluate(&player, 41_000);
 
-        assert_eq!(snapshot_before_boundary.current_video_effective_end_us, Some(41_000));
+        assert_eq!(
+            snapshot_before_boundary.current_video_effective_end_us,
+            Some(41_000)
+        );
         assert_eq!(snapshot_before_boundary.core_sync_error_us, 0);
         assert_eq!(snapshot_after_boundary.core_sync_error_us, 0);
-        assert_eq!(snapshot_after_boundary.current_video_effective_end_us, Some(41_000));
+        assert_eq!(
+            snapshot_after_boundary.current_video_effective_end_us,
+            Some(41_000)
+        );
         assert_eq!(snapshot_after_boundary.next_wake_deadline_us, None);
     }
 

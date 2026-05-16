@@ -65,12 +65,13 @@ Tasks:
 
 ### P0.2 Split decode supply from `pump_player(...)`
 
-Status: baseline done, concurrency split still pending
+Status: pump semantics aligned, deeper concurrency split still pending
 
 Tasks:
 
 - keep decode supply separated from playback advancement at the code-path level
 - stop treating `pump_player(...)` as the primary internal execution model
+- keep manual pump aligned with worker scheduling semantics
 - move decode supply into a dedicated execution path
 - define how decoded-frame enqueue wakes the sync worker
 

@@ -157,6 +157,7 @@ Today it is:
 - a decode supply entry
 - a control/debug hook
 - a useful diagnostic API
+- a manual service entry that uses the same schedule-driven playback/decode split as the worker path
 
 It is no longer supposed to be the only timing-plane driver.
 

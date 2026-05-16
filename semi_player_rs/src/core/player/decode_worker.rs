@@ -193,3 +193,63 @@ enum DecodeWorkerPlan {
     },
     WaitIndefinitely,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{complete_decode_action, DecodeWorkerAction};
+    use crate::core::media::{DecodedOutput, DecodedOutputPoll};
+    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+
+    fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
+        VideoFrame {
+            pts_us,
+            duration_us,
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        }
+    }
+
+    #[test]
+    fn stale_decode_output_is_dropped_when_generation_changes() {
+        let mut player = SemiPlayerHandle::new();
+        let stale_generation = player.media_generation();
+        let _ = player.bump_media_generation();
+
+        let action = complete_decode_action(
+            &mut player,
+            stale_generation,
+            Ok(DecodedOutputPoll::Output(DecodedOutput::Video(frame(
+                0,
+                Some(33_000),
+            )))),
+        );
+
+        assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
+        assert_eq!(player.runtime.video_queue_len(), 0);
+        assert!(!player.video_sync.is_dirty());
+    }
+
+    #[test]
+    fn current_generation_decode_output_is_applied_to_runtime() {
+        let mut player = SemiPlayerHandle::new();
+        let generation = player.media_generation();
+
+        let action = complete_decode_action(
+            &mut player,
+            generation,
+            Ok(DecodedOutputPoll::Output(DecodedOutput::Video(frame(
+                0,
+                Some(33_000),
+            )))),
+        );
+
+        assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
+        assert_eq!(player.runtime.video_queue_len(), 1);
+        assert!(player.video_sync.is_dirty());
+    }
+}

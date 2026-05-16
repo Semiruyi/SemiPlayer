@@ -76,13 +76,17 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                 let _phase_guard = phase_lock.lock().unwrap();
                 let plan = unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
-                    SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::SyncWorker, |player| {
-                        if !player.is_media_loaded() {
-                            None
-                        } else {
-                            Some(plan_playback_advance(player))
-                        }
-                    })
+                    SemiPlayerHandle::with_locked_ptr_as(
+                        player_ptr,
+                        LockOwner::SyncWorker,
+                        |player| {
+                            if !player.is_media_loaded() {
+                                None
+                            } else {
+                                Some(plan_playback_advance(player))
+                            }
+                        },
+                    )
                 };
 
                 let Some(plan) = plan else {
@@ -92,9 +96,13 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                 let result = execute_playback_plan(&plan);
                 unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
-                    SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::SyncWorker, |player| {
-                        finish_playback_advance(player, plan, result);
-                    });
+                    SemiPlayerHandle::with_locked_ptr_as(
+                        player_ptr,
+                        LockOwner::SyncWorker,
+                        |player| {
+                            finish_playback_advance(player, plan, result);
+                        },
+                    );
                 }
                 continue;
             }
@@ -119,7 +127,9 @@ fn evaluate_worker_action(player: &mut SemiPlayerHandle) -> WorkerAction {
 
     match player.state() {
         PlayerState::Playing => execute_worker_step(player, WorkerMode::Playing),
-        PlayerState::Ready | PlayerState::Paused => execute_worker_step(player, WorkerMode::Stabilizing),
+        PlayerState::Ready | PlayerState::Paused => {
+            execute_worker_step(player, WorkerMode::Stabilizing)
+        }
         PlayerState::Idle => WorkerAction::WaitIndefinitely,
     }
 }

@@ -147,9 +147,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
     let diagnostics = player.diagnostics_snapshot();
-    let audio_output_snapshot = player.audio_output.with_ref(|audio_output| audio_output.snapshot());
-    let host_presentation_offset_ms =
-        i32::try_from(us_to_ms(player.host_presentation_offset_us)).unwrap_or_else(|_| {
+    let audio_output_snapshot = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.snapshot());
+    let host_presentation_offset_ms = i32::try_from(us_to_ms(player.host_presentation_offset_us))
+        .unwrap_or_else(|_| {
             if player.host_presentation_offset_us.is_negative() {
                 i32::MIN
             } else {
@@ -160,31 +162,21 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .current_pts_us
         .map(|pts_us| audio_position_ms - us_to_ms(pts_us))
         .unwrap_or(0);
-    let next_video_pts_ms = runtime_video
-        .next_pts_us
-        .map(us_to_ms)
-        .unwrap_or(0);
+    let next_video_pts_ms = runtime_video.next_pts_us.map(us_to_ms).unwrap_or(0);
     let current_to_next_video_delta_ms = runtime_video
         .current_to_next_delta_us
         .map(us_to_ms)
         .unwrap_or(0);
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
-    let expected_end_to_end_av_delta_ms =
-        core_av_delta_ms - i64::from(host_presentation_offset_ms);
+    let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
     SemiPlaybackSnapshot {
         audio_position_ms,
         audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
         has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
-        current_video_pts_ms: runtime_video
-            .current_pts_us
-            .map(us_to_ms)
-            .unwrap_or(0),
-        current_video_duration_ms: runtime_video
-            .current_duration_us
-            .map(us_to_ms)
-            .unwrap_or(0),
+        current_video_pts_ms: runtime_video.current_pts_us.map(us_to_ms).unwrap_or(0),
+        current_video_duration_ms: runtime_video.current_duration_us.map(us_to_ms).unwrap_or(0),
         current_video_effective_end_ms: sync_snapshot
             .current_video_effective_end_us
             .map(us_to_ms)
@@ -247,7 +239,6 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     }
 }
 
-
 fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
     SemiVideoFrameInfo {
         pts_ms: us_to_ms(frame.pts_us),
@@ -262,7 +253,9 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
 }
 
 fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnapshot {
-    let snapshot = player.audio_output.with_ref(|audio_output| audio_output.snapshot());
+    let snapshot = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.snapshot());
     let device_timing = snapshot.device_timing;
 
     SemiAudioOutputSnapshot {
@@ -571,7 +564,9 @@ pub extern "C" fn semi_player_get_duration_ms(
         *out_duration_ms = player
             .opened_media
             .as_ref()
-            .and_then(|opened_media| opened_media.with_ref(|opened_media| opened_media.duration_us()))
+            .and_then(|opened_media| {
+                opened_media.with_ref(|opened_media| opened_media.duration_us())
+            })
             .map(us_to_ms)
             .unwrap_or(0);
     }) {
@@ -594,11 +589,9 @@ pub extern "C" fn semi_player_get_media_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(media_info_view) = player
-            .opened_media
-            .as_ref()
-            .map(|opened_media| opened_media.with_ref(|opened_media| build_media_info_view(opened_media.info())))
-        else {
+        let Some(media_info_view) = player.opened_media.as_ref().map(|opened_media| {
+            opened_media.with_ref(|opened_media| build_media_info_view(opened_media.info()))
+        }) else {
             return SEMI_E_INVALID_STATE;
         };
 
@@ -631,11 +624,12 @@ pub extern "C" fn semi_player_debug_decode_next(
             return SEMI_E_INVALID_STATE;
         };
 
-        let output = opened_media.with_mut(|opened_media| match opened_media.next_decoded_output() {
-            Ok(Some(output)) => Ok(output),
-            Ok(None) => Ok(DecodedOutput::EndOfStream),
-            Err(_) => Err(SEMI_E_INVALID_STATE),
-        });
+        let output =
+            opened_media.with_mut(|opened_media| match opened_media.next_decoded_output() {
+                Ok(Some(output)) => Ok(output),
+                Ok(None) => Ok(DecodedOutput::EndOfStream),
+                Err(_) => Err(SEMI_E_INVALID_STATE),
+            });
         let output = match output {
             Ok(output) => output,
             Err(code) => return code,

@@ -1,20 +1,108 @@
-use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE};
-use crate::core::player::execution::execute_playback_cycle;
+use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
+use crate::core::player::execution::{advance_playback, decode_supply};
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::schedule::PlayerScheduleService;
+use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
 
 pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
-    if !player.is_media_loaded() {
+    if !player.is_media_loaded() || player.opened_media.is_none() {
         return SEMI_E_INVALID_STATE;
     }
 
-    if player.opened_media.is_none() {
-        return SEMI_E_INVALID_STATE;
+    let first_pass = PlayerScheduleService::evaluate(player).scheduled_work();
+    service_scheduled_work(player, first_pass);
+
+    let decode_code = service_decode_work_if_needed(player, max_iterations);
+    if decode_code != SEMI_OK {
+        return decode_code;
     }
 
-    execute_playback_cycle(
-        player,
-        PlayerScheduleService::evaluate_decode(player).should_decode_now,
-        max_iterations,
-    )
+    let second_pass = PlayerScheduleService::evaluate(player).scheduled_work();
+    service_scheduled_work(player, second_pass);
+
+    SEMI_OK
+}
+
+fn service_scheduled_work(player: &mut SemiPlayerHandle, scheduled_work: ScheduledWork) {
+    if scheduled_work.should_advance_playback {
+        advance_playback(player);
+    }
+}
+
+fn service_decode_work_if_needed(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
+    if PlayerScheduleService::evaluate_decode(player).should_decode_now {
+        decode_supply(player, max_iterations)
+    } else {
+        SEMI_OK
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::service_scheduled_work;
+    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::core::player::schedule::PlayerScheduleService;
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+
+    fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
+        VideoFrame {
+            pts_us,
+            duration_us,
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        }
+    }
+
+    #[test]
+    fn scheduled_pump_step_advances_video_when_playback_is_due() {
+        let mut player = SemiPlayerHandle::new();
+        player.audio_clock.play();
+        player.runtime.push_video_frame(frame(0, Some(33_000)));
+        player.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        player.video_sync.reset();
+
+        let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();
+        assert!(scheduled_work.should_advance_playback);
+
+        service_scheduled_work(&mut player, scheduled_work);
+
+        assert_eq!(
+            player
+                .runtime
+                .current_video_frame()
+                .map(|frame| frame.pts_us),
+            Some(0)
+        );
+        assert_eq!(player.runtime.video_queue_len(), 1);
+        assert!(!player.video_sync.is_dirty());
+    }
+
+    #[test]
+    fn scheduled_pump_step_can_skip_playback_when_not_due() {
+        let mut player = SemiPlayerHandle::new();
+        player.audio_clock.play();
+        player.runtime.push_video_frame(frame(0, Some(33_000)));
+        player.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, 0);
+        let _ = crate::core::player::video_sync::VideoSyncService::tick(&mut player, 0);
+
+        let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();
+        assert!(!scheduled_work.should_advance_playback);
+
+        service_scheduled_work(&mut player, scheduled_work);
+
+        assert_eq!(
+            player
+                .runtime
+                .current_video_frame()
+                .map(|frame| frame.pts_us),
+            Some(0)
+        );
+        assert_eq!(player.runtime.video_queue_len(), 1);
+    }
 }

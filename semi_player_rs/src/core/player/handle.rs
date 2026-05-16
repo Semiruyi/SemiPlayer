@@ -175,7 +175,8 @@ impl SemiPlayerHandle {
         self.subtitles_visible = true;
         self.host_presentation_offset_us = 0;
         self.audio_clock.reset();
-        self.audio_output.with_mut(|audio_output| audio_output.stop());
+        self.audio_output
+            .with_mut(|audio_output| audio_output.stop());
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
         self.video_sync.reset();
@@ -272,9 +273,7 @@ impl PlayerDiagnostics {
             sync_worker_lock_wait_last_us: self
                 .sync_worker_lock_wait_last_us
                 .load(Ordering::Relaxed),
-            sync_worker_lock_wait_max_us: self
-                .sync_worker_lock_wait_max_us
-                .load(Ordering::Relaxed),
+            sync_worker_lock_wait_max_us: self.sync_worker_lock_wait_max_us.load(Ordering::Relaxed),
             decode_worker_lock_wait_last_us: self
                 .decode_worker_lock_wait_last_us
                 .load(Ordering::Relaxed),

@@ -449,7 +449,10 @@ mod tests {
                 needs_more_frames: false,
             }
         );
-        assert_eq!(runtime.current_video_frame().map(|frame| frame.pts_us), Some(83_000));
+        assert_eq!(
+            runtime.current_video_frame().map(|frame| frame.pts_us),
+            Some(83_000)
+        );
         assert_eq!(runtime.video_queue_len(), 0);
     }
 

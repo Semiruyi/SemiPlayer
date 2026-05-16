@@ -108,7 +108,9 @@ pub(crate) fn finish_playback_advance(
 ) {
     player.observe_stale_audio_discard(plan.initial_discard);
     if !result.audio_chunks_submitted && !result.audio_chunks.is_empty() {
-        player.runtime.restore_audio_chunks_front(result.audio_chunks);
+        player
+            .runtime
+            .restore_audio_chunks_front(result.audio_chunks);
     }
     player.audio_clock.update_from_device(result.device_timing);
     let playback_time_us = player.audio_clock.presentation_time_us();

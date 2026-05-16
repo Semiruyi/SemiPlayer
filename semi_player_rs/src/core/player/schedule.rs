@@ -102,7 +102,9 @@ impl<'a> ScheduleContext<'a> {
             video_sync_dirty: player.video_sync.is_dirty(),
             runtime_video: player.runtime.video_snapshot(),
             video_snapshot: VideoSyncService::evaluate(player, playback_time_us),
-            audio_output: player.audio_output.with_ref(|audio_output| audio_output.snapshot()),
+            audio_output: player
+                .audio_output
+                .with_ref(|audio_output| audio_output.snapshot()),
         }
     }
 }
@@ -226,7 +228,9 @@ mod tests {
         player.audio_clock.play();
         player.runtime.push_video_frame(frame(0, Some(33_000)));
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = player.runtime.select_video_frame(&player.video_scheduler, 0);
+        let _ = player
+            .runtime
+            .select_video_frame(&player.video_scheduler, 0);
 
         let hint = PlayerScheduleService::evaluate(&player);
 
@@ -237,14 +241,16 @@ mod tests {
 
     #[test]
     fn schedule_pulls_deadline_forward_for_audio_refill() {
-        let mut player = SemiPlayerHandle::new();
+        let player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Ready);
         player.audio_clock.play();
         player.audio_output.with_mut(|audio_output| {
-            audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
-                sample_rate: 48_000,
-                channels: 2,
-            }));
+            audio_output.ensure_backend_format(Some(
+                crate::audio::core::output::AudioStreamFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+            ));
             audio_output.submit_chunk(&AudioOutputChunk {
                 pts_us: Some(0),
                 sample_rate: 48_000,
@@ -284,20 +290,25 @@ mod tests {
 
     #[test]
     fn playing_with_unstarted_audio_backend_forces_immediate_pump() {
-        let mut player = SemiPlayerHandle::new();
+        let player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Playing);
         player.audio_clock.play();
         player.audio_output.with_mut(|audio_output| {
-            audio_output.ensure_backend_format(Some(crate::audio::core::output::AudioStreamFormat {
-                sample_rate: 48_000,
-                channels: 2,
-            }));
+            audio_output.ensure_backend_format(Some(
+                crate::audio::core::output::AudioStreamFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                },
+            ));
         });
 
         let hint = PlayerScheduleService::evaluate(&player);
 
         assert!(hint.playback_due_now);
-        assert_eq!(hint.next_audio_refill_deadline_us, Some(hint.playback_time_us));
+        assert_eq!(
+            hint.next_audio_refill_deadline_us,
+            Some(hint.playback_time_us)
+        );
         assert_eq!(hint.next_pump_deadline_us, Some(hint.playback_time_us));
         assert_eq!(hint.suggested_wait_us, 1_000);
     }

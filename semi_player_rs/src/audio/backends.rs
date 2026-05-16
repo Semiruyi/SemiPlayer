@@ -247,8 +247,8 @@ impl SharedAudioBuffer {
             let audible_frames = block.audible_frames_at(effective_now);
             partially_audible_frames_total =
                 partially_audible_frames_total.saturating_add(audible_frames as u64);
-            pending_device_frames =
-                pending_device_frames.saturating_add(block.frame_count.saturating_sub(audible_frames));
+            pending_device_frames = pending_device_frames
+                .saturating_add(block.frame_count.saturating_sub(audible_frames));
         }
 
         PlaybackProgress {
@@ -371,11 +371,13 @@ fn fill_output_buffer(
         .duration_since(&timestamp.callback)
         .unwrap_or(Duration::ZERO);
     let playback_start = Instant::now() + playback_delay;
-    shared.scheduled_blocks.push_back(ScheduledPlaybackBlock::new(
-        playback_start,
-        consumed_frames,
-        format.sample_rate,
-    ));
+    shared
+        .scheduled_blocks
+        .push_back(ScheduledPlaybackBlock::new(
+            playback_start,
+            consumed_frames,
+            format.sample_rate,
+        ));
 }
 
 fn select_buffer_size(config: &SupportedStreamConfigRange, preferred_frames: usize) -> BufferSize {
@@ -449,9 +451,11 @@ mod tests {
     fn pause_playback_clock_freezes_pending_progress() {
         let now = Instant::now();
         let mut shared = SharedAudioBuffer {
-            scheduled_blocks: VecDeque::from([
-                ScheduledPlaybackBlock::new(now - Duration::from_millis(5), 960, 48_000),
-            ]),
+            scheduled_blocks: VecDeque::from([ScheduledPlaybackBlock::new(
+                now - Duration::from_millis(5),
+                960,
+                48_000,
+            )]),
             ..Default::default()
         };
 
@@ -459,17 +463,25 @@ mod tests {
         shared.pause_playback_clock(now);
         let after_pause = shared.playback_progress(now + Duration::from_millis(20));
 
-        assert_eq!(after_pause.audible_frames_total, before_pause.audible_frames_total);
-        assert_eq!(after_pause.pending_device_frames, before_pause.pending_device_frames);
+        assert_eq!(
+            after_pause.audible_frames_total,
+            before_pause.audible_frames_total
+        );
+        assert_eq!(
+            after_pause.pending_device_frames,
+            before_pause.pending_device_frames
+        );
     }
 
     #[test]
     fn resume_playback_clock_shifts_scheduled_blocks_forward() {
         let now = Instant::now();
         let mut shared = SharedAudioBuffer {
-            scheduled_blocks: VecDeque::from([
-                ScheduledPlaybackBlock::new(now + Duration::from_millis(5), 960, 48_000),
-            ]),
+            scheduled_blocks: VecDeque::from([ScheduledPlaybackBlock::new(
+                now + Duration::from_millis(5),
+                960,
+                48_000,
+            )]),
             ..Default::default()
         };
 

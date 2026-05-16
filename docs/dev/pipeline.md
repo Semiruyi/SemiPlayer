@@ -266,6 +266,7 @@ Execution ownership is now split more explicitly:
   - owns decode refill wake/sleep policy
 - `pump.rs`
   - remains as an external/manual entry point
+  - follows the same schedule-driven playback/decode split as the worker path
 
 ## 8. Serialized FFI Access
 
