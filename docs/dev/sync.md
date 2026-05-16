@@ -2,114 +2,190 @@
 
 This document describes the current synchronization model in `semi_player_rs`.
 
-For the overall frame flow, see [pipeline.md](pipeline.md).
-For the planned player-owned video timing system, see [internal-video-sync.md](internal-video-sync.md).
+For pipeline flow, see [pipeline.md](pipeline.md).
+For deeper worker-specific design notes, see [internal-video-sync.md](internal-video-sync.md).
 
-## Core Model
+## 1. Core Rule
 
-Audio is the **master clock**. Video follows audio.
+Audio is the master clock.
 
 ```text
-target_video_time = audio_playback_time + host_presentation_offset
+target_video_time = audio_presentation_time + host_presentation_offset
 ```
 
-- `audio_playback_time` is owned by `AudioClock`.
-- `host_presentation_offset` is a host-supplied estimate of display pipeline latency.
-- `VideoScheduler` compares `target_video_time` against video frame timing to decide whether to keep, present, or drop a frame.
+Where:
 
-## AudioClock (Current)
+- `audio_presentation_time` comes from `AudioClock`
+- `host_presentation_offset` is host-supplied display compensation
+- video selection is evaluated against `target_video_time`
 
-File: [`semi_player_rs/src/audio/core/clock.rs`](../../semi_player_rs/src/audio/core/clock.rs)
+## 2. Current Synchronization Stack
 
-`AudioClock` is no longer only a software wall-clock projection.
+Current sync behavior is spread across these layers:
+
+- [`audio/core/clock.rs`](../../semi_player_rs/src/audio/core/clock.rs)
+- [`render/core/scheduler.rs`](../../semi_player_rs/src/render/core/scheduler.rs)
+- [`core/player/video_sync.rs`](../../semi_player_rs/src/core/player/video_sync.rs)
+- [`core/player/schedule.rs`](../../semi_player_rs/src/core/player/schedule.rs)
+- [`core/player/sync_worker.rs`](../../semi_player_rs/src/core/player/sync_worker.rs)
+
+In practical terms:
+
+```text
+audio backend timing
+  -> AudioClock
+  -> target video time
+  -> VideoSyncService
+  -> current frame selection
+  -> next wake deadline
+  -> sync worker
+```
+
+## 3. AudioClock
+
+`AudioClock` is no longer just a software projection.
 
 Current behavior:
 
-- `play()` starts timeline progression
-- `pause()` freezes the timeline
+- `play()` starts progression
+- `pause()` freezes progression
 - `seek()` rebases the timeline
-- `set_speed()` changes the speed multiplier
-- when device playback timing is available, `AudioClock` prefers backend-derived playback progress
+- `set_speed()` changes logical progression rate
+- device playback timing overrides naive wall-clock projection when available
 
-That means the clock can now track:
+This gives the player a closer estimate of audible playback position.
 
-- logical timeline continuity
-- estimated audible presentation time
+## 4. Video Selection
 
-## VideoScheduler (Current)
+`VideoScheduler::decide(...)` receives:
 
-File: [`semi_player_rs/src/render/core/scheduler.rs`](../../semi_player_rs/src/render/core/scheduler.rs)
+- target time
+- current frame
+- next queued frame
 
-`VideoScheduler::decide` receives:
+Possible decisions:
 
-- `target_time_us`: the synchronized playback position
-- `current_frame`: the frame currently considered on screen
-- `candidate_frame`: the next frame in the queue
+- `KeepCurrent`
+- `PresentFrame`
+- `DropFrame`
+- `NeedMoreFrames`
 
-Decisions:
+Important current rule:
 
-| Decision | Condition |
-|---|---|
-| `KeepCurrent` | the current frame still covers the target time |
-| `PresentFrame` | the candidate frame is the right frame for the target time |
-| `DropFrame` | the candidate frame is already stale |
-| `NeedMoreFrames` | there is no suitable frame yet |
+- if the next frame has a known future PTS, that PTS becomes the stronger effective end boundary for the current frame
 
-Important current behavior:
+This rule is also reflected in `CoreSyncErr`.
 
-- when a valid next-frame PTS is known, it is treated as a stronger effective end boundary for the current frame than the current frame's own decoded duration
+## 5. VideoSyncService
 
-That matches the current `CoreSyncErr` diagnostic semantics.
+`VideoSyncService` is now the player-owned synchronization surface for video timing.
 
-## Current `pump` Integration
+Responsibilities:
 
-File: [`semi_player_rs/src/core/player/pump.rs`](../../semi_player_rs/src/core/player/pump.rs)
+- compute target video time
+- evaluate current frame correctness
+- promote queued frames when needed
+- drop stale queued frames when needed
+- expose the next wake deadline
+- maintain sync diagnostics and counters
 
-Today the player still uses `pump_player(...)` to do all of the following:
+It owns `VideoSyncState`, which currently tracks:
 
-1. decode outputs and push them into `PlayerRuntime`
-2. discard consumed audio frames
-3. synchronize audio output
-4. select the current video frame
+- last sync snapshot
+- dirty flag
+- tick count
+- sync count
+- present count
+- drop count
+- underflow count
+- late-hit count
 
-This is sufficient for:
+## 6. Sync Worker
 
-- smoke tests
-- diagnostics
-- simple host integration
+The internal sync worker is now active.
 
-But it is not the desired long-term timing architecture.
+Its job is to:
 
-## Current Diagnostics
+1. inspect current player state
+2. evaluate the next playback deadline
+3. run `pump_player(...)` when work is due
+4. sleep until the next interesting moment or an explicit wake
 
-The playback snapshot currently exposes:
+Important current consequence:
+
+- frame advancement is no longer primarily driven by UI polling
+
+The worker currently wakes for:
+
+- play
+- pause
+- seek
+- reset
+- speed changes
+- host presentation bias changes
+- explicit host pump calls
+
+## 7. Pump Role Now
+
+`semi_player_pump(...)` still exists, but its role has changed.
+
+Today it is:
+
+- a decode supply entry
+- a control/debug hook
+- a useful diagnostic API
+
+It is no longer supposed to be the only timing-plane driver.
+
+## 8. Current Diagnostics
+
+Playback snapshots expose:
 
 - `Core A-V`
 - `CoreSyncErr`
 - `HostOffset`
 - `Expected End-to-end A-V`
+- current frame effective end
+- next wake deadline
+- next audio refill deadline
+- next combined pump deadline
+- sync worker counters
 
 Interpretation:
 
-- `Core A-V` describes where the audio clock lies relative to the current frame start time
-- `CoreSyncErr` describes whether the current frame is actually the correct frame for the target time
-- `HostOffset` is the host-supplied display compensation estimate
-- `Expected End-to-end A-V` is a model-derived result after applying host offset, not a true end-to-end measured display metric
+- `Core A-V`:
+  audio position relative to current frame start
+- `CoreSyncErr`:
+  signed correctness error for the current selected frame
+- `HostOffset`:
+  host-supplied display compensation
+- `Expected End-to-end A-V`:
+  model-derived result after host offset, not a measured display metric
 
-## Current Limitation
+## 9. What "Healthy" Looks Like
 
-Even with the current audio-clock and scheduler improvements, frame switching is still externally timing-sensitive because:
+A healthy current run usually means:
 
-- frame promotion happens during `pump`
-- faster `pump` rates reduce mean sync error
-- host/UI polling still affects timing quality
+- `CoreSyncErr` stays near `0`
+- `VideoPos` keeps advancing
+- the current frame changes at expected cadence
+- positive sync-error spikes are limited
+- playback quality is no longer strongly tied to a fixed host timer interval
 
-That is the main reason a player-owned internal video sync system is the next architectural step.
+## 10. Current Limitations
 
-## Future Work
+The current model is much stronger than the original host-pump prototype, but there are still limits:
 
-- move from `pump`-driven frame promotion toward a player-owned internal video sync loop
-- preserve `pump` as a control-plane and decode-supply API
-- use player-owned schedule hints to reduce fixed host polling cadence even before a dedicated sync worker exists
-- continue refining late/early frame handling thresholds
-- evolve host presentation offset into a richer feedback model only after the internal sync loop exists
+- decode supply is still routed through `pump_player(...)`
+- the sync worker and FFI calls still serialize on one operation lock
+- end-to-end display timing is still partly host-dependent
+- subtitle timing has not yet been folded into the same worker-owned progression path
+
+## 11. Near-Term Direction
+
+Near-term sync work should focus on:
+
+1. objective worker-vs-host sync measurement
+2. decode supply separation from the current pump path
+3. tighter wake policy between decode enqueue and video sync
+4. subtitle timing integration

@@ -1,268 +1,269 @@
-# Decoding and Frame Output Pipeline
+# Decoding and Playback Pipeline
 
-This document describes the current implementation of the media decoding pipeline and frame output flow in `semi_player_rs`. It reflects the state of the working tree after the decoder drain-queue and BGRA output changes.
+This document describes the current playback pipeline in `semi_player_rs`.
 
-For the overall architecture goals and boundaries, see [ARCHITECTURE.md](../../ARCHITECTURE.md).
+For synchronization rules, see [sync.md](sync.md).
+For higher-level system boundaries, see [ARCHITECTURE.md](../../ARCHITECTURE.md).
 
----
+## 1. Current Shape
 
-## 1. Overview
+Today the player is split into four cooperating parts:
 
 ```text
-FFmpeg input
-    │
-    ▼
-demux (read packet)
-    │
-    ▼
-decode (send_packet / receive_frame)
-    │
-    ▼
-pending_outputs queue (DecodedOutput buffer)
-    │
-    ▼
-next_decoded_output() ──► Pump loop
-    │
-    ├──► VideoFrame ──► swscale ──► BGRA ──► runtime video queue
-    │
-    └──► AudioFrame ──► runtime audio queue
-                │
-                ▼
-        audio >= 8 frames?
-                │
-                ▼
-        select_video_frame()
-                │
-                ▼
-        current_video_frame
-                │
-                ▼
-    FFI: get_current_video_frame_info()
-    FFI: copy_current_video_frame_bgra()
-                │
-                ▼
-            UI Host
+FFI / host commands
+  -> serialized player handle access
+  -> player runtime state
+  -> internal sync worker
+  -> FFmpeg decode supply
+  -> audio output backend
 ```
 
----
+Important current rule:
 
-## 2. Decode Layer: OpenedMedia
+- playback progression is now primarily driven by the internal sync worker
+- `semi_player_pump(...)` still exists and is still useful
+- decode supply is still executed synchronously through the pump path
+
+That means the player has already crossed the line from:
+
+```text
+host polling decides when frames advance
+```
+
+to:
+
+```text
+player-owned worker decides when playback should advance
+```
+
+but decode is not yet split into its own dedicated worker.
+
+## 2. End-to-End Flow
+
+```text
+open_media()
+  -> OpenedMedia
+  -> demux + decode
+  -> DecodedOutput queue
+  -> PlayerRuntime audio/video queues
+  -> AudioOutputController
+  -> AudioClock
+  -> VideoSyncService
+  -> current video frame
+  -> FFI frame read / copy
+  -> host presentation
+```
+
+## 3. Decode Supply
 
 File: [`semi_player_rs/src/core/media/opened.rs`](../../semi_player_rs/src/core/media/opened.rs)
 
-### 2.1 Internal Buffer
+`OpenedMedia` owns the FFmpeg-side state:
 
-`OpenedMedia` owns a `VecDeque<DecodedOutput>` called `pending_outputs`. It exists because FFmpeg's `avcodec_send_packet` / `avcodec_receive_frame` API is push-pull: one packet can produce zero, one, or many frames. The queue smooths this mismatch so that `next_decoded_output()` can still return exactly one item per call.
+- input context
+- selected audio/video decoders
+- scaling / resampling helpers
+- pending decoded outputs
 
-### 2.2 Entry Point
+The external-facing decode API is still:
 
 ```rust
 pub fn next_decoded_output(&mut self) -> Result<Option<DecodedOutput>, MediaOpenError>
 ```
 
-Logic on each call:
+Behavior:
 
-1. **Check queue** — if `pending_outputs` is not empty, pop front and return.
-2. **Draining** — if the file has reached EOF and decoders are being flushed, collect any remaining frames from the decoder internals. Once both video and audio decoders are fully drained, emit `DecodedOutput::EndOfStream`.
-3. **Read next packet** — if no packet is available, enter draining mode and loop back to step 2.
-4. **Route to decoder** — based on `stream_index`, send the packet to the video or audio decoder.
-5. **Collect frames** — after `send_packet`, loop `receive_frame` until `EAGAIN` and push all produced frames into `pending_outputs`.
-6. Return the first frame from `pending_outputs`.
+1. if decoded outputs are already buffered, return one
+2. otherwise read packets from FFmpeg
+3. send packets to the right decoder
+4. drain all available frames from that decoder
+5. queue normalized `DecodedOutput` items
+6. return one item to the caller
 
-### 2.3 Packet-to-Frames: No Longer One-to-One
+This layer does not own playback timing.
 
-Previous code returned at most one frame per packet. Current code uses `collect_video_frames` and `collect_audio_frames`:
+## 4. Runtime Queues
 
-```rust
-fn collect_video_frames(
-    decoder: &mut OpenedVideoDecoder,
-    outputs: &mut VecDeque<DecodedOutput>,
-    draining: bool,
-) -> Result<bool, MediaOpenError>
+File: [`semi_player_rs/src/core/player/runtime.rs`](../../semi_player_rs/src/core/player/runtime.rs)
+
+`PlayerRuntime` owns the short-lived playback buffers:
+
+- queued decoded audio frames
+- queued decoded video frames
+- the current promoted video frame
+- end-of-stream flag
+
+Current ownership split:
+
+- decode supply writes queued audio/video frames
+- video sync owns promotion into `current_video_frame`
+- FFI readers only observe current state
+
+## 5. Audio Path
+
+Relevant files:
+
+- [`semi_player_rs/src/audio/core/clock.rs`](../../semi_player_rs/src/audio/core/clock.rs)
+- [`semi_player_rs/src/audio/core/output_controller.rs`](../../semi_player_rs/src/audio/core/output_controller.rs)
+- [`semi_player_rs/src/audio/backends.rs`](../../semi_player_rs/src/audio/backends.rs)
+
+Current audio path:
+
+```text
+decoded AudioFrame
+  -> runtime audio queue
+  -> pull_audio_chunk()
+  -> AudioOutputController
+  -> CPAL backend
+  -> backend timing snapshot
+  -> AudioClock
 ```
 
-This loops `receive_frame` until `EAGAIN` (or `EOF` when draining), pushing every decoded frame into `outputs`. The boolean return indicates whether the decoder has fully drained.
+Important current behavior:
 
-### 2.4 EAGAIN Handling on Send
+- the player uses audio as the master clock
+- `AudioClock` prefers backend playback timing when available
+- the CPAL backend exposes:
+  - buffered frames
+  - pending device frames
+  - rendered frame counters
+  - audible frame counters
 
-If `send_packet` returns `EAGAIN`, the decoder's input buffer is full. The code now:
+This gives the player a better estimate of what the user is actually hearing.
 
-1. Calls `collect_*_frames` to drain already-decoded frames.
-2. Checks whether the output queue grew.
-3. If no frames were produced and the decoder is still full, propagates the error.
-4. Otherwise retries `send_packet`.
+## 6. Video Path
 
-### 2.5 Draining at End-of-File
+Relevant files:
 
-When `read_next_packet` returns `None`:
+- [`semi_player_rs/src/render/core/frame.rs`](../../semi_player_rs/src/render/core/frame.rs)
+- [`semi_player_rs/src/render/core/scheduler.rs`](../../semi_player_rs/src/render/core/scheduler.rs)
+- [`semi_player_rs/src/core/player/video_sync.rs`](../../semi_player_rs/src/core/player/video_sync.rs)
 
-1. `enter_draining_mode()` sends `send_eof()` to both video and audio decoders.
-2. `collect_drained_outputs()` repeatedly calls `collect_video_frames` and `collect_audio_frames` with `draining = true`.
-3. When both decoders report fully drained, `EndOfStream` is emitted once.
+Current video path:
 
----
-
-## 3. Video Frame Processing
-
-### 3.1 Pixel Format Conversion
-
-Every decoded `frame::Video` from FFmpeg is converted to **BGRA** before it reaches the rest of the pipeline.
-
-File: [`semi_player_rs/src/core/media/opened.rs`](../../semi_player_rs/src/core/media/opened.rs)
-
-```rust
-fn convert_video_frame_to_bgra(
-    decoder: &mut OpenedVideoDecoder,
-    input: &frame::Video,
-) -> Result<frame::Video, MediaOpenError>
+```text
+decoded video frame
+  -> swscale to BGRA
+  -> VideoFrame
+  -> runtime queued video frames
+  -> VideoScheduler decision
+  -> current video frame
+  -> FFI metadata / BGRA copy
+  -> host UI
 ```
 
-- Uses `ffmpeg_next::software::scaling` (`swscale`).
-- `OpenedVideoDecoder` caches a `ScalingContext`. The context is rebuilt only when the input format, width, or height changes.
-- Output format is hard-coded to `format::Pixel::BGRA` with bilinear scaling flags.
+The current frame-selection rules already support:
 
-### 3.2 VideoFrame Structure
+- keep current
+- present next
+- drop stale
+- wait for more frames
 
-File: [`semi_player_rs/src/render/core/frame.rs`](../../semi_player_rs/src/render/core/frame.rs)
+The effective end of the current frame prefers the next frame PTS when available.
 
-```rust
-pub struct VideoFrame {
-    pub pts_us: MediaTimeUs,
-    pub duration_us: Option<MediaTimeUs>,
-    pub width: u32,
-    pub height: u32,
-    pub pixel_format: PixelFormatCategory,  // currently always Bgra8
-    pub stride: usize,                      // bytes per row (including padding)
-    pub data: Vec<u8>,                      // full BGRA pixel data
-    pub is_key_frame: bool,
-}
+## 7. Internal Sync Worker
+
+Relevant files:
+
+- [`semi_player_rs/src/core/player/sync_worker.rs`](../../semi_player_rs/src/core/player/sync_worker.rs)
+- [`semi_player_rs/src/core/player/schedule.rs`](../../semi_player_rs/src/core/player/schedule.rs)
+
+This is the biggest current architectural change.
+
+The player now starts an internal sync worker when the handle is created.
+
+Worker loop:
+
+```text
+lock player
+  -> inspect current state
+  -> evaluate next pump deadline
+  -> if work is due, run pump_player(...)
+  -> otherwise sleep until deadline or explicit wake
+repeat
 ```
 
-The `data` field is populated by `copy_packed_plane`, which copies the first plane of the swscaled frame into a `Vec<u8>`.
+The worker is woken on:
 
----
+- play
+- pause
+- seek
+- reset
+- speed change
+- host presentation bias change
+- explicit external `semi_player_pump(...)`
 
-## 4. Pump Loop and Runtime Queues
+Current scheduling input combines:
 
-File: [`semi_player_rs/src/core/player/pump.rs`](../../semi_player_rs/src/core/player/pump.rs)
+- next video sync deadline
+- next audio refill deadline
+- immediate wake conditions such as:
+  - dirty sync state
+  - stale current video frame
+  - unstarted audio backend while playing
 
-### 4.1 Pump Entry
+## 8. Serialized FFI Access
 
-```rust
-pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode
-```
+Relevant file:
 
-Called by the host through `semi_player_pump`. It loops up to `max_iterations` (default 256), pulling decoded outputs and pushing them into the runtime.
+- [`semi_player_rs/src/core/player/handle.rs`](../../semi_player_rs/src/core/player/handle.rs)
 
-### 4.2 Frame Distribution
+The player handle now serializes mutable access through a single operation lock.
 
-```rust
-match output {
-    DecodedOutput::Video(frame) => player.runtime.push_video_frame(frame),
-    DecodedOutput::Audio(frame) => player.runtime.push_audio_frame(frame),
-    DecodedOutput::EndOfStream => player.runtime.mark_end_of_stream(),
-}
-```
+Why this exists:
 
-### 4.3 Early Exit Condition
+- the sync worker and FFI calls can both touch the same runtime state
+- first correctness priority is avoiding unsafe concurrent mutation
 
-```rust
-if player.runtime.audio_queue_len() >= TARGET_AUDIO_QUEUE_LEN {
-    select_video_frame(player);
-    if player.runtime.has_current_video_frame() {
-        break;
-    }
-}
-```
+Current rule:
 
-`TARGET_AUDIO_QUEUE_LEN` is `8`. When at least 8 audio frames are buffered and a current video frame has been selected, the pump stops to avoid over-decoding.
+- one player operation runs at a time
 
-### 4.4 Video Frame Selection
+That is intentionally conservative. It is a good first boundary before deeper task splitting.
 
-```rust
-fn select_video_frame(player: &mut SemiPlayerHandle) {
-    let target_video_time_us = add_media_time_us(
-        player.audio_clock.presentation_time_us(),
-        player.video_presentation_bias_us,
-    );
-    let _ = player
-        .runtime
-        .select_video_frame(&player.video_scheduler, target_video_time_us);
-}
-```
+## 9. Host Read Path
 
-- Audio clock is the master clock.
-- `video_presentation_bias_us` is a host-supplied display latency compensation.
-- `VideoScheduler` decides `KeepCurrent`, `PresentFrame`, `DropFrame`, or `NeedMoreFrames`.
+Relevant FFI:
 
----
+- `semi_player_get_playback_snapshot(...)`
+- `semi_player_get_audio_output_snapshot(...)`
+- `semi_player_get_current_video_frame_info(...)`
+- `semi_player_copy_current_video_frame_bgra(...)`
 
-## 5. Frame Output to Host
+The host currently interacts in two broad ways:
 
-File: [`semi_player_rs/src/lib.rs`](../../semi_player_rs/src/lib.rs)
+1. control:
+   - open
+   - play
+   - pause
+   - seek
+   - speed
+   - presentation bias
+2. observation:
+   - playback snapshot
+   - audio output snapshot
+   - current video frame metadata
+   - BGRA frame copy
 
-After `pump_player`, the host can query the currently selected video frame through two FFI functions:
+The host no longer needs to be the primary driver of frame advancement.
 
-### 5.1 Query Metadata
+## 10. Current Limitations
 
-```rust
-#[no_mangle]
-pub extern "C" fn semi_player_get_current_video_frame_info(
-    player: *mut SemiPlayerHandle,
-    out_frame_info: *mut SemiVideoFrameInfo,
-) -> c_int
-```
+The current pipeline is much healthier than the original pump-only prototype, but it is still not the final architecture.
 
-Returns:
-- `pts_ms`, `duration_ms`
-- `width`, `height`
-- `stride` — bytes per scanline
-- `pixel_format` — currently always `4` (`Bgra8`)
-- `byte_len` — total size of `data` in bytes
-- `flags` — `1` if key frame
+Main limitations:
 
-### 5.2 Copy Pixel Data
+- decode supply still runs inside `pump_player(...)`
+- audio output, decode supply, and sync decisions still share one serialized handle lock
+- video frame delivery is still CPU-copy BGRA, not GPU-native
+- subtitle timing and composition are not yet integrated into the worker-driven pipeline
+- smoke tooling still mixes diagnostic and host responsibilities more than a final host should
 
-```rust
-#[no_mangle]
-pub extern "C" fn semi_player_copy_current_video_frame_bgra(
-    player: *mut SemiPlayerHandle,
-    destination: *mut u8,
-    destination_len: u32,
-) -> c_int
-```
+## 11. Near-Term Direction
 
-Copies the full BGRA payload from `VideoFrame.data` into the host-provided buffer using `ptr::copy_nonoverlapping`. The host must allocate at least `byte_len` bytes.
+The most likely next architecture steps are:
 
-### 5.3 Typical Host Usage
-
-```csharp
-// C# / .NET example from smoke test
-EnsureOk(Native.semi_player_pump(player, 0), "semi_player_pump");
-EnsureOk(Native.semi_player_get_current_video_frame_info(player, out var info), "get_info");
-byte[] frameBytes = new byte[info.ByteLen];
-EnsureOk(Native.semi_player_copy_current_video_frame_bgra(player, frameBytes, info.ByteLen), "copy");
-// frameBytes now contains raw BGRA pixels
-```
-
----
-
-## 6. Responsibility Split
-
-| Component | Owns | Does Not Own |
-|---|---|---|
-| `OpenedMedia` | demux, decode, pixel conversion, internal frame queue | playback timing, synchronization |
-| `PumpPlayer` | calling decode, distributing frames, triggering selection | rendering, audio output |
-| `PlayerRuntime` | video/audio queues, current frame slot | decode logic |
-| `VideoScheduler` | frame keep/present/drop decision | clock source |
-| `AudioClock` | master playback time (currently software-based) | audio hardware output |
-| Host (FFI caller) | calling pump, measuring display latency, copying pixels, presenting | decode, sync rules |
-
----
-
-## 7. Known Limitations
-
-- Audio output backend is not implemented. `AudioClock` is currently a software projection (`Instant::now()` based), not tied to actual audio hardware playback position.
-- `queued_audio_frames` in `PlayerRuntime` are buffered but not consumed by any audio renderer.
-- Video frames are always converted to BGRA. No path yet for passing YUV/NV12 directly to a GPU backend.
-- The pump loop is single-threaded. Decoding happens synchronously inside `semi_player_pump`.
+1. split decode supply from the current pump path
+2. tighten notification flow between decode enqueue and sync wake-up
+3. add worker-vs-host diagnostic modes for objective sync measurement
+4. introduce real render backend and subtitle composition path

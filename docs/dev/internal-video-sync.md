@@ -1,413 +1,195 @@
 # Internal Video Sync System
 
-This document describes the planned internal video synchronization system for `semi_player_rs`.
+This document tracks the internal video sync subsystem in `semi_player_rs`.
 
-It is a forward-looking design note for the next stage of the player core.
+It started as a forward-looking design note.
+It should now be read as a "current architecture plus next steps" document.
 
-For the current synchronization model, see [sync.md](sync.md).
+For the user-facing sync contract, see [sync.md](sync.md).
 
-## Current Implementation Status
+## 1. What Is Already True
 
-The codebase is now partway through this migration.
+The player now has a real internal sync worker.
 
-Implemented today:
+That means these statements are now true:
 
-- a dedicated `VideoSyncService`
-- player-owned sync state:
-  - last snapshot
-  - next wake deadline
-  - dirty flag
-  - cumulative counters for tick, sync, present, drop, underflow, and late-hit events
-- deadline-aware `tick(...)` behavior:
-  - the host may still call `pump`
-  - but the sync subsystem now decides whether a real frame-selection pass is needed
+- video timing is player-owned
+- frame advancement is no longer primarily host-driven
+- the player computes its own wake deadlines
+- the player can wake itself and advance playback without waiting for UI polling
 
-Not implemented yet:
+This is the key architectural shift of the current stage.
 
-- a dedicated internal sync thread
-- queue-refill ownership inside the sync subsystem
-- active wake/sleep by the player without host-triggered entry
+## 2. Current Components
 
-## Why This Exists
+### `VideoSyncService`
 
-The current prototype still relies on an external `pump` loop to advance video frame selection.
+File:
 
-That has been useful for:
+- [`semi_player_rs/src/core/player/video_sync.rs`](../../semi_player_rs/src/core/player/video_sync.rs)
 
-- ABI bring-up
-- smoke testing
-- diagnostics
-- simple host integration
+Owns:
 
-However, it is not a strong long-term basis for high-quality playback timing.
+- target video time evaluation
+- frame correctness checks
+- present/drop decisions
+- next wake deadline evaluation
+- sync snapshots and counters
 
-Observed limitations:
+### `VideoSyncState`
 
-- video frame changes happen only when the host calls `semi_player_pump(...)`
-- host UI timing jitter leaks into video timing quality
-- higher `pump` rates improve mean `CoreSyncErr`, which proves timing quality is still partly tied to external polling
-- even with faster `pump` rates, positive sync-error spikes remain, which suggests the player core should own frame-switch timing more directly
+Current state includes:
 
-The core conclusion is:
+- last snapshot
+- dirty flag
+- tick count
+- sync count
+- keep count
+- present count
+- drop count
+- underflow count
+- late-hit count
 
-- `pump` is a valid control-plane API
-- `pump` should not remain the only timing-plane driver for video presentation
+### `PlayerScheduleService`
 
-## Design Goal
+File:
 
-Move from:
+- [`semi_player_rs/src/core/player/schedule.rs`](../../semi_player_rs/src/core/player/schedule.rs)
+
+Owns:
+
+- next video sync deadline
+- next audio refill deadline
+- next combined pump deadline
+- suggested wait interval
+
+This layer is what bridges:
+
+- video timing
+- audio refill timing
+- worker wake timing
+
+### `SyncWorker`
+
+File:
+
+- [`semi_player_rs/src/core/player/sync_worker.rs`](../../semi_player_rs/src/core/player/sync_worker.rs)
+
+Owns:
+
+- sleeping until next work
+- waking on control-path notifications
+- running `pump_player(...)` when playback work is due
+
+## 3. Current Execution Model
+
+Current high-level behavior:
 
 ```text
-host-driven polling decides when video state advances
+playback command
+  -> wake worker
+  -> worker evaluates schedule
+  -> worker pumps decode/sync/audio work
+  -> worker sleeps until next deadline
 ```
 
-to:
+This is intentionally still conservative:
 
-```text
-player-owned video sync loop decides when video state advances
-```
+- decode supply is still inside the pump path
+- one operation lock currently serializes worker activity and FFI activity
 
-while preserving:
+That is acceptable for the first worker-backed stage.
 
-- audio as the master clock
-- host-supplied presentation offset
-- portable Rust core behavior
-- a simple external `pump` API for tests and hosts
+## 4. Wake Conditions
 
-## Scope
+The worker currently reevaluates when:
 
-This design is about:
+- play starts or resumes
+- pause occurs
+- seek occurs
+- reset occurs
+- speed changes
+- host presentation bias changes
+- explicit host pump happens
 
-- internal video timing
-- current-frame promotion
-- stale-frame dropping
-- sync diagnostics
-- how the host reads presentation results
+It also forces immediate work when:
 
-This design is not yet about:
+- sync state is dirty
+- current video is already stale
+- a queued video frame exists but no current frame has been promoted
+- audio is playing but the backend has not actually started yet
 
-- GPU present callbacks
-- subtitle timing integration details
-- adaptive A/V drift correction against device feedback beyond the existing audio-clock model
-- full render-thread architecture
-
-## Responsibility Split
+## 5. Responsibility Split
 
 ### Player Core
 
-The Rust core should own:
+Now owns:
 
-- the audio master clock
-- video frame queue inspection
-- the decision of which frame is current
-- when to wake up and reevaluate frame choice
-- sync error measurement
-- late-frame dropping policy
+- audio master clock
+- frame validity rules
+- current frame promotion
+- wake scheduling
+- core sync diagnostics
 
 ### Host
 
-The host should own:
+Still owns:
 
-- copying or presenting the current frame
-- measuring host-side display latency
-- feeding host presentation offset back into the player
-- user input and application state
+- frame copying / presentation
+- host display-latency estimation
+- feeding presentation bias back into the player
+- application/UI event handling
 
 ### `pump`
 
-`pump` should remain useful for:
+Still useful for:
 
 - decode supply
-- command processing
-- state refresh for simple hosts
-- headless tests and diagnostics
+- diagnostics
+- explicit host-assisted stepping
 
-But `pump` should stop being the only mechanism that advances video presentation state.
+But no longer the sole driver of playback progression.
 
-## Target Architecture
+## 6. What This Solved
 
-```text
-host/UI
-  -> control commands
-  -> frame reads
+Compared with the original host-polling prototype, this stage solved:
 
-player core
-  -> command state
-  -> decode/buffer path
-  -> audio output path
-  -> audio clock
-  -> internal video sync service
-       -> current frame selection
-       -> stale frame dropping
-       -> wake-up scheduling
-```
+- frame advancement waiting on host timer cadence
+- strong dependence of sync quality on fixed UI polling intervals
+- stale-frame accumulation when the host failed to call pump in time
 
-## Core Model
+The specific failure mode that was recently fixed:
 
-Audio remains the master clock.
+- worker waiting on a future deadline even though the current frame was already stale
 
-The video sync system computes:
+The fix was to treat stale video, dirty state, and unstarted audio as immediate work.
 
-```text
-target_video_time = audio_presentation_time + host_presentation_offset
-```
+## 7. What Is Still Missing
 
-The sync system then decides:
+This is not yet the final playback architecture.
 
-- whether the current frame is still valid
-- whether the next frame should become current
-- whether one or more queued frames are already stale and should be dropped
-- when the next sync reevaluation should happen
+Still missing:
 
-## Key Idea
+- decode worker separate from the pump path
+- explicit queue-to-worker notifications from decode enqueue
+- subtitle timing integration into the same worker-owned progression model
+- richer worker diagnostics over FFI
+- finer-grained locking / ownership than the current single operation lock
 
-The internal sync system should be deadline-driven.
+## 8. Current Risks
 
-Instead of waiting for the host to ask "what frame should I show now?", the player should already know:
+Known current risks:
 
-- what frame is current
-- when that will stop being true
-- when the next reevaluation should happen
+- decode, sync, and FFI reads still share one coarse serialization boundary
+- heavy host frame-copy paths can still interfere with worker responsiveness
+- the current worker pumps more than just video sync, so future separation will matter for scalability
 
-That lets the core behave like a real player rather than a passive polling helper.
+## 9. Next Steps
 
-## Proposed Components
+The most useful next implementation steps are:
 
-### 1. `VideoSyncService`
-
-A dedicated internal service responsible for video-timing decisions.
-
-Possible module direction:
-
-```text
-semi_player_rs/src/core/player/video_sync.rs
-```
-
-Primary responsibilities:
-
-- read target timeline from the audio clock
-- examine `current_video_frame` and queued video frames
-- promote the next frame when needed
-- drop stale frames when needed
-- calculate the next wake-up deadline
-- record sync diagnostics
-
-### 2. `VideoSyncState`
-
-Internal state owned by the sync service.
-
-Likely fields:
-
-- current frame handle or owned frame
-- last sync target time
-- last sync error
-- next wake-up deadline
-- counters:
-  - present count
-  - keep count
-  - drop count
-  - late count
-  - underflow count
-
-### 3. `VideoSyncDiagnostics`
-
-A stable diagnostics surface for debugging and tests.
-
-Likely fields:
-
-- `core_av_delta_us`
-- `core_sync_error_us`
-- `target_video_time_us`
-- `current_frame_pts_us`
-- `current_frame_effective_end_us`
-- `next_frame_pts_us`
-- `drop_count`
-- `late_count`
-- `wake_count`
-
-## Threading Direction
-
-The long-term direction should be:
-
-- a dedicated internal video sync thread or task
-
-The first implementation does not need to be complex.
-
-A simple first step is enough:
-
-- one background worker
-- one wake/sleep loop
-- one shared state boundary for reads and writes
-
-The worker should wake:
-
-- when play starts
-- when seek happens
-- when speed changes
-- when new video frames arrive
-- when the next frame deadline is reached
-
-## Wake-Up Strategy
-
-The sync worker should not spin constantly.
-
-It should:
-
-1. compute the current target video time
-2. decide current/present/drop
-3. compute the next interesting moment
-4. sleep until that time or until externally notified
-
-The next interesting moment is usually one of:
-
-- current frame effective end
-- next candidate frame PTS
-- immediate wake because the queue changed
-- immediate wake because a control command changed timing state
-
-## Effective Frame End
-
-The current frame should not be considered expired using only its own decoded duration when a better boundary is available.
-
-Preferred rule:
-
-- if the next frame has a valid future PTS, that PTS is the stronger end boundary
-- otherwise use the current frame's own duration-derived end time
-- if neither is available, keep the frame until better information arrives
-
-This matches the recent correction already made to `CoreSyncErr` semantics.
-
-## Relation to Current Runtime
-
-Today `PlayerRuntime` owns:
-
-- queued audio frames
-- queued video frames
-- current video frame
-
-That ownership is acceptable for the prototype, but once a dedicated sync worker exists, access must be tightened.
-
-The important rule should become:
-
-- the video sync service owns writes to `current_video_frame`
-- decode supply owns writes to the queued video frame buffer
-- read-side consumers only observe snapshots or guarded references
-
-## Interaction With Commands
-
-The internal sync service must react correctly to:
-
-### `play`
-
-- start or resume the sync loop
-- compute deadlines against the running audio clock
-
-### `pause`
-
-- stop advancing the current frame
-- preserve the current frame for display
-- stop periodic wake-ups except for command-driven wakes
-
-### `seek`
-
-- clear stale timing assumptions
-- flush or rebase video state as needed
-- force immediate reevaluation after new decode supply appears
-
-### `set_speed`
-
-- force immediate timing reevaluation
-- recompute deadlines against the new clock behavior
-
-### `reset`
-
-- stop the worker
-- clear current and queued timing state
-
-## Interaction With Decode Supply
-
-The sync loop does not decode.
-
-Decode supply continues to happen through the existing pipeline.
-
-But the sync loop must be notified when:
-
-- the video queue transitions from empty to non-empty
-- a new candidate frame arrives earlier than the previously known next-deadline assumption
-
-That means decode supply should eventually signal the sync worker when new video frames are pushed.
-
-## Host Read Model
-
-The host should continue to read:
-
-- the current video frame snapshot
-- playback diagnostics
-
-The host should not need to tell the player when to switch frames.
-
-That is the main architectural improvement.
-
-## Metrics of Success
-
-After introducing the internal video sync system, we should expect:
-
-- lower dependence on host `pump` frequency
-- smaller positive `CoreSyncErr` spikes
-- more stable frame-switch timing under UI load
-- better seek recovery behavior
-
-More concretely:
-
-- `CoreSyncErr` mean should become less sensitive to external `pump` rate
-- positive outliers should shrink
-- headless and UI-hosted runs should look more similar
-
-## Migration Plan
-
-### Phase 1: Documentation and state cleanup
-
-- document the internal sync design
-- align terminology around host presentation offset
-- keep current diagnostics in place
-
-### Phase 2: Extract sync ownership
-
-- isolate video-timing logic behind a dedicated module
-- stop scattering current-frame promotion logic across unrelated code paths
-
-### Phase 3: Add internal sync worker
-
-- create a background sync loop
-- let it own current-frame promotion and stale-frame dropping
-- keep decode supply external for now
-
-### Phase 4: Reduce timing dependence on `pump`
-
-- keep `pump` for decode and command integration
-- remove its role as the only frame-advance trigger
-
-### Phase 5: Tune policy
-
-- refine late/early thresholds
-- tune wake-up policy
-- validate `CoreSyncErr` behavior with the existing sweep tooling
-
-## Open Questions
-
-- should the first internal sync worker use a plain thread, or a shared player-runtime worker model?
-- should video frame reads expose snapshots, handles, or copied frame state?
-- how should subtitle timing hook into the same internal sync boundary?
-- when should decode supply actively notify the sync worker versus letting the worker poll with short sleeps?
-- should the player eventually expose explicit sync diagnostics over FFI rather than bundling them into the playback snapshot?
-
-## Recommended Next Implementation Step
-
-The next code step should be:
-
-1. add a dedicated `video_sync` module under `core/player/`
-2. move frame-promotion rules behind that module
-3. define the worker-facing state and notification points
-4. keep the first implementation intentionally small
-
-That is the smallest useful step toward making video synchronization a true player-owned subsystem.
+1. measure worker-driven sync quality directly
+2. split decode supply from the current pump path
+3. reduce coarse lock scope where safe
+4. integrate subtitle timing into the same worker-owned timeline
+5. prepare real render backend ownership boundaries
