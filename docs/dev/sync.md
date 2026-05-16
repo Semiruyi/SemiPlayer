@@ -144,6 +144,9 @@ Whether decode should actually run is now normalized through a shared decode-sch
 so `idle` / unloaded states do not spuriously wake decode work.
 The decode worker now polls FFmpeg outside the main player lock and only re-enters the player
 lock to apply decoded outputs, guarded by a media-generation check.
+Playback advancement now follows the same broad idea: the sync worker captures a playback plan
+under lock, executes audio-output work outside the main player lock, and then re-enters to commit
+clock, runtime, and video-sync updates under a playback phase lock.
 
 ## 7. Pump Role Now
 
@@ -197,8 +200,7 @@ A healthy current run usually means:
 
 The current model is much stronger than the original host-pump prototype, but there are still limits:
 
-- decode supply is now worker-owned, but still synchronous under the same serialized player lock
-- the sync worker and FFI calls still serialize on one operation lock
+- decode output application and playback-state commit still serialize on the player handle
 - end-to-end display timing is still partly host-dependent
 - subtitle timing has not yet been folded into the same worker-owned progression path
 

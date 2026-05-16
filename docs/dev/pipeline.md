@@ -184,8 +184,12 @@ Worker loop:
 lock player
   -> inspect current state
   -> evaluate schedule
-  -> if Playing:
-       run timed playback / decode work and sleep until deadline
+  -> if playback should advance:
+       capture a playback plan
+unlock player
+  -> execute audio-output work outside the main player lock
+lock player
+  -> finish playback advancement and video sync
   -> if Ready or Paused:
        run one stabilization pass if work is still pending
        then stop active waiting
@@ -270,6 +274,9 @@ Relevant file:
 - [`semi_player_rs/src/core/player/handle.rs`](../../semi_player_rs/src/core/player/handle.rs)
 
 The player handle now serializes mutable access through a single operation lock.
+Playback advancement also uses a separate phase lock so host mutations such as open, seek, reset,
+or manual pump do not interleave with a sync-worker playback step while it is executing outside the
+main player lock.
 
 Why this exists:
 
@@ -322,8 +329,8 @@ Main limitations:
 
 - runtime queue mutation and FFmpeg media control are now split, but media open/seek/reset still coordinate through the player handle
 - decode output application still serializes with other player mutations
-- audio output access is now independently lockable, but playback advancement still runs under the sync worker's player-locked execution path
-- audio output, decode supply, and sync decisions still share one serialized handle lock
+- audio output access is now independently lockable, and playback advancement now executes its audio-output phase outside the main player lock
+- runtime/audio/video commit still serializes back through the player handle
 - video frame delivery is still CPU-copy BGRA, not GPU-native
 - subtitle timing and composition are not yet integrated into the worker-driven pipeline
 - smoke tooling still mixes diagnostic and host responsibilities more than a final host should

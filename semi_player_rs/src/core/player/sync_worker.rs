@@ -3,7 +3,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
-use crate::core::player::execution::advance_playback;
+use crate::core::player::execution::{
+    execute_playback_plan, finish_playback_advance, plan_playback_advance,
+};
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
 use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
 use crate::util::time::MediaTimeUs;
@@ -70,7 +72,32 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
         };
 
         match action {
-            WorkerAction::ContinueSoon => continue,
+            WorkerAction::AdvancePlayback { phase_lock } => {
+                let _phase_guard = phase_lock.lock().unwrap();
+                let plan = unsafe {
+                    let player_ptr = player_addr as *mut SemiPlayerHandle;
+                    SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::SyncWorker, |player| {
+                        if !player.is_media_loaded() {
+                            None
+                        } else {
+                            Some(plan_playback_advance(player))
+                        }
+                    })
+                };
+
+                let Some(plan) = plan else {
+                    continue;
+                };
+
+                let result = execute_playback_plan(&plan);
+                unsafe {
+                    let player_ptr = player_addr as *mut SemiPlayerHandle;
+                    SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::SyncWorker, |player| {
+                        finish_playback_advance(player, plan, result);
+                    });
+                }
+                continue;
+            }
             WorkerAction::WaitFor(duration) => {
                 if wait_for_signal(&control, Some(duration)) {
                     break;
@@ -109,8 +136,9 @@ fn execute_worker_step(player: &mut SemiPlayerHandle, mode: WorkerMode) -> Worke
     match scheduled_work {
         ScheduledWork::AdvanceAndDecode { .. } | ScheduledWork::AdvancePlayback { .. } => {
             observe_worker_deadline_slip(player, deadline_us);
-            advance_playback(player);
-            WorkerAction::ContinueSoon
+            WorkerAction::AdvancePlayback {
+                phase_lock: player.playback_phase_lock(),
+            }
         }
         ScheduledWork::DecodeSupply => {
             player.notify_decode_worker();
@@ -175,7 +203,7 @@ fn observe_worker_deadline_slip(player: &SemiPlayerHandle, deadline_us: Option<M
 }
 
 enum WorkerAction {
-    ContinueSoon,
+    AdvancePlayback { phase_lock: Arc<Mutex<()>> },
     WaitFor(Duration),
     WaitIndefinitely,
 }

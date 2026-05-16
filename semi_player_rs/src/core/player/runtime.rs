@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::audio::core::frame::AudioFrame;
+use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::audio::core::output::AudioOutputChunk;
 use crate::render::core::frame::VideoFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
@@ -268,6 +268,61 @@ impl PlayerRuntime {
         }
     }
 
+    pub fn pull_audio_chunks(
+        &mut self,
+        requested_frame_count: usize,
+        max_chunks: usize,
+    ) -> Vec<AudioOutputChunk> {
+        if requested_frame_count == 0 || max_chunks == 0 {
+            return Vec::new();
+        }
+
+        let mut chunks = Vec::with_capacity(max_chunks);
+        for _ in 0..max_chunks {
+            let Some(chunk) = self.pull_audio_chunk(requested_frame_count) else {
+                break;
+            };
+            chunks.push(chunk);
+        }
+
+        chunks
+    }
+
+    pub fn restore_audio_chunks_front(&mut self, chunks: Vec<AudioOutputChunk>) {
+        for chunk in chunks.into_iter().rev() {
+            if chunk.is_empty() {
+                continue;
+            }
+
+            let Some(format) = chunk.format() else {
+                continue;
+            };
+
+            let duration_us = if chunk.frame_count == 0 || format.sample_rate == 0 {
+                None
+            } else {
+                Some(
+                    (chunk.frame_count as i64)
+                        .saturating_mul(1_000_000)
+                        .saturating_div(i64::from(format.sample_rate)),
+                )
+            };
+
+            self.queued_audio_frames.push_front(AudioFrame {
+                pts_us: chunk.pts_us.unwrap_or(0),
+                duration_us,
+                sample_rate: format.sample_rate,
+                channels: format.channels,
+                sample_count: chunk.frame_count,
+                sample_format: NORMALIZED_AUDIO_FORMAT,
+                is_planar: false,
+                data: chunk.samples,
+            });
+        }
+
+        self.queued_audio_sample_offset = 0;
+    }
+
     pub fn select_video_frame(
         &mut self,
         scheduler: &VideoScheduler,
@@ -513,6 +568,47 @@ mod tests {
         assert_eq!(remaining.frame_count, 2);
         assert_eq!(remaining.samples, vec![2.0, 2.1, 3.0, 3.1]);
         assert_eq!(runtime.audio_queue_len(), 0);
+    }
+
+    #[test]
+    fn pull_audio_chunks_can_be_restored_without_losing_order() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 0,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 2,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![0.0, 0.1, 1.0, 1.1],
+        });
+        runtime.push_audio_frame(AudioFrame {
+            pts_us: 10_000,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 2,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![2.0, 2.1, 3.0, 3.1],
+        });
+
+        let chunks = runtime.pull_audio_chunks(1, 4);
+
+        assert_eq!(chunks.len(), 4);
+        assert_eq!(runtime.audio_queue_len(), 0);
+
+        runtime.restore_audio_chunks_front(chunks);
+
+        let restored = runtime.pull_audio_chunk(4).expect("restored chunk");
+        assert_eq!(restored.pts_us, Some(0));
+        assert_eq!(restored.frame_count, 4);
+        assert_eq!(
+            restored.samples,
+            vec![0.0, 0.1, 1.0, 1.1, 2.0, 2.1, 3.0, 3.1]
+        );
     }
 
     #[test]

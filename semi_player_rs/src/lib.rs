@@ -37,6 +37,19 @@ fn with_player_locked<T>(
     Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
 }
 
+fn with_playback_coordinated_player_locked<T>(
+    player: *mut SemiPlayerHandle,
+    f: impl FnOnce(&mut SemiPlayerHandle) -> T,
+) -> Result<T, ResultCode> {
+    if player.is_null() {
+        return Err(SEMI_E_INVALID_ARG);
+    }
+
+    let phase_lock = unsafe { (&*player).playback_phase_lock() };
+    let _phase_guard = phase_lock.lock().unwrap();
+    Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
+}
+
 fn cstr_to_string(input: *const c_char) -> Result<String, c_int> {
     if input.is_null() {
         return Err(SEMI_E_INVALID_ARG);
@@ -345,7 +358,7 @@ pub extern "C" fn semi_player_open(
         }
     };
 
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         player.bump_media_generation();
         player.opened_media = Some(SharedOpenedMedia::new(opened_media));
         player.reset_runtime_state();
@@ -360,7 +373,7 @@ pub extern "C" fn semi_player_open(
 
 #[no_mangle]
 pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -381,7 +394,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -406,7 +419,7 @@ pub extern "C" fn semi_player_seek(
     position_ms: i64,
     _exact: c_int,
 ) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -444,7 +457,7 @@ pub extern "C" fn semi_player_seek(
 
 #[no_mangle]
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         player.bump_media_generation();
         player.clear_media();
         player.set_state(PlayerState::Idle);
@@ -458,7 +471,7 @@ pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
 
 #[no_mangle]
 pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_double) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -482,7 +495,7 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     player: *mut SemiPlayerHandle,
     bias_ms: i32,
 ) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
         VideoSyncService::mark_dirty(player);
         player.notify_workers();
@@ -498,7 +511,7 @@ pub extern "C" fn semi_player_set_subtitle_visible(
     player: *mut SemiPlayerHandle,
     visible: c_int,
 ) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -641,7 +654,7 @@ pub extern "C" fn semi_player_debug_decode_next(
 
 #[no_mangle]
 pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
-    match with_player_locked(player, |player| {
+    match with_playback_coordinated_player_locked(player, |player| {
         let code = pump_player(player, max_iterations);
         player.notify_workers();
         code

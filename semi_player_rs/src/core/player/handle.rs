@@ -1,6 +1,6 @@
 use std::ffi::c_double;
 use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::api::types::PlayerState;
@@ -60,6 +60,7 @@ pub(crate) enum LockOwner {
 pub struct SemiPlayerHandle {
     state: AtomicU32,
     op_lock: Mutex<()>,
+    playback_phase_lock: Arc<Mutex<()>>,
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
@@ -80,6 +81,7 @@ impl SemiPlayerHandle {
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
+            playback_phase_lock: Arc::new(Mutex::new(())),
             sync_worker: None,
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
@@ -194,6 +196,10 @@ impl SemiPlayerHandle {
 
     pub fn diagnostics_snapshot(&self) -> PlayerDiagnosticsSnapshot {
         self.diagnostics.snapshot()
+    }
+
+    pub fn playback_phase_lock(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.playback_phase_lock)
     }
 
     pub fn media_generation(&self) -> u64 {
