@@ -39,7 +39,7 @@ impl VideoScheduler {
                 }
             }
             (Some(current), Some(candidate)) => {
-                if frame_covers_time(current, target_time_us) {
+                if current_frame_covers_time(current, Some(candidate), target_time_us) {
                     return VideoScheduleDecision::KeepCurrent;
                 }
 
@@ -71,6 +71,37 @@ fn frame_covers_time(frame: &VideoFrame, target_time_us: MediaTimeUs) -> bool {
     match frame.end_time_us() {
         Some(end_time_us) => target_time_us < end_time_us,
         None => true,
+    }
+}
+
+fn current_frame_covers_time(
+    current_frame: &VideoFrame,
+    next_frame: Option<&VideoFrame>,
+    target_time_us: MediaTimeUs,
+) -> bool {
+    if target_time_us < current_frame.pts_us {
+        return false;
+    }
+
+    match effective_frame_end_time_us(current_frame, next_frame) {
+        Some(end_time_us) => target_time_us < end_time_us,
+        None => true,
+    }
+}
+
+fn effective_frame_end_time_us(
+    current_frame: &VideoFrame,
+    next_frame: Option<&VideoFrame>,
+) -> Option<MediaTimeUs> {
+    let next_pts_us = next_frame
+        .map(|frame| frame.pts_us)
+        .filter(|next_pts_us| *next_pts_us > current_frame.pts_us);
+
+    match (current_frame.end_time_us(), next_pts_us) {
+        (Some(current_end_us), Some(next_pts_us)) => Some(current_end_us.max(next_pts_us)),
+        (Some(current_end_us), None) => Some(current_end_us),
+        (None, Some(next_pts_us)) => Some(next_pts_us),
+        (None, None) => None,
     }
 }
 
@@ -111,5 +142,16 @@ mod tests {
         let scheduler = VideoScheduler::new();
         let decision = scheduler.decide(40_000, None, Some(&frame(10_000, Some(10_000))));
         assert_eq!(decision, VideoScheduleDecision::DropFrame);
+    }
+
+    #[test]
+    fn current_frame_stays_valid_until_next_frame_pts() {
+        let scheduler = VideoScheduler::new();
+        let current = frame(0, Some(33_000));
+        let next = frame(41_000, Some(41_000));
+
+        let decision = scheduler.decide(38_000, Some(&current), Some(&next));
+
+        assert_eq!(decision, VideoScheduleDecision::KeepCurrent);
     }
 }

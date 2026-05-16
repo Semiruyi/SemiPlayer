@@ -76,6 +76,10 @@ impl PlayerRuntime {
         self.current_video_frame.as_ref()
     }
 
+    pub fn next_video_frame(&self) -> Option<&VideoFrame> {
+        self.queued_video_frames.front()
+    }
+
     pub fn has_current_video_frame(&self) -> bool {
         self.current_video_frame.is_some()
     }

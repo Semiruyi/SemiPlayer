@@ -118,6 +118,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
 
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let current_video_frame = player.runtime.current_video_frame();
+    let next_video_frame = player.runtime.next_video_frame();
     let last_audio_frame = player.runtime.last_audio_frame();
     let audio_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
     let host_presentation_offset_ms =
@@ -132,7 +133,9 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .map(|frame| audio_position_ms - us_to_ms(frame.pts_us))
         .unwrap_or(0);
     let core_sync_error_ms = current_video_frame
-        .map(|frame| compute_core_sync_error_ms(frame, player.audio_clock.presentation_time_us()))
+        .map(|frame| {
+            compute_core_sync_error_ms(frame, next_video_frame, player.audio_clock.presentation_time_us())
+        })
         .unwrap_or(0);
     let expected_end_to_end_av_delta_ms =
         core_av_delta_ms - i64::from(host_presentation_offset_ms);
@@ -159,12 +162,16 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     }
 }
 
-fn compute_core_sync_error_ms(frame: &VideoFrame, target_time_us: i64) -> i64 {
+fn compute_core_sync_error_ms(
+    frame: &VideoFrame,
+    next_frame: Option<&VideoFrame>,
+    target_time_us: i64,
+) -> i64 {
     if target_time_us < frame.pts_us {
         return us_to_ms(target_time_us - frame.pts_us);
     }
 
-    let Some(frame_end_us) = frame.end_time_us() else {
+    let Some(frame_end_us) = effective_video_frame_end_us(frame, next_frame) else {
         return 0;
     };
 
@@ -173,6 +180,47 @@ fn compute_core_sync_error_ms(frame: &VideoFrame, target_time_us: i64) -> i64 {
     }
 
     0
+}
+
+fn effective_video_frame_end_us(frame: &VideoFrame, next_frame: Option<&VideoFrame>) -> Option<i64> {
+    let next_pts_us = next_frame
+        .map(|frame| frame.pts_us)
+        .filter(|next_pts_us| *next_pts_us > frame.pts_us);
+
+    match (frame.end_time_us(), next_pts_us) {
+        (Some(current_end_us), Some(next_pts_us)) => Some(current_end_us.max(next_pts_us)),
+        (Some(current_end_us), None) => Some(current_end_us),
+        (None, Some(next_pts_us)) => Some(next_pts_us),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_core_sync_error_ms;
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+
+    fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
+        VideoFrame {
+            pts_us,
+            duration_us,
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        }
+    }
+
+    #[test]
+    fn core_sync_error_uses_next_frame_pts_as_effective_end() {
+        let current = frame(0, Some(33_000));
+        let next = frame(41_000, Some(41_000));
+
+        assert_eq!(compute_core_sync_error_ms(&current, Some(&next), 38_000), 0);
+        assert_eq!(compute_core_sync_error_ms(&current, Some(&next), 48_000), 7);
+    }
 }
 
 fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
