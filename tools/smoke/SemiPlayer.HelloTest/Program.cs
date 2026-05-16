@@ -60,6 +60,7 @@ internal static class Program
         uint sweepIterations = DefaultPumpSweepIterations;
         string? sweepLogPath = null;
         PumpSweepMode sweepMode = PumpSweepMode.Fixed;
+        PumpSweepDriver sweepDriver = PumpSweepDriver.Ui;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -143,6 +144,18 @@ internal static class Program
                 continue;
             }
 
+            if (args[i] == "--pump-sweep-driver")
+            {
+                if (i + 1 >= args.Length || !TryParsePumpSweepDriver(args[i + 1], out sweepDriver))
+                {
+                    error = "Expected one of: ui, worker, both after --pump-sweep-driver.";
+                    return false;
+                }
+
+                i++;
+                continue;
+            }
+
             if (string.IsNullOrWhiteSpace(mediaPath))
             {
                 mediaPath = args[i];
@@ -151,7 +164,7 @@ internal static class Program
 
         if (string.IsNullOrWhiteSpace(mediaPath))
         {
-            error = "Usage: dotnet run --project tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj -- <media-file> [--auto-close-ms 1500] [--pump-sweep-intervals-ms 15,12,10,8,6] [--pump-sweep-segment-ms 3000] [--pump-sweep-iterations 32] [--pump-sweep-mode fixed|adaptive|both] [--pump-sweep-log tools/smoke/pump_sweep.log]";
+            error = "Usage: dotnet run --project tools/smoke/SemiPlayer.HelloTest/SemiPlayer.HelloTest.csproj -- <media-file> [--auto-close-ms 1500] [--pump-sweep-intervals-ms 15,12,10,8,6] [--pump-sweep-segment-ms 3000] [--pump-sweep-iterations 32] [--pump-sweep-mode fixed|adaptive|both] [--pump-sweep-driver ui|worker|both] [--pump-sweep-log tools/smoke/pump_sweep.log]";
             return false;
         }
 
@@ -162,7 +175,8 @@ internal static class Program
                 sweepSegmentMs,
                 sweepIterations,
                 sweepLogPath,
-                sweepMode);
+                sweepMode,
+                sweepDriver);
             options.AutoCloseMs = null;
         }
 
@@ -211,6 +225,25 @@ internal static class Program
                 return true;
             default:
                 mode = PumpSweepMode.Fixed;
+                return false;
+        }
+    }
+
+    private static bool TryParsePumpSweepDriver(string raw, out PumpSweepDriver driver)
+    {
+        switch (raw.Trim().ToLowerInvariant())
+        {
+            case "ui":
+                driver = PumpSweepDriver.Ui;
+                return true;
+            case "worker":
+                driver = PumpSweepDriver.Worker;
+                return true;
+            case "both":
+                driver = PumpSweepDriver.Both;
+                return true;
+            default:
+                driver = PumpSweepDriver.Ui;
                 return false;
         }
     }
@@ -829,6 +862,7 @@ internal sealed class PlaybackDiagnostics
     {
         return new PumpSweepDiagnosticsSnapshot(
             "ui",
+            "ui",
             PumpsPerSecond,
             CoreSyncErrorMeanMs,
             CoreSyncErrorAbsMeanMs,
@@ -937,13 +971,15 @@ internal sealed class PumpSweepOptions
         int segmentMs,
         uint tickPumpIterations,
         string? logPath,
-        PumpSweepMode mode)
+        PumpSweepMode mode,
+        PumpSweepDriver driver)
     {
         TickIntervalsMs = tickIntervalsMs;
         SegmentMs = segmentMs;
         TickPumpIterations = tickPumpIterations;
         LogPath = logPath;
         Mode = mode;
+        Driver = driver;
     }
 
     public List<double> TickIntervalsMs { get; }
@@ -955,6 +991,8 @@ internal sealed class PumpSweepOptions
     public string? LogPath { get; }
 
     public PumpSweepMode Mode { get; }
+
+    public PumpSweepDriver Driver { get; }
 }
 
 internal enum PumpSweepMode
@@ -964,8 +1002,16 @@ internal enum PumpSweepMode
     Both,
 }
 
+internal enum PumpSweepDriver
+{
+    Ui,
+    Worker,
+    Both,
+}
+
 internal readonly record struct PumpSweepDiagnosticsSnapshot(
     string Mode,
+    string Driver,
     double PumpsPerSecond,
     double CoreSyncErrorMeanMs,
     double CoreSyncErrorAbsMeanMs,
@@ -994,30 +1040,34 @@ internal static class PumpSweepRunner
 
             StringBuilder summary = new();
             summary.AppendLine($"Pump sweep for {mediaPath}");
-            summary.AppendLine($"SegmentMs={options.SegmentMs} WarmupMs={WarmupMs} TickPumpIterations={options.TickPumpIterations} Mode={options.Mode}");
+            summary.AppendLine($"SegmentMs={options.SegmentMs} WarmupMs={WarmupMs} TickPumpIterations={options.TickPumpIterations} Mode={options.Mode} Driver={options.Driver}");
 
             foreach (double intervalMs in options.TickIntervalsMs)
             {
-                foreach (PumpSweepMode mode in ExpandModes(options.Mode))
+                foreach (PumpSweepDriver driver in ExpandDrivers(options.Driver))
                 {
-                    EnsureOk(Native.semi_player_seek(player, startPositionMs, 0), "semi_player_seek");
-                    EnsureOk(Native.semi_player_pump(player, StartupPumpIterations), "semi_player_pump");
-                    EnsureOk(Native.semi_player_play(player), "semi_player_play");
+                    foreach (PumpSweepMode mode in ExpandModes(options.Mode))
+                    {
+                        EnsureOk(Native.semi_player_seek(player, startPositionMs, 0), "semi_player_seek");
+                        EnsureOk(Native.semi_player_pump(player, StartupPumpIterations), "semi_player_pump");
+                        EnsureOk(Native.semi_player_play(player), "semi_player_play");
 
-                    PumpSweepDiagnosticsSnapshot result = RunSegment(
-                        player,
-                        intervalMs,
-                        options.TickPumpIterations,
-                        options.SegmentMs,
-                        WarmupMs,
-                        mode);
-                    string line =
-                        $"mode={result.Mode} interval={intervalMs:F1}ms iterations={options.TickPumpIterations} pumpRate={result.PumpsPerSecond:F1}/s " +
-                        $"coreSyncMean={result.CoreSyncErrorMeanMs:F2}ms absMean={result.CoreSyncErrorAbsMeanMs:F2}ms " +
-                        $"maxPos={result.CoreSyncErrorMaxPositiveMs}ms maxNeg={result.CoreSyncErrorMaxNegativeMs}ms " +
-                        $"samples={result.SampleCount}";
-                    Console.WriteLine(line);
-                    summary.AppendLine(line);
+                        PumpSweepDiagnosticsSnapshot result = RunSegment(
+                            player,
+                            intervalMs,
+                            options.TickPumpIterations,
+                            options.SegmentMs,
+                            WarmupMs,
+                            mode,
+                            driver);
+                        string line =
+                            $"driver={result.Driver} mode={result.Mode} interval={intervalMs:F1}ms iterations={options.TickPumpIterations} pumpRate={result.PumpsPerSecond:F1}/s " +
+                            $"coreSyncMean={result.CoreSyncErrorMeanMs:F2}ms absMean={result.CoreSyncErrorAbsMeanMs:F2}ms " +
+                            $"maxPos={result.CoreSyncErrorMaxPositiveMs}ms maxNeg={result.CoreSyncErrorMaxNegativeMs}ms " +
+                            $"samples={result.SampleCount}";
+                        Console.WriteLine(line);
+                        summary.AppendLine(line);
+                    }
                 }
             }
 
@@ -1055,7 +1105,8 @@ internal static class PumpSweepRunner
         uint tickPumpIterations,
         int segmentMs,
         int warmupMs,
-        PumpSweepMode mode)
+        PumpSweepMode mode,
+        PumpSweepDriver driver)
     {
         Stopwatch stopwatch = Stopwatch.StartNew();
         TimeSpan interval = TimeSpan.FromMilliseconds(intervalMs);
@@ -1075,8 +1126,11 @@ internal static class PumpSweepRunner
                 Thread.Sleep(remaining);
             }
 
-            EnsureOk(Native.semi_player_pump(player, tickPumpIterations), "semi_player_pump");
-            pumpCount++;
+            if (driver == PumpSweepDriver.Ui)
+            {
+                EnsureOk(Native.semi_player_pump(player, tickPumpIterations), "semi_player_pump");
+                pumpCount++;
+            }
             EnsureOk(Native.semi_player_get_playback_snapshot(player, out SemiPlaybackSnapshot snapshot), "semi_player_get_playback_snapshot");
 
             if (stopwatch.ElapsedMilliseconds >= warmupMs && snapshot.HasCurrentVideoFrame != 0)
@@ -1105,6 +1159,7 @@ internal static class PumpSweepRunner
 
         return new PumpSweepDiagnosticsSnapshot(
             mode.ToString().ToLowerInvariant(),
+            driver.ToString().ToLowerInvariant(),
             pumpsPerSecond,
             meanMs,
             absMeanMs,
@@ -1123,6 +1178,18 @@ internal static class PumpSweepRunner
         }
 
         yield return mode;
+    }
+
+    private static IEnumerable<PumpSweepDriver> ExpandDrivers(PumpSweepDriver driver)
+    {
+        if (driver == PumpSweepDriver.Both)
+        {
+            yield return PumpSweepDriver.Ui;
+            yield return PumpSweepDriver.Worker;
+            yield break;
+        }
+
+        yield return driver;
     }
 
     private static void EnsureOk(int code, string api)
