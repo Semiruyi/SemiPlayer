@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::api::types::PlayerState;
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::pump::pump_player;
+use crate::core::player::pump::{advance_playback, decode_supply};
 use crate::core::player::schedule::PlayerScheduleService;
 
 #[derive(Default)]
@@ -67,11 +67,12 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                 }
 
                 let hint = PlayerScheduleService::evaluate(player);
-                if hint
-                    .next_pump_deadline_us
-                    .is_some_and(|deadline_us| deadline_us <= hint.playback_time_us)
-                {
-                    WorkerAction::PumpNow
+                if hint.playback_due_now && hint.decode_supply_needed {
+                    WorkerAction::AdvanceAndDecode
+                } else if hint.playback_due_now {
+                    WorkerAction::AdvancePlayback
+                } else if hint.decode_supply_needed {
+                    WorkerAction::DecodeSupply
                 } else {
                     WorkerAction::WaitFor(Duration::from_micros(
                         u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
@@ -81,9 +82,22 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
         };
 
         match action {
-            WorkerAction::PumpNow => unsafe {
+            WorkerAction::AdvancePlayback => unsafe {
                 let player_ptr = player_addr as *mut SemiPlayerHandle;
-                let _ = SemiPlayerHandle::with_locked_ptr(player_ptr, |player| pump_player(player, 0));
+                SemiPlayerHandle::with_locked_ptr(player_ptr, advance_playback);
+            },
+            WorkerAction::DecodeSupply => unsafe {
+                let player_ptr = player_addr as *mut SemiPlayerHandle;
+                let _ = SemiPlayerHandle::with_locked_ptr(player_ptr, |player| decode_supply(player, 0));
+            },
+            WorkerAction::AdvanceAndDecode => unsafe {
+                let player_ptr = player_addr as *mut SemiPlayerHandle;
+                let _ = SemiPlayerHandle::with_locked_ptr(player_ptr, |player| {
+                    advance_playback(player);
+                    let code = decode_supply(player, 0);
+                    advance_playback(player);
+                    code
+                });
             },
             WorkerAction::WaitFor(duration) => {
                 if wait_for_signal(&control, Some(duration)) {
@@ -134,7 +148,9 @@ fn wait_for_signal(
 }
 
 enum WorkerAction {
-    PumpNow,
+    AdvancePlayback,
+    DecodeSupply,
+    AdvanceAndDecode,
     WaitFor(Duration),
     WaitIndefinitely,
 }

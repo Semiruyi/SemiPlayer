@@ -79,7 +79,10 @@ Owns:
 
 - sleeping until next work
 - waking on control-path notifications
-- running `pump_player(...)` when playback work is due
+- choosing between:
+  - playback advancement
+  - decode supply
+  - combined advancement + decode when both are due
 
 ## 3. Current Execution Model
 
@@ -89,13 +92,14 @@ Current high-level behavior:
 playback command
   -> wake worker
   -> worker evaluates schedule
-  -> worker pumps decode/sync/audio work
+  -> worker advances playback when due
+  -> worker runs decode supply when buffers are insufficient
   -> worker sleeps until next deadline
 ```
 
 This is intentionally still conservative:
 
-- decode supply is still inside the pump path
+- decode supply is still synchronous on the same execution lane
 - one operation lock currently serializes worker activity and FFI activity
 
 That is acceptable for the first worker-backed stage.
@@ -182,14 +186,14 @@ Known current risks:
 
 - decode, sync, and FFI reads still share one coarse serialization boundary
 - heavy host frame-copy paths can still interfere with worker responsiveness
-- the current worker pumps more than just video sync, so future separation will matter for scalability
+- decode supply still shares the worker lane, so future separation will matter for scalability
 
 ## 9. Next Steps
 
 The most useful next implementation steps are:
 
 1. measure worker-driven sync quality directly
-2. split decode supply from the current pump path
+2. turn the logical decode split into a real dedicated execution path
 3. reduce coarse lock scope where safe
 4. integrate subtitle timing into the same worker-owned timeline
 5. prepare real render backend ownership boundaries

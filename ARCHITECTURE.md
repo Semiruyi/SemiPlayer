@@ -232,7 +232,7 @@ The current architecture is real, but not final.
 
 Transitional parts:
 
-- decode supply still flows through `pump_player(...)`
+- decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
 - CPU BGRA copy is still the main host frame-delivery path
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state
@@ -276,7 +276,7 @@ Important current ABI ideas:
 
 The next architectural steps should focus on:
 
-1. separating decode supply from the current pump path
+1. separating decode supply into a real dedicated execution path
 2. measuring worker-driven sync behavior objectively
 3. integrating subtitle timing into the worker-owned playback model
 4. defining real render backend/output surface boundaries
@@ -288,7 +288,7 @@ SemiPlayer should now be viewed as:
 
 - a cross-platform Rust playback core
 - already owning its internal playback timing
-- still in transition from synchronous decode plumbing to a fuller worker-based playback engine
+- still in transition from a shared synchronous execution lane to a fuller multi-service playback engine
 
 Windows is the first verified implementation target.
 

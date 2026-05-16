@@ -31,7 +31,7 @@ Already done:
 
 Not done yet:
 
-- decode supply split from the current pump path
+- decode supply promoted from a logical split to a dedicated execution path
 - real render backend / output surface abstraction
 - subtitle pipeline and libass integration
 - real host adapter projects beyond the smoke app
@@ -63,17 +63,18 @@ Tasks:
 
 ### P0.2 Split decode supply from `pump_player(...)`
 
-Status: highest architecture follow-up
+Status: in progress
 
 Tasks:
 
-- separate decode supply from the current combined pump path
-- stop treating `pump_player(...)` as both decode executor and sync executor
+- keep decode supply separated from playback advancement at the code-path level
+- stop treating `pump_player(...)` as the primary internal execution model
+- move decode supply into a dedicated execution path
 - define how decoded-frame enqueue wakes the sync worker
 
 Why this matters:
 
-- current worker is real, but decode is still piggybacking on the pump path
+- current worker is real, and decode is logically split, but it still shares the same execution lane
 
 ### P0.3 Tighten sync worker wake policy
 
@@ -221,7 +222,7 @@ Rule:
 Do these next, in order:
 
 1. measure worker-driven sync against UI-driven pumping
-2. split decode supply from the current pump path
+2. turn decode supply into a dedicated execution path
 3. define render output surface abstraction
 4. start the first real Windows render backend
 5. integrate subtitle timing into the worker-owned playback model

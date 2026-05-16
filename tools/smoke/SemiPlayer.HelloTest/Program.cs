@@ -274,6 +274,7 @@ internal sealed class PlayerSmokeWindow : Window
     private long _lastPresentedPtsMs = long.MinValue;
     private uint _tickPumpIterations = DefaultTickPumpIterations;
     private WriteableBitmap? _bitmap;
+    private byte[]? _frameBuffer;
     private readonly PlaybackDiagnostics _diagnostics = new();
     private readonly StringBuilder _pumpSweepLog = new();
     private int _pumpSweepIndex = -1;
@@ -530,7 +531,7 @@ internal sealed class PlayerSmokeWindow : Window
 
         if (shouldCopyFrame)
         {
-            byte[] frameBytes = new byte[frameInfo.ByteLen];
+            byte[] frameBytes = EnsureFrameBuffer(frameInfo.ByteLen);
             EnsureOk(
                 Native.semi_player_copy_current_video_frame_bgra(_player, frameBytes, frameInfo.ByteLen),
                 "semi_player_copy_current_video_frame_bgra");
@@ -590,6 +591,17 @@ internal sealed class PlayerSmokeWindow : Window
             null);
 
         _image.Source = _bitmap;
+    }
+
+    private byte[] EnsureFrameBuffer(uint byteLen)
+    {
+        int requiredLength = checked((int)byteLen);
+        if (_frameBuffer is null || _frameBuffer.Length != requiredLength)
+        {
+            _frameBuffer = new byte[requiredLength];
+        }
+
+        return _frameBuffer;
     }
 
     private string BuildStatusText(
@@ -774,6 +786,8 @@ internal sealed class PlayerSmokeWindow : Window
             _player = IntPtr.Zero;
         }
 
+        _frameBuffer = null;
+        _bitmap = null;
         _isPlayerCreated = false;
     }
 

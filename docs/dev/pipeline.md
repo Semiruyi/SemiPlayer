@@ -22,7 +22,8 @@ Important current rule:
 
 - playback progression is now primarily driven by the internal sync worker
 - `semi_player_pump(...)` still exists and is still useful
-- decode supply is still executed synchronously through the pump path
+- decode supply is still executed synchronously on the caller/worker thread
+- decode supply has been split logically from playback advancement, but is not yet a separate worker
 
 That means the player has already crossed the line from:
 
@@ -177,8 +178,9 @@ Worker loop:
 ```text
 lock player
   -> inspect current state
-  -> evaluate next pump deadline
-  -> if work is due, run pump_player(...)
+  -> evaluate schedule
+  -> if playback is due, advance playback
+  -> if buffering is insufficient, run decode supply
   -> otherwise sleep until deadline or explicit wake
 repeat
 ```
@@ -197,6 +199,7 @@ Current scheduling input combines:
 
 - next video sync deadline
 - next audio refill deadline
+- decode-supply-needed state
 - immediate wake conditions such as:
   - dirty sync state
   - stale current video frame
@@ -253,7 +256,7 @@ The current pipeline is much healthier than the original pump-only prototype, bu
 
 Main limitations:
 
-- decode supply still runs inside `pump_player(...)`
+- decode supply is still synchronous and still shares the same worker/FFI execution lane
 - audio output, decode supply, and sync decisions still share one serialized handle lock
 - video frame delivery is still CPU-copy BGRA, not GPU-native
 - subtitle timing and composition are not yet integrated into the worker-driven pipeline
@@ -263,7 +266,7 @@ Main limitations:
 
 The most likely next architecture steps are:
 
-1. split decode supply from the current pump path
+1. move decode supply from a logical split to a real dedicated execution path
 2. tighten notification flow between decode enqueue and sync wake-up
 3. add worker-vs-host diagnostic modes for objective sync measurement
 4. introduce real render backend and subtitle composition path

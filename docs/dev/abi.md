@@ -63,11 +63,19 @@ int semi_player_pump(SemiPlayerHandle* player, uint32_t max_iterations);
 int semi_player_get_playback_snapshot(SemiPlayerHandle* player, SemiPlaybackSnapshot* out_snapshot);
 ```
 
-`semi_player_pump` is the host-driven playback heartbeat. It should be called periodically during playback to advance decoding and frame selection.
+`semi_player_pump` is now an auxiliary entrypoint.
+
+Current role:
+
+- explicit decode/sync advancement for diagnostics
+- host-assisted stepping
+- manual recovery/testing hooks
+
+Normal playback no longer depends on the host calling `semi_player_pump(...)` on a timer.
 
 ## Video Frame Output
 
-After `pump`, the host can query the currently selected video frame:
+The host can query the currently selected video frame at any time:
 
 ```c
 int semi_player_get_current_video_frame_info(
@@ -84,7 +92,7 @@ int semi_player_copy_current_video_frame_bgra(
 
 Typical usage:
 
-1. Call `semi_player_pump(player, 0)`.
+1. Ensure the player is opened and playing, or call `semi_player_pump(player, 0)` explicitly for diagnostic/manual stepping scenarios.
 2. Call `semi_player_get_current_video_frame_info` to read metadata (size, stride, byte length).
 3. Allocate a buffer of at least `byte_len` bytes.
 4. Call `semi_player_copy_current_video_frame_bgra` to copy BGRA pixels into the buffer.
@@ -114,4 +122,11 @@ Strings returned by the library (e.g., `semi_ffmpeg_version_string`) must be fre
 
 ## Threading Notes
 
-Currently all FFI calls are processed synchronously on the calling thread. The host should call `semi_player_pump` from a single thread (e.g., a UI timer or render loop). A future threading model may introduce internal worker threads, but the public ABI will remain single-threaded from the host's perspective.
+The player now owns an internal sync worker thread for playback progression.
+
+Current threading rules:
+
+- FFI calls are still processed synchronously on the calling thread
+- internal playback progression may continue without host pump calls
+- mutable access is serialized inside the player handle
+- hosts should still avoid issuing concurrent control calls against the same handle unless they intentionally want serialized behavior

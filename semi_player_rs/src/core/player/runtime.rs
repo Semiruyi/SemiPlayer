@@ -92,6 +92,10 @@ impl PlayerRuntime {
         self.current_video_frame.is_some()
     }
 
+    pub fn buffered_video_frame_count(&self) -> usize {
+        self.queued_video_frames.len() + usize::from(self.current_video_frame.is_some())
+    }
+
     pub fn has_buffered_future_video_frames(&self, min_count: usize) -> bool {
         self.queued_video_frames.len() >= min_count
     }

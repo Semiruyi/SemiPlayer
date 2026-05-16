@@ -16,22 +16,34 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         return SEMI_E_INVALID_STATE;
     }
 
-    let iterations = if max_iterations == 0 {
-        DEFAULT_PUMP_ITERATIONS
-    } else {
-        max_iterations
-    };
+    advance_playback(player);
 
+    if needs_decode_supply(player) {
+        let code = decode_supply(player, max_iterations);
+        if code != SEMI_OK {
+            return code;
+        }
+    }
+
+    advance_playback(player);
+    SEMI_OK
+}
+
+pub fn advance_playback(player: &mut SemiPlayerHandle) {
     let playback_time_us = player.audio_clock.presentation_time_us();
     player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
     let _ = VideoSyncService::tick(player, playback_time_us);
     sync_audio_output(player);
+}
 
-    if has_sufficient_buffer(player) {
-        return SEMI_OK;
-    }
+pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
+    let iterations = if max_iterations == 0 {
+        DEFAULT_PUMP_ITERATIONS
+    } else {
+        max_iterations
+    };
 
     for _ in 0..iterations {
         let output = {
@@ -60,33 +72,72 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
             }
         }
 
-        let playback_time_us = player.audio_clock.presentation_time_us();
-        player
-            .runtime
-            .discard_consumed_audio_frames(playback_time_us);
-        let _ = VideoSyncService::tick(player, playback_time_us);
-        sync_audio_output(player);
-
         if has_sufficient_buffer(player) {
             break;
         }
     }
 
-    let playback_time_us = player.audio_clock.presentation_time_us();
-    player
-        .runtime
-        .discard_consumed_audio_frames(playback_time_us);
-    let _ = VideoSyncService::tick(player, playback_time_us);
-    sync_audio_output(player);
     SEMI_OK
 }
 
-fn has_sufficient_buffer(player: &SemiPlayerHandle) -> bool {
+pub fn needs_decode_supply(player: &SemiPlayerHandle) -> bool {
+    !player.runtime.has_reached_end_of_stream() && !has_sufficient_buffer(player)
+}
+
+pub fn has_sufficient_buffer(player: &SemiPlayerHandle) -> bool {
+    let target_total_video_frames = 1 + TARGET_FUTURE_VIDEO_QUEUE_LEN;
+
     player.runtime.audio_queue_len() >= TARGET_AUDIO_QUEUE_LEN
-        && player.runtime.has_current_video_frame()
-        && player
-            .runtime
-            .has_buffered_future_video_frames(TARGET_FUTURE_VIDEO_QUEUE_LEN)
+        && player.runtime.buffered_video_frame_count() >= target_total_video_frames
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_sufficient_buffer;
+    use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
+    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+
+    fn audio_frame(pts_us: i64) -> AudioFrame {
+        AudioFrame {
+            pts_us,
+            duration_us: Some(10_000),
+            sample_rate: 48_000,
+            channels: 2,
+            sample_count: 480,
+            sample_format: AudioSampleFormatCategory::F32,
+            is_planar: false,
+            data: vec![0.0; 480 * 2],
+        }
+    }
+
+    fn video_frame(pts_us: i64) -> VideoFrame {
+        VideoFrame {
+            pts_us,
+            duration_us: Some(33_000),
+            width: 1920,
+            height: 1080,
+            pixel_format: PixelFormatCategory::Bgra8,
+            stride: 1920 * 4,
+            data: vec![0; 16],
+            is_key_frame: false,
+        }
+    }
+
+    #[test]
+    fn queued_video_frames_count_toward_startup_buffer_target() {
+        let mut player = SemiPlayerHandle::new();
+
+        for index in 0..8 {
+            player.runtime.push_audio_frame(audio_frame(index * 10_000));
+        }
+
+        player.runtime.push_video_frame(video_frame(0));
+        player.runtime.push_video_frame(video_frame(33_000));
+        player.runtime.push_video_frame(video_frame(66_000));
+
+        assert!(has_sufficient_buffer(&player));
+    }
 }
 
 fn sync_audio_output(player: &mut SemiPlayerHandle) {

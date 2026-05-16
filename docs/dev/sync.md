@@ -108,8 +108,9 @@ Its job is to:
 
 1. inspect current player state
 2. evaluate the next playback deadline
-3. run `pump_player(...)` when work is due
-4. sleep until the next interesting moment or an explicit wake
+3. advance playback when playback work is due
+4. run decode supply when buffering is insufficient
+5. sleep until the next interesting moment or an explicit wake
 
 Important current consequence:
 
@@ -176,7 +177,7 @@ A healthy current run usually means:
 
 The current model is much stronger than the original host-pump prototype, but there are still limits:
 
-- decode supply is still routed through `pump_player(...)`
+- decode supply is still synchronous and not yet owned by a dedicated worker
 - the sync worker and FFI calls still serialize on one operation lock
 - end-to-end display timing is still partly host-dependent
 - subtitle timing has not yet been folded into the same worker-owned progression path
@@ -186,6 +187,6 @@ The current model is much stronger than the original host-pump prototype, but th
 Near-term sync work should focus on:
 
 1. objective worker-vs-host sync measurement
-2. decode supply separation from the current pump path
+2. decode supply separation into its own execution path
 3. tighter wake policy between decode enqueue and video sync
 4. subtitle timing integration

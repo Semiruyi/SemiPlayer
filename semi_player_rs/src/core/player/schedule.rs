@@ -10,6 +10,8 @@ const AUDIO_REFILL_HEADROOM_FRAMES: usize = 2_048;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PumpScheduleHint {
     pub playback_time_us: MediaTimeUs,
+    pub playback_due_now: bool,
+    pub decode_supply_needed: bool,
     pub next_video_deadline_us: Option<MediaTimeUs>,
     pub next_audio_refill_deadline_us: Option<MediaTimeUs>,
     pub next_pump_deadline_us: Option<MediaTimeUs>,
@@ -24,9 +26,13 @@ impl PlayerScheduleService {
         let video_snapshot = VideoSyncService::evaluate(player, playback_time_us);
         let next_video_deadline_us =
             compute_video_deadline_us(player, playback_time_us, video_snapshot);
-        let next_audio_refill_deadline_us = compute_audio_refill_deadline_us(player, playback_time_us);
+        let next_audio_refill_deadline_us =
+            compute_audio_refill_deadline_us(player, playback_time_us);
         let next_pump_deadline_us =
             min_optional_time(next_video_deadline_us, next_audio_refill_deadline_us);
+        let playback_due_now = next_pump_deadline_us
+            .is_some_and(|deadline_us| deadline_us <= playback_time_us);
+        let decode_supply_needed = crate::core::player::pump::needs_decode_supply(player);
         let suggested_wait_us = compute_suggested_wait_us(
             player.state(),
             playback_time_us,
@@ -35,6 +41,8 @@ impl PlayerScheduleService {
 
         PumpScheduleHint {
             playback_time_us,
+            playback_due_now,
+            decode_supply_needed,
             next_video_deadline_us,
             next_audio_refill_deadline_us,
             next_pump_deadline_us,
@@ -202,6 +210,7 @@ mod tests {
 
         let hint = PlayerScheduleService::evaluate(&player);
 
+        assert!(hint.playback_due_now);
         assert_eq!(hint.next_video_deadline_us, Some(0));
         assert_eq!(hint.next_pump_deadline_us, Some(0));
     }
@@ -218,8 +227,18 @@ mod tests {
 
         let hint = PlayerScheduleService::evaluate(&player);
 
+        assert!(hint.playback_due_now);
         assert_eq!(hint.next_audio_refill_deadline_us, Some(hint.playback_time_us));
         assert_eq!(hint.next_pump_deadline_us, Some(hint.playback_time_us));
         assert_eq!(hint.suggested_wait_us, 1_000);
+    }
+
+    #[test]
+    fn insufficient_buffers_report_decode_supply_needed() {
+        let player = SemiPlayerHandle::new();
+
+        let hint = PlayerScheduleService::evaluate(&player);
+
+        assert!(hint.decode_supply_needed);
     }
 }
