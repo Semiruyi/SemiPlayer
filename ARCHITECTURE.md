@@ -278,9 +278,14 @@ The next architectural steps should focus on:
 
 1. separating decode supply into a real dedicated execution path
 2. measuring worker-driven sync behavior objectively
-3. integrating subtitle timing into the worker-owned playback model
-4. defining real render backend/output surface boundaries
-5. reducing coarse locking where safe
+3. improving seek responsiveness with a real recovery-oriented seek model
+4. integrating subtitle timing into the worker-owned playback model
+5. defining real render backend/output surface boundaries
+6. reducing coarse locking where safe
+
+Reference:
+
+- [docs/dev/seek.md](c:/y-s/project/Semi/docs/dev/seek.md)
 
 ## 15. Summary
 

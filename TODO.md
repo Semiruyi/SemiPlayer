@@ -6,6 +6,7 @@ Related documents:
 
 - [ARCHITECTURE.md](c:/y-s/project/Semi/ARCHITECTURE.md)
 - [docs/dev/pipeline.md](c:/y-s/project/Semi/docs/dev/pipeline.md)
+- [docs/dev/seek.md](c:/y-s/project/Semi/docs/dev/seek.md)
 - [docs/dev/sync.md](c:/y-s/project/Semi/docs/dev/sync.md)
 - [docs/env/windows.md](c:/y-s/project/Semi/docs/env/windows.md)
 
@@ -28,6 +29,10 @@ Already done:
 - `VideoSyncService` owns core video sync decisions
 - player-owned sync worker is active
 - player-owned decode worker is active
+- playback advancement now executes in phased lock-in / lock-out / lock-in form
+- decode polling now runs outside the main player lock and applies results back under generation guards
+- manual `pump` path now follows the same playback/decode scheduling semantics as the worker path
+- decode-to-sync wake behavior has started tightening to avoid unnecessary sync wakeups on steady audio refill
 - worker-vs-UI pump comparison tooling exists in smoke
 - FFI and worker mutations are serialized through the player handle
 
@@ -65,15 +70,15 @@ Tasks:
 
 ### P0.2 Split decode supply from `pump_player(...)`
 
-Status: pump semantics aligned, deeper concurrency split still pending
+Status: major baseline done, deeper concurrency split still pending
 
 Tasks:
 
 - keep decode supply separated from playback advancement at the code-path level
 - stop treating `pump_player(...)` as the primary internal execution model
 - keep manual pump aligned with worker scheduling semantics
-- move decode supply into a dedicated execution path
-- define how decoded-frame enqueue wakes the sync worker
+- continue reducing decode worker dependence on the shared player handle commit path
+- keep tightening how decoded-frame enqueue decides whether the sync worker really needs a wake
 
 Why this matters:
 
@@ -81,20 +86,23 @@ Why this matters:
 
 ### P0.3 Tighten sync worker wake policy
 
-Status: ongoing tuning
+Status: active tuning, first wake reductions landed
 
 Tasks:
 
 - review stale-video immediate wake rules
 - review audio-start / audio-refill immediate wake rules
+- keep pure audio refill from waking sync work unless it changes playback readiness
 - reduce unnecessary wake churn without reintroducing drift
+- validate wake-policy changes against smoke diagnostics and pause/seek behavior
 
 ### P0.4 Reduce coarse lock scope
 
-Status: after worker behavior is stable
+Status: stage behind wake/seek work, but partly unblocked
 
 Tasks:
 
+- first focus on seek-related hot paths before broader lock splitting
 - identify hot paths currently blocked by the single handle operation lock
 - keep decode refill packet-budgeted while deeper lock splitting is pending
 - move playback-side audio output work onto the new shared audio-output boundary
@@ -103,18 +111,23 @@ Tasks:
 
 ### P0.5 Improve seek responsiveness and seek-path cost
 
-Status: add after current worker wake/stability tuning
+Status: next active design/implementation track after wake-policy baseline
 
 Tasks:
 
 - measure end-to-end seek latency from API call to first stable post-seek frame/audio
 - separate seek correctness from seek speed so regressions are visible
+- document the current seek path and the target seek-recovery model explicitly
+- adopt a performance-first keyframe-anchored seek strategy for local playback
+- add a dedicated seek-recovery path instead of treating seek as a plain full reset + refill
 - reduce work done while holding the shared player handle during seek
 - review which state must be cleared immediately vs lazily rebuilt after seek
 - avoid unnecessary wake storms or duplicate refill work right after seek
 - define a practical short-term seek target for local files:
-  - fast preview / first frame response
+  - fast first-frame response after keyboard/progress-bar seek
   - stable A/V resettling shortly after
+- trim audio to the target point during seek recovery
+- avoid expensive video post-processing on pre-target frames during seek recovery
 
 Why this matters:
 
@@ -249,8 +262,9 @@ Rule:
 Do these next, in order:
 
 1. keep worker-vs-host sync measurement as a regression tool
-2. reduce decode worker coupling to the shared player lock
+2. finish the current round of sync/decode wake-policy tightening
 3. improve seek responsiveness and reduce seek-path cost
-4. define render output surface abstraction
-5. start the first real Windows render backend
-6. integrate subtitle timing into the worker-owned playback model
+4. reduce seek-related coupling to the shared player lock
+5. define render output surface abstraction
+6. start the first real Windows render backend
+7. integrate subtitle timing into the worker-owned playback model
