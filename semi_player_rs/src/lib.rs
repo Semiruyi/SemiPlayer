@@ -215,6 +215,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         worker_lock_wait_max_us: diagnostics.worker_lock_wait_max_us,
         worker_deadline_slip_last_us: diagnostics.worker_deadline_slip_last_us,
         worker_deadline_slip_max_us: diagnostics.worker_deadline_slip_max_us,
+        stale_audio_discard_event_count: diagnostics.stale_audio_discard_event_count,
+        stale_audio_discard_frame_count: diagnostics.stale_audio_discard_frame_count,
+        stale_audio_discard_last_frame_count: diagnostics.stale_audio_discard_last_frame_count,
+        stale_audio_discard_last_lag_us: diagnostics.stale_audio_discard_last_lag_us,
+        stale_audio_discard_max_lag_us: diagnostics.stale_audio_discard_max_lag_us,
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
 }

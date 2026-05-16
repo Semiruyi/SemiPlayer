@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Diagnostics;
 using System.Threading;
+using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -14,6 +15,98 @@ internal static class PumpTimingConstants
 {
     public const double MinAdaptiveTickIntervalMs = 1.0;
     public const double MaxAdaptiveTickIntervalMs = 33.0;
+}
+
+internal sealed class SmokeAnomalyLogger
+{
+    private const long CoreSyncErrorWarnThresholdMs = 16;
+    private const long StaleAudioDiscardLagWarnThresholdUs = 2_000;
+    private const long LockWaitWarnThresholdUs = 8_000;
+    private const long WorkerSlipWarnThresholdUs = 5_000;
+    private static readonly TimeSpan StartupGracePeriod = TimeSpan.FromMilliseconds(1_500);
+    private static readonly TimeSpan ThrottleWindow = TimeSpan.FromMilliseconds(500);
+
+    private readonly Dictionary<string, DateTime> _lastLoggedAtUtc = new();
+    private readonly HashSet<string> _activeAnomalies = new(StringComparer.Ordinal);
+    private DateTime _sessionStartedAtUtc;
+
+    public string LogPath { get; } = Path.GetFullPath(Path.Combine("tools", "smoke", "smoke-anomalies.log"));
+
+    public void ResetSession()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+        File.WriteAllText(LogPath, string.Empty);
+        _lastLoggedAtUtc.Clear();
+        _activeAnomalies.Clear();
+        _sessionStartedAtUtc = DateTime.UtcNow;
+    }
+
+    public string CurrentSummary =>
+        _activeAnomalies.Count == 0
+            ? "none"
+            : string.Join(", ", _activeAnomalies);
+
+    public void Observe(SemiPlaybackSnapshot snapshot, PlaybackDiagnostics diagnostics)
+    {
+        _activeAnomalies.Clear();
+        bool afterStartupGrace = DateTime.UtcNow - _sessionStartedAtUtc >= StartupGracePeriod;
+
+        if (afterStartupGrace && Math.Abs(snapshot.CoreSyncErrorMs) >= CoreSyncErrorWarnThresholdMs)
+        {
+            _activeAnomalies.Add("core-sync");
+            LogThrottled(
+                "core-sync",
+                $"core-sync-error ms={snapshot.CoreSyncErrorMs} mean={diagnostics.CoreSyncErrorMeanMs:F2} absMean={diagnostics.CoreSyncErrorAbsMeanMs:F2} audio={snapshot.AudioPositionMs} video={snapshot.CurrentVideoPtsMs}");
+        }
+
+        if (afterStartupGrace && snapshot.StaleAudioDiscardLastLagUs >= StaleAudioDiscardLagWarnThresholdUs)
+        {
+            _activeAnomalies.Add("stale-audio-discard");
+            LogThrottled(
+                "stale-audio-discard",
+                $"stale-audio-discard events={snapshot.StaleAudioDiscardEventCount} frames={snapshot.StaleAudioDiscardFrameCount} lastFrames={snapshot.StaleAudioDiscardLastFrameCount} lastLagUs={snapshot.StaleAudioDiscardLastLagUs} maxLagUs={snapshot.StaleAudioDiscardMaxLagUs}");
+        }
+
+        if (afterStartupGrace
+            && (snapshot.FfiLockWaitLastUs >= LockWaitWarnThresholdUs
+                || snapshot.WorkerLockWaitLastUs >= LockWaitWarnThresholdUs))
+        {
+            _activeAnomalies.Add("lock-wait");
+            LogThrottled(
+                "lock-wait",
+                $"lock-wait ffiLastUs={snapshot.FfiLockWaitLastUs} ffiMaxUs={snapshot.FfiLockWaitMaxUs} workerLastUs={snapshot.WorkerLockWaitLastUs} workerMaxUs={snapshot.WorkerLockWaitMaxUs}");
+        }
+
+        if (afterStartupGrace && snapshot.WorkerDeadlineSlipLastUs >= WorkerSlipWarnThresholdUs)
+        {
+            _activeAnomalies.Add("worker-slip");
+            LogThrottled(
+                "worker-slip",
+                $"worker-slip lastUs={snapshot.WorkerDeadlineSlipLastUs} maxUs={snapshot.WorkerDeadlineSlipMaxUs} nextPumpAtMs={snapshot.NextPumpDeadlineMs}");
+        }
+
+        if (afterStartupGrace && snapshot.VideoSyncDrops > 0 && snapshot.LastSyncDroppedFrames > 0)
+        {
+            _activeAnomalies.Add("video-drop");
+            LogThrottled(
+                "video-drop",
+                $"video-drop totalDrops={snapshot.VideoSyncDrops} lastDropped={snapshot.LastSyncDroppedFrames} maxDroppedRun={snapshot.MaxSyncDroppedFrames}");
+        }
+    }
+
+    private void LogThrottled(string key, string message)
+    {
+        DateTime nowUtc = DateTime.UtcNow;
+        if (_lastLoggedAtUtc.TryGetValue(key, out DateTime lastUtc) && nowUtc - lastUtc < ThrottleWindow)
+        {
+            return;
+        }
+
+        _lastLoggedAtUtc[key] = nowUtc;
+        File.AppendAllText(
+            LogPath,
+            $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}");
+    }
 }
 
 internal static class Program
@@ -278,6 +371,7 @@ internal sealed class PlayerSmokeWindow : Window
     private byte[]? _frameBuffer;
     private readonly PlaybackDiagnostics _diagnostics = new();
     private readonly StringBuilder _pumpSweepLog = new();
+    private readonly SmokeAnomalyLogger _anomalyLogger = new();
     private int _pumpSweepIndex = -1;
     private bool _useAdaptivePump = true;
     private bool _drivePumpFromUi;
@@ -364,6 +458,7 @@ internal sealed class PlayerSmokeWindow : Window
             EnsureOk(Native.semi_player_get_duration_ms(_player, out _durationMs), "semi_player_get_duration_ms");
             EnsureOk(Native.semi_player_get_media_info(_player, out _mediaInfo), "semi_player_get_media_info");
             _diagnostics.Reset();
+            _anomalyLogger.ResetSession();
 
             EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
             RefreshVideoFrame(forceCopy: true);
@@ -562,6 +657,7 @@ internal sealed class PlayerSmokeWindow : Window
             copyDecision: copyDecision,
             isPlaying: _isPlaying,
             pumpTriggered: _drivePumpFromUi);
+        _anomalyLogger.Observe(snapshot, _diagnostics);
 
         ApplyAdaptivePumpInterval(snapshot);
 
@@ -619,56 +715,35 @@ internal sealed class PlayerSmokeWindow : Window
         SemiVideoFrameInfo? frameInfo)
     {
         string state = _isPlaying ? "Playing" : "Paused";
-        string framePart = frameInfo is SemiVideoFrameInfo frame
-            ? $"Frame {frame.PtsMs} ms  {frame.Width}x{frame.Height}  stride {frame.Stride}  bytes {frame.ByteLen}"
-            : "Frame unavailable";
         string sourcePart = BuildSourcePart();
         string audioOutputPart =
             $"Out {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
-            $"Started {audioOutput.Started}  DeviceTiming {audioOutput.HasDeviceTiming}  " +
-            $"DevBase {audioOutput.BasePtsMs} ms  DevPlayed {audioOutput.DevicePlayedFrames}";
+            $"MixBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames}  " +
+            $"DevPending {audioOutput.PendingDeviceFrames}  Started {audioOutput.Started}";
         string audioBufferPart =
-            $"MixBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames} frames  " +
-            $"DevPending {audioOutput.PendingDeviceFrames}  Submitted {audioOutput.SubmittedFramesTotal}";
-        string audioProgressPart =
-            $"Rendered {audioOutput.RenderedFramesTotal}  Audible {audioOutput.AudibleFramesTotal}";
+            $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  " +
+            $"PumpAt {snapshot.NextPumpDeadlineMs} ms  Wait {snapshot.SuggestedPumpWaitMs} ms";
         string coreSyncPart =
             $"CoreSync Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
             $"AbsMean {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
             $"Max+ {_diagnostics.CoreSyncErrorMaxPositiveMs} ms  Max- {_diagnostics.CoreSyncErrorMaxNegativeMs} ms";
-        string diagnosticsPart =
+        string playbackPart =
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
-            $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
-            $"StepMean {_diagnostics.AverageVideoStepMs:F1} ms  " +
+            $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  " +
             $"Pump {_diagnostics.PumpsPerSecond:F1}/s @{_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
-            $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}  " +
             $"Driver {(_drivePumpFromUi ? "UI" : "Worker")}  " +
-            $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
-        string frameTimelinePart =
-            $"CurDur {snapshot.CurrentVideoDurationMs} ms  CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
-            $"NextPts {snapshot.NextVideoPtsMs} ms  CurToNext {snapshot.CurrentToNextVideoDeltaMs} ms";
-        string lockPart =
-            $"Lock FFI {snapshot.FfiLockWaitLastUs}/{snapshot.FfiLockWaitMaxUs} us  " +
-            $"Worker {snapshot.WorkerLockWaitLastUs}/{snapshot.WorkerLockWaitMaxUs} us  " +
-            $"Slip {snapshot.WorkerDeadlineSlipLastUs}/{snapshot.WorkerDeadlineSlipMaxUs} us";
-        string runPatternPart =
-            $"LastRun P{snapshot.LastSyncPresentedFrames}/D{snapshot.LastSyncDroppedFrames}  " +
-            $"MaxRun P{snapshot.MaxSyncPresentedFrames}/D{snapshot.MaxSyncDroppedFrames}  " +
-            $"Runs P {snapshot.SyncRunPresentOnlyCount}  D {snapshot.SyncRunDropOnlyCount}  P+D {snapshot.SyncRunPresentDropCount}  Other {snapshot.SyncRunOtherCount}";
-        string copyPart =
-            $"CopyDecision {_diagnostics.LastCopyDecision}  Force {_diagnostics.ForceCopyCount}  " +
-            $"NewPts {_diagnostics.NewPtsCopyCount}  Resize {_diagnostics.ResizeCopyCount}  SamePtsSkip {_diagnostics.SamePtsSkipCount}";
-        string syncLoopPart =
-            $"WakeAt {snapshot.NextVideoWakeDeadlineMs} ms  FrameEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
-            $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  PumpAt {snapshot.NextPumpDeadlineMs} ms  " +
-            $"SuggestWait {snapshot.SuggestedPumpWaitMs} ms  " +
-            $"SyncTicks {snapshot.VideoSyncTicks}  Runs {snapshot.VideoSyncRuns}  " +
-            $"Presents {snapshot.VideoSyncPresents}  Drops {snapshot.VideoSyncDrops}  " +
-            $"Underflows {snapshot.VideoSyncUnderflows}  LateHits {snapshot.VideoSyncLateHits}";
+            $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}";
+        string timelinePart =
+            $"Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
+            $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
         string avPart =
             $"Core A-V {snapshot.CoreAVDeltaMs} ms  CoreSyncErr {snapshot.CoreSyncErrorMs} ms  " +
             $"HostOffset {snapshot.HostPresentationOffsetMs} ms  " +
             $"Expected End-to-end A-V {snapshot.ExpectedEndToEndAVDeltaMs} ms";
+        string anomalyPart =
+            $"Anomalies {_anomalyLogger.CurrentSummary}  " +
+            $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}  " +
+            $"AudioDiscardEvents {snapshot.StaleAudioDiscardEventCount}";
 
         return
             $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
@@ -677,16 +752,11 @@ internal sealed class PlayerSmokeWindow : Window
             $"{sourcePart}{Environment.NewLine}" +
             $"{avPart}{Environment.NewLine}" +
             $"{coreSyncPart}{Environment.NewLine}" +
-            $"{frameTimelinePart}{Environment.NewLine}" +
-            $"{lockPart}{Environment.NewLine}" +
-            $"{runPatternPart}{Environment.NewLine}" +
-            $"{syncLoopPart}{Environment.NewLine}" +
+            $"{timelinePart}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
-            $"{audioProgressPart}{Environment.NewLine}" +
-            $"{framePart}{Environment.NewLine}" +
-            $"{copyPart}{Environment.NewLine}" +
-            $"{diagnosticsPart}{Environment.NewLine}" +
+            $"{playbackPart}{Environment.NewLine}" +
+            $"{anomalyPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
     }
 
@@ -1445,6 +1515,11 @@ internal struct SemiPlaybackSnapshot
     internal long WorkerLockWaitMaxUs;
     internal long WorkerDeadlineSlipLastUs;
     internal long WorkerDeadlineSlipMaxUs;
+    internal ulong StaleAudioDiscardEventCount;
+    internal ulong StaleAudioDiscardFrameCount;
+    internal ulong StaleAudioDiscardLastFrameCount;
+    internal long StaleAudioDiscardLastLagUs;
+    internal long StaleAudioDiscardMaxLagUs;
     internal uint EndOfStream;
 }
 

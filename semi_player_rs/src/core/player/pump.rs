@@ -41,14 +41,16 @@ pub fn execute_scheduled_work(
 
 pub fn advance_playback(player: &mut SemiPlayerHandle) {
     let initial_playback_time_us = player.audio_clock.presentation_time_us();
-    player
+    let initial_discard = player
         .runtime
         .discard_consumed_audio_frames(initial_playback_time_us);
+    player.observe_stale_audio_discard(initial_discard);
     sync_audio_output(player);
     let playback_time_us = player.audio_clock.presentation_time_us();
-    player
+    let post_sync_discard = player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
+    player.observe_stale_audio_discard(post_sync_discard);
     let _ = VideoSyncService::tick(player, playback_time_us);
 }
 

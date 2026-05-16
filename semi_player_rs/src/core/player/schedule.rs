@@ -1,5 +1,6 @@
 use crate::api::types::PlayerState;
 use crate::core::player::handle::SemiPlayerHandle;
+use crate::core::player::runtime::RuntimeVideoSnapshot;
 use crate::core::player::video_sync::VideoSyncService;
 use crate::util::time::MediaTimeUs;
 
@@ -55,9 +56,10 @@ pub struct PlayerScheduleService;
 impl PlayerScheduleService {
     pub fn evaluate(player: &SemiPlayerHandle) -> PumpScheduleHint {
         let playback_time_us = player.audio_clock.presentation_time_us();
+        let runtime_video = player.runtime.video_snapshot();
         let video_snapshot = VideoSyncService::evaluate(player, playback_time_us);
         let next_video_deadline_us =
-            compute_video_deadline_us(player, playback_time_us, video_snapshot);
+            compute_video_deadline_us(player, playback_time_us, runtime_video, video_snapshot);
         let next_audio_refill_deadline_us =
             compute_audio_refill_deadline_us(player, playback_time_us);
         let next_pump_deadline_us =
@@ -86,6 +88,7 @@ impl PlayerScheduleService {
 fn compute_video_deadline_us(
     player: &SemiPlayerHandle,
     playback_time_us: MediaTimeUs,
+    runtime_video: RuntimeVideoSnapshot<'_>,
     video_snapshot: crate::core::player::video_sync::VideoSyncSnapshot,
 ) -> Option<MediaTimeUs> {
     if player.video_sync.is_dirty() {
@@ -96,7 +99,7 @@ fn compute_video_deadline_us(
         return Some(playback_time_us);
     }
 
-    if player.runtime.current_video_frame().is_none() && player.runtime.video_queue_len() > 0 {
+    if runtime_video.current_frame.is_none() && runtime_video.next_frame.is_some() {
         return Some(playback_time_us);
     }
 

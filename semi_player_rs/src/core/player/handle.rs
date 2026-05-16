@@ -1,5 +1,5 @@
 use std::ffi::c_double;
-use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -7,7 +7,7 @@ use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
 use crate::audio::core::output_controller::AudioOutputController;
 use crate::core::media::OpenedMedia;
-use crate::core::player::runtime::PlayerRuntime;
+use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::scheduler::VideoScheduler;
@@ -21,6 +21,11 @@ pub struct PlayerDiagnosticsSnapshot {
     pub worker_lock_wait_max_us: MediaTimeUs,
     pub worker_deadline_slip_last_us: MediaTimeUs,
     pub worker_deadline_slip_max_us: MediaTimeUs,
+    pub stale_audio_discard_event_count: u64,
+    pub stale_audio_discard_frame_count: u64,
+    pub stale_audio_discard_last_frame_count: u64,
+    pub stale_audio_discard_last_lag_us: MediaTimeUs,
+    pub stale_audio_discard_max_lag_us: MediaTimeUs,
 }
 
 #[derive(Default)]
@@ -31,6 +36,11 @@ struct PlayerDiagnostics {
     worker_lock_wait_max_us: AtomicI64,
     worker_deadline_slip_last_us: AtomicI64,
     worker_deadline_slip_max_us: AtomicI64,
+    stale_audio_discard_event_count: AtomicU64,
+    stale_audio_discard_frame_count: AtomicU64,
+    stale_audio_discard_last_frame_count: AtomicU64,
+    stale_audio_discard_last_lag_us: AtomicI64,
+    stale_audio_discard_max_lag_us: AtomicI64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -150,6 +160,10 @@ impl SemiPlayerHandle {
     pub fn observe_worker_deadline_slip(&self, slip_us: MediaTimeUs) {
         self.diagnostics.observe_worker_deadline_slip(slip_us);
     }
+
+    pub fn observe_stale_audio_discard(&self, discard: AudioDiscardSummary) {
+        self.diagnostics.observe_stale_audio_discard(discard);
+    }
 }
 
 impl PlayerDiagnostics {
@@ -173,6 +187,26 @@ impl PlayerDiagnostics {
         update_atomic_max(&self.worker_deadline_slip_max_us, slip_us);
     }
 
+    fn observe_stale_audio_discard(&self, discard: AudioDiscardSummary) {
+        if discard.removed_frames == 0 {
+            return;
+        }
+
+        self.stale_audio_discard_event_count
+            .fetch_add(1, Ordering::Relaxed);
+        self.stale_audio_discard_frame_count.fetch_add(
+            u64::try_from(discard.removed_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.stale_audio_discard_last_frame_count.store(
+            u64::try_from(discard.removed_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.stale_audio_discard_last_lag_us
+            .store(discard.max_lag_us, Ordering::Relaxed);
+        update_atomic_max(&self.stale_audio_discard_max_lag_us, discard.max_lag_us);
+    }
+
     fn snapshot(&self) -> PlayerDiagnosticsSnapshot {
         PlayerDiagnosticsSnapshot {
             ffi_lock_wait_last_us: self.ffi_lock_wait_last_us.load(Ordering::Relaxed),
@@ -181,6 +215,21 @@ impl PlayerDiagnostics {
             worker_lock_wait_max_us: self.worker_lock_wait_max_us.load(Ordering::Relaxed),
             worker_deadline_slip_last_us: self.worker_deadline_slip_last_us.load(Ordering::Relaxed),
             worker_deadline_slip_max_us: self.worker_deadline_slip_max_us.load(Ordering::Relaxed),
+            stale_audio_discard_event_count: self
+                .stale_audio_discard_event_count
+                .load(Ordering::Relaxed),
+            stale_audio_discard_frame_count: self
+                .stale_audio_discard_frame_count
+                .load(Ordering::Relaxed),
+            stale_audio_discard_last_frame_count: self
+                .stale_audio_discard_last_frame_count
+                .load(Ordering::Relaxed),
+            stale_audio_discard_last_lag_us: self
+                .stale_audio_discard_last_lag_us
+                .load(Ordering::Relaxed),
+            stale_audio_discard_max_lag_us: self
+                .stale_audio_discard_max_lag_us
+                .load(Ordering::Relaxed),
         }
     }
 }

@@ -18,6 +18,12 @@ pub struct RuntimeVideoSnapshot<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AudioDiscardSummary {
+    pub removed_frames: usize,
+    pub max_lag_us: MediaTimeUs,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VideoSelectionStats {
     pub kept_current: bool,
     pub presented_frames: u32,
@@ -129,14 +135,18 @@ impl PlayerRuntime {
         self.queued_video_frames.len() >= min_count
     }
 
-    pub fn discard_consumed_audio_frames(&mut self, playback_time_us: MediaTimeUs) -> usize {
-        let mut removed = 0usize;
+    pub fn discard_consumed_audio_frames(
+        &mut self,
+        playback_time_us: MediaTimeUs,
+    ) -> AudioDiscardSummary {
+        let mut summary = AudioDiscardSummary::default();
 
         while let Some(front) = self.queued_audio_frames.front() {
-            let is_consumed = match front.end_time_us() {
-                Some(end_time_us) => end_time_us <= playback_time_us,
-                None => front.pts_us < playback_time_us,
+            let consumed_boundary_us = match front.end_time_us() {
+                Some(end_time_us) => end_time_us,
+                None => front.pts_us,
             };
+            let is_consumed = consumed_boundary_us <= playback_time_us;
 
             if !is_consumed {
                 break;
@@ -144,10 +154,13 @@ impl PlayerRuntime {
 
             let _ = self.queued_audio_frames.pop_front();
             self.queued_audio_sample_offset = 0;
-            removed += 1;
+            summary.removed_frames += 1;
+            summary.max_lag_us = summary
+                .max_lag_us
+                .max(playback_time_us.saturating_sub(consumed_boundary_us));
         }
 
-        removed
+        summary
     }
 
     pub fn pull_audio_chunk(&mut self, requested_frame_count: usize) -> Option<AudioOutputChunk> {
@@ -422,7 +435,8 @@ mod tests {
 
         let removed = runtime.discard_consumed_audio_frames(15_000);
 
-        assert_eq!(removed, 1);
+        assert_eq!(removed.removed_frames, 1);
+        assert_eq!(removed.max_lag_us, 5_000);
         assert_eq!(runtime.audio_queue_len(), 2);
         assert_eq!(
             runtime.last_audio_frame().map(|frame| frame.pts_us),

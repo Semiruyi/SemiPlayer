@@ -113,6 +113,11 @@ pub struct SemiPlaybackSnapshot {
     pub worker_lock_wait_max_us: i64,
     pub worker_deadline_slip_last_us: i64,
     pub worker_deadline_slip_max_us: i64,
+    pub stale_audio_discard_event_count: u64,
+    pub stale_audio_discard_frame_count: u64,
+    pub stale_audio_discard_last_frame_count: u64,
+    pub stale_audio_discard_last_lag_us: i64,
+    pub stale_audio_discard_max_lag_us: i64,
     pub end_of_stream: u32,
 }
 
