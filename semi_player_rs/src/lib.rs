@@ -119,8 +119,26 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let current_video_frame = player.runtime.current_video_frame();
     let last_audio_frame = player.runtime.last_audio_frame();
+    let audio_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
+    let host_presentation_offset_ms =
+        i32::try_from(us_to_ms(player.host_presentation_offset_us)).unwrap_or_else(|_| {
+            if player.host_presentation_offset_us.is_negative() {
+                i32::MIN
+            } else {
+                i32::MAX
+            }
+        });
+    let core_av_delta_ms = current_video_frame
+        .map(|frame| audio_position_ms - us_to_ms(frame.pts_us))
+        .unwrap_or(0);
+    let core_sync_error_ms = current_video_frame
+        .map(|frame| compute_core_sync_error_ms(frame, player.audio_clock.presentation_time_us()))
+        .unwrap_or(0);
+    let expected_end_to_end_av_delta_ms =
+        core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
     SemiPlaybackSnapshot {
+        audio_position_ms,
         audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
         has_current_video_frame: u32::from(current_video_frame.is_some()),
@@ -133,8 +151,28 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         last_audio_pts_ms: last_audio_frame
             .map(|frame| us_to_ms(frame.pts_us))
             .unwrap_or(0),
+        host_presentation_offset_ms,
+        core_av_delta_ms,
+        core_sync_error_ms,
+        expected_end_to_end_av_delta_ms,
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
     }
+}
+
+fn compute_core_sync_error_ms(frame: &VideoFrame, target_time_us: i64) -> i64 {
+    if target_time_us < frame.pts_us {
+        return us_to_ms(target_time_us - frame.pts_us);
+    }
+
+    let Some(frame_end_us) = frame.end_time_us() else {
+        return 0;
+    };
+
+    if target_time_us >= frame_end_us {
+        return us_to_ms(target_time_us - frame_end_us);
+    }
+
+    0
 }
 
 fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
@@ -356,7 +394,7 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     bias_ms: i32,
 ) -> c_int {
     match with_player_mut(player, |player| {
-        player.video_presentation_bias_us = ms_to_us(i64::from(bias_ms));
+        player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
         SEMI_OK
     }) {
         Ok(code) => code,

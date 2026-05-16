@@ -73,12 +73,17 @@ pub struct SemiDecodedOutput {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SemiPlaybackSnapshot {
+    pub audio_position_ms: i64,
     pub audio_queue_len: u32,
     pub video_queue_len: u32,
     pub has_current_video_frame: u32,
     pub current_video_pts_ms: i64,
     pub current_video_duration_ms: i64,
     pub last_audio_pts_ms: i64,
+    pub host_presentation_offset_ms: i32,
+    pub core_av_delta_ms: i64,
+    pub core_sync_error_ms: i64,
+    pub expected_end_to_end_av_delta_ms: i64,
     pub end_of_stream: u32,
 }
 

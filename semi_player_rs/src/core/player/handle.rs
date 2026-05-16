@@ -15,7 +15,7 @@ pub struct SemiPlayerHandle {
     pub(crate) speed: c_double,
     pub(crate) opened_media: Option<OpenedMedia>,
     pub(crate) subtitles_visible: bool,
-    pub(crate) video_presentation_bias_us: MediaTimeUs,
+    pub(crate) host_presentation_offset_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: AudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
@@ -29,7 +29,7 @@ impl SemiPlayerHandle {
             speed: 1.0,
             opened_media: None,
             subtitles_visible: true,
-            video_presentation_bias_us: 0,
+            host_presentation_offset_us: 0,
             audio_clock: AudioClock::new(),
             audio_output: AudioOutputController::new(),
             video_scheduler: VideoScheduler::new(),
@@ -44,7 +44,7 @@ impl SemiPlayerHandle {
     pub fn reset_runtime_state(&mut self) {
         self.speed = 1.0;
         self.subtitles_visible = true;
-        self.video_presentation_bias_us = 0;
+        self.host_presentation_offset_us = 0;
         self.audio_clock.reset();
         self.audio_output.stop();
         self.video_scheduler = VideoScheduler::new();

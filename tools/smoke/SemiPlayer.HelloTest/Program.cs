@@ -219,7 +219,7 @@ internal sealed class PlayerSmokeWindow : Window
             throw new InvalidOperationException($"semi_player_get_audio_output_snapshot failed with code {audioOutputCode}");
         }
 
-        EnsureOk(Native.semi_player_get_position_ms(_player, out long audioPositionMs), "semi_player_get_position_ms");
+        long audioPositionMs = snapshot.AudioPositionMs;
 
         if (snapshot.HasCurrentVideoFrame == 0)
         {
@@ -228,7 +228,7 @@ internal sealed class PlayerSmokeWindow : Window
                 videoPtsMs: null,
                 frameCopied: false,
                 isPlaying: _isPlaying);
-            _statusText.Text = BuildStatusText(snapshot, audioOutput, null, audioPositionMs);
+            _statusText.Text = BuildStatusText(snapshot, audioOutput, null);
             return;
         }
 
@@ -264,7 +264,7 @@ internal sealed class PlayerSmokeWindow : Window
             frameCopied: shouldCopyFrame,
             isPlaying: _isPlaying);
 
-        _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo, audioPositionMs);
+        _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo);
     }
 
     private void EnsureBitmap(SemiVideoFrameInfo frameInfo)
@@ -290,8 +290,7 @@ internal sealed class PlayerSmokeWindow : Window
     private string BuildStatusText(
         SemiPlaybackSnapshot snapshot,
         SemiAudioOutputSnapshot audioOutput,
-        SemiVideoFrameInfo? frameInfo,
-        long audioPositionMs)
+        SemiVideoFrameInfo? frameInfo)
     {
         string state = _isPlaying ? "Playing" : "Paused";
         string framePart = frameInfo is SemiVideoFrameInfo frame
@@ -310,14 +309,16 @@ internal sealed class PlayerSmokeWindow : Window
             $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
             $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  LastStep {_diagnostics.LastVideoStepMs} ms  " +
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}";
-        long avDeltaMs = frameInfo is SemiVideoFrameInfo currentFrame
-            ? audioPositionMs - currentFrame.PtsMs
-            : 0;
+        string avPart =
+            $"Core A-V {snapshot.CoreAVDeltaMs} ms  CoreSyncErr {snapshot.CoreSyncErrorMs} ms  " +
+            $"HostOffset {snapshot.HostPresentationOffsetMs} ms  " +
+            $"Expected End-to-end A-V {snapshot.ExpectedEndToEndAVDeltaMs} ms";
 
         return
             $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
-            $"AudioPos {audioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  A-V {avDeltaMs} ms  " +
+            $"AudioPos {snapshot.AudioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  " +
             $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
+            $"{avPart}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
             $"{audioProgressPart}{Environment.NewLine}" +
@@ -560,12 +561,17 @@ internal static class Native
 [StructLayout(LayoutKind.Sequential)]
 internal struct SemiPlaybackSnapshot
 {
+    internal long AudioPositionMs;
     internal uint AudioQueueLen;
     internal uint VideoQueueLen;
     internal uint HasCurrentVideoFrame;
     internal long CurrentVideoPtsMs;
     internal long CurrentVideoDurationMs;
     internal long LastAudioPtsMs;
+    internal int HostPresentationOffsetMs;
+    internal long CoreAVDeltaMs;
+    internal long CoreSyncErrorMs;
+    internal long ExpectedEndToEndAVDeltaMs;
     internal uint EndOfStream;
 }
 

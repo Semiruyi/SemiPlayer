@@ -167,7 +167,7 @@ It should know only:
 - how to decode media
 - how to synchronize outputs
 - how to produce renderable frame output through an abstract contract
-- how to compensate for presentation bias supplied by the host
+- how to compensate for host-supplied presentation offset
 
 ## 9. Rust Module Direction
 
@@ -287,7 +287,7 @@ input
 Video:
 
 - FFmpeg decodes compressed packets into frames
-- the core schedules and forwards frames into the active render backend using synchronized timeline semantics and host-supplied presentation bias
+- the core schedules and forwards frames into the active render backend using synchronized timeline semantics and host-supplied presentation offset
 
 Audio:
 
@@ -310,7 +310,7 @@ The render layer should expose portable concepts such as:
 - render target
 - subtitle overlay composition
 - output surface contract
-- presentation bias input
+- host presentation offset input
 
 It should not expose D3D11-specific concepts as the only valid model.
 
@@ -415,7 +415,7 @@ Recommended sync rule:
 - video schedules itself against audio
 - subtitles follow the same timeline basis
 
-### 15.5 Presentation Bias Compensation
+### 15.5 Host Presentation Offset Compensation
 
 The player should not assume that a frame becomes visible at the exact moment the host receives it.
 
@@ -423,19 +423,19 @@ Instead:
 
 - the player owns synchronized timeline semantics
 - the host measures or estimates its own presentation delay
-- the host feeds a presentation bias value back into the player
+- the host feeds a presentation offset value back into the player
 - the player uses that bias when deciding which frame is currently correct for display
 
 Conceptually:
 
 ```text
-target_video_time = audio_presentation_clock + presentation_bias
+target_video_time = audio_presentation_clock + host_presentation_offset
 ```
 
 Where:
 
 - `audio_presentation_clock` is the player-side estimate of what the user is currently hearing
-- `presentation_bias` is a host-supplied estimate of how late the displayed frame will become visible
+- `host_presentation_offset` is a host-supplied estimate of how late the displayed frame will become visible
 
 This keeps the media synchronization rules centralized in the player while allowing each host shell to account for its own display pipeline.
 
@@ -453,7 +453,7 @@ The player is responsible for:
 The host is responsible for:
 
 - measuring or estimating presentation delay
-- feeding presentation bias back to the player
+- feeding host presentation offset back to the player
 - deciding how to integrate the output with its own render loop
 - presenting the already synchronized output result
 
@@ -476,7 +476,7 @@ Avalonia should reuse:
 
 - the same core playback API
 - the same output contract category
-- the same presentation bias compensation model
+- the same host presentation offset compensation model
 
 But its presentation adapter should be free to differ from WPF.
 
@@ -515,7 +515,7 @@ Design notes:
 - functions return explicit error codes
 - opaque pointer hides Rust internals
 - platform-specific surface/export APIs should not define the whole ABI shape
-- the public API should allow hosts to provide presentation bias without forcing hosts to own media synchronization rules
+- the public API should allow hosts to provide presentation offset without forcing hosts to own media synchronization rules
 
 ## 18. Temporary Scaffolding
 
@@ -564,7 +564,7 @@ Deferred decisions:
 - whether `cpal` remains sufficient across target platforms
 - exact callback/event model
 - how platform-specific output surfaces should be represented in public APIs
-- whether presentation bias should remain a simple estimated offset or evolve into richer present-feedback integration
+- whether host presentation offset should remain a simple estimated offset or evolve into richer present-feedback integration
 
 ## 21. Milestones
 

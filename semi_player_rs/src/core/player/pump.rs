@@ -82,7 +82,7 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
 
 fn select_video_frame(player: &mut SemiPlayerHandle, playback_time_us: i64) {
     let target_video_time_us =
-        add_media_time_us(playback_time_us, player.video_presentation_bias_us);
+        add_media_time_us(playback_time_us, player.host_presentation_offset_us);
     let _ = player
         .runtime
         .select_video_frame(&player.video_scheduler, target_video_time_us);
