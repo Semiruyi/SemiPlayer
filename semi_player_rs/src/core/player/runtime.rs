@@ -6,6 +6,17 @@ use crate::render::core::frame::VideoFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeVideoSnapshot<'a> {
+    pub current_frame: Option<&'a VideoFrame>,
+    pub next_frame: Option<&'a VideoFrame>,
+    pub current_pts_us: Option<MediaTimeUs>,
+    pub next_pts_us: Option<MediaTimeUs>,
+    pub current_duration_us: Option<MediaTimeUs>,
+    pub current_effective_end_us: Option<MediaTimeUs>,
+    pub current_to_next_delta_us: Option<MediaTimeUs>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VideoSelectionStats {
     pub kept_current: bool,
@@ -86,6 +97,24 @@ impl PlayerRuntime {
 
     pub fn next_video_frame(&self) -> Option<&VideoFrame> {
         self.queued_video_frames.front()
+    }
+
+    pub fn video_snapshot(&self) -> RuntimeVideoSnapshot<'_> {
+        let current_frame = self.current_video_frame();
+        let next_frame = self.next_video_frame();
+
+        RuntimeVideoSnapshot {
+            current_frame,
+            next_frame,
+            current_pts_us: current_frame.map(|frame| frame.pts_us),
+            next_pts_us: next_frame.map(|frame| frame.pts_us),
+            current_duration_us: current_frame.and_then(|frame| frame.duration_us),
+            current_effective_end_us: current_frame
+                .and_then(|frame| frame.effective_end_time_us(next_frame)),
+            current_to_next_delta_us: current_frame
+                .zip(next_frame)
+                .map(|(current, next)| next.pts_us.saturating_sub(current.pts_us)),
+        }
     }
 
     pub fn has_current_video_frame(&self) -> bool {

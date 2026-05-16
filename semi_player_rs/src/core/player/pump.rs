@@ -1,7 +1,9 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::core::media::DecodedOutput;
 use crate::core::player::handle::SemiPlayerHandle;
+use crate::core::player::schedule::ScheduledWork;
 use crate::core::player::video_sync::VideoSyncService;
+use crate::util::time::MediaTimeUs;
 
 const DEFAULT_PUMP_ITERATIONS: u32 = 256;
 const TARGET_AUDIO_QUEUE_LEN: usize = 8;
@@ -16,17 +18,25 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         return SEMI_E_INVALID_STATE;
     }
 
-    advance_playback(player);
+    execute_playback_cycle(player, needs_decode_supply(player), max_iterations)
+}
 
-    if needs_decode_supply(player) {
-        let code = decode_supply(player, max_iterations);
-        if code != SEMI_OK {
-            return code;
+pub fn execute_scheduled_work(
+    player: &mut SemiPlayerHandle,
+    scheduled_work: ScheduledWork,
+    decode_iterations: u32,
+) -> ResultCode {
+    match scheduled_work {
+        ScheduledWork::AdvanceAndDecode { .. } => {
+            execute_playback_cycle(player, true, decode_iterations)
         }
+        ScheduledWork::AdvancePlayback { .. } => {
+            advance_playback(player);
+            SEMI_OK
+        }
+        ScheduledWork::DecodeSupply => decode_supply(player, decode_iterations),
+        ScheduledWork::WaitFor { .. } => SEMI_OK,
     }
-
-    advance_playback(player);
-    SEMI_OK
 }
 
 pub fn advance_playback(player: &mut SemiPlayerHandle) {
@@ -40,6 +50,32 @@ pub fn advance_playback(player: &mut SemiPlayerHandle) {
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
     let _ = VideoSyncService::tick(player, playback_time_us);
+}
+
+fn execute_playback_cycle(
+    player: &mut SemiPlayerHandle,
+    should_decode: bool,
+    decode_iterations: u32,
+) -> ResultCode {
+    advance_playback(player);
+
+    if should_decode {
+        let code = decode_supply(player, decode_iterations);
+        if code != SEMI_OK {
+            return code;
+        }
+    }
+
+    advance_playback(player);
+    SEMI_OK
+}
+
+pub fn scheduled_work_deadline_us(scheduled_work: ScheduledWork) -> Option<MediaTimeUs> {
+    match scheduled_work {
+        ScheduledWork::AdvancePlayback { deadline_us }
+        | ScheduledWork::AdvanceAndDecode { deadline_us } => deadline_us,
+        ScheduledWork::DecodeSupply | ScheduledWork::WaitFor { .. } => None,
+    }
 }
 
 pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {

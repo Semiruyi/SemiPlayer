@@ -124,8 +124,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
 }
 
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
-    let current_video_frame = player.runtime.current_video_frame();
-    let next_video_frame = player.runtime.next_video_frame();
+    let runtime_video = player.runtime.video_snapshot();
     let last_audio_frame = player.runtime.last_audio_frame();
     let audio_position_us = player.audio_clock.presentation_time_us();
     let audio_position_ms = us_to_ms(audio_position_us);
@@ -141,15 +140,17 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
                 i32::MAX
             }
         });
-    let core_av_delta_ms = current_video_frame
-        .map(|frame| audio_position_ms - us_to_ms(frame.pts_us))
+    let core_av_delta_ms = runtime_video
+        .current_pts_us
+        .map(|pts_us| audio_position_ms - us_to_ms(pts_us))
         .unwrap_or(0);
-    let next_video_pts_ms = next_video_frame
-        .map(|frame| us_to_ms(frame.pts_us))
+    let next_video_pts_ms = runtime_video
+        .next_pts_us
+        .map(us_to_ms)
         .unwrap_or(0);
-    let current_to_next_video_delta_ms = current_video_frame
-        .zip(next_video_frame)
-        .map(|(current, next)| us_to_ms(next.pts_us.saturating_sub(current.pts_us)))
+    let current_to_next_video_delta_ms = runtime_video
+        .current_to_next_delta_us
+        .map(us_to_ms)
         .unwrap_or(0);
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms =
@@ -159,12 +160,14 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         audio_position_ms,
         audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
-        has_current_video_frame: u32::from(current_video_frame.is_some()),
-        current_video_pts_ms: current_video_frame
-            .map(|frame| us_to_ms(frame.pts_us))
+        has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
+        current_video_pts_ms: runtime_video
+            .current_pts_us
+            .map(us_to_ms)
             .unwrap_or(0),
-        current_video_duration_ms: current_video_frame
-            .and_then(|frame| frame.duration_us.map(us_to_ms))
+        current_video_duration_ms: runtime_video
+            .current_duration_us
+            .map(us_to_ms)
             .unwrap_or(0),
         current_video_effective_end_ms: sync_snapshot
             .current_video_effective_end_us

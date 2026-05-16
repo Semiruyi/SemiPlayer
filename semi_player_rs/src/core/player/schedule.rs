@@ -18,6 +18,38 @@ pub struct PumpScheduleHint {
     pub suggested_wait_us: MediaTimeUs,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScheduledWork {
+    AdvancePlayback { deadline_us: Option<MediaTimeUs> },
+    DecodeSupply,
+    AdvanceAndDecode { deadline_us: Option<MediaTimeUs> },
+    WaitFor { wait_us: MediaTimeUs },
+}
+
+impl PumpScheduleHint {
+    pub fn scheduled_work(self) -> ScheduledWork {
+        if self.playback_due_now && self.decode_supply_needed {
+            return ScheduledWork::AdvanceAndDecode {
+                deadline_us: self.next_pump_deadline_us,
+            };
+        }
+
+        if self.playback_due_now {
+            return ScheduledWork::AdvancePlayback {
+                deadline_us: self.next_pump_deadline_us,
+            };
+        }
+
+        if self.decode_supply_needed {
+            return ScheduledWork::DecodeSupply;
+        }
+
+        ScheduledWork::WaitFor {
+            wait_us: self.suggested_wait_us.max(1),
+        }
+    }
+}
+
 pub struct PlayerScheduleService;
 
 impl PlayerScheduleService {

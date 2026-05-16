@@ -150,21 +150,19 @@ impl VideoSyncService {
         let target_video_time_us =
             add_media_time_us(playback_time_us, player.host_presentation_offset_us);
 
-        let current_video_frame = player.runtime.current_video_frame();
-        let next_video_frame = player.runtime.next_video_frame();
-        let current_video_pts_us = current_video_frame.map(|frame| frame.pts_us).unwrap_or(0);
-        let next_video_pts_us = next_video_frame.map(|frame| frame.pts_us);
-        let current_video_effective_end_us = current_video_frame
-            .and_then(|frame| frame.effective_end_time_us(next_video_frame));
+        let runtime_video = player.runtime.video_snapshot();
+        let current_video_pts_us = runtime_video.current_pts_us.unwrap_or(0);
+        let next_video_pts_us = runtime_video.next_pts_us;
+        let current_video_effective_end_us = runtime_video.current_effective_end_us;
         let core_av_delta_us = playback_time_us.saturating_sub(current_video_pts_us);
         let core_sync_error_us = compute_core_sync_error_us(
             playback_time_us,
-            current_video_frame,
-            next_video_frame,
+            runtime_video.current_frame,
+            runtime_video.next_frame,
         );
         let next_wake_deadline_us = compute_next_wake_deadline_us(
             target_video_time_us,
-            current_video_frame,
+            runtime_video.current_frame,
             current_video_effective_end_us,
             next_video_pts_us,
         );

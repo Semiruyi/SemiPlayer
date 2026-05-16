@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use crate::api::types::PlayerState;
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
-use crate::core::player::pump::{advance_playback, decode_supply};
-use crate::core::player::schedule::PlayerScheduleService;
+use crate::core::player::pump::{execute_scheduled_work, scheduled_work_deadline_us};
+use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
 use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]
@@ -89,29 +89,23 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
 
 fn execute_worker_step(player: &mut SemiPlayerHandle) -> WorkerAction {
     let hint = PlayerScheduleService::evaluate(player);
+    let scheduled_work = hint.scheduled_work();
+    let deadline_us = scheduled_work_deadline_us(scheduled_work);
 
-    if hint.playback_due_now && hint.decode_supply_needed {
-        observe_worker_deadline_slip(player, hint.next_pump_deadline_us);
-        advance_playback(player);
-        let _ = decode_supply(player, 0);
-        advance_playback(player);
-        return WorkerAction::ContinueSoon;
+    match scheduled_work {
+        ScheduledWork::AdvanceAndDecode { .. } | ScheduledWork::AdvancePlayback { .. } => {
+            observe_worker_deadline_slip(player, deadline_us);
+            let _ = execute_scheduled_work(player, scheduled_work, 0);
+            WorkerAction::ContinueSoon
+        }
+        ScheduledWork::DecodeSupply => {
+            let _ = execute_scheduled_work(player, scheduled_work, 0);
+            WorkerAction::ContinueSoon
+        }
+        ScheduledWork::WaitFor { wait_us } => WorkerAction::WaitFor(Duration::from_micros(
+            u64::try_from(wait_us.max(1)).unwrap_or(u64::MAX),
+        )),
     }
-
-    if hint.playback_due_now {
-        observe_worker_deadline_slip(player, hint.next_pump_deadline_us);
-        advance_playback(player);
-        return WorkerAction::ContinueSoon;
-    }
-
-    if hint.decode_supply_needed {
-        let _ = decode_supply(player, 0);
-        return WorkerAction::ContinueSoon;
-    }
-
-    WorkerAction::WaitFor(Duration::from_micros(
-        u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
-    ))
 }
 
 fn wait_for_signal(
