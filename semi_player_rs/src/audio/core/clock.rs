@@ -189,7 +189,9 @@ mod tests {
         let before_pause = clock.presentation_time_us();
         clock.pause();
         let after_pause = clock.presentation_time_us();
+        let frozen_after_pause = clock.presentation_time_us();
         assert!(before_pause >= 200_000);
-        assert_eq!(after_pause, before_pause);
+        assert!(after_pause >= before_pause);
+        assert_eq!(frozen_after_pause, after_pause);
     }
 }

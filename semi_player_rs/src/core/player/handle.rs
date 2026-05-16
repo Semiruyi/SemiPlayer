@@ -7,6 +7,7 @@ use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
 use crate::audio::core::output_controller::AudioOutputController;
 use crate::core::media::OpenedMedia;
+use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
@@ -54,6 +55,7 @@ pub struct SemiPlayerHandle {
     state: AtomicU32,
     op_lock: Mutex<()>,
     sync_worker: Option<SyncWorkerHandle>,
+    decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
     pub(crate) speed: c_double,
     pub(crate) opened_media: Option<OpenedMedia>,
@@ -72,6 +74,7 @@ impl SemiPlayerHandle {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
             sync_worker: None,
+            decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
             speed: 1.0,
             opened_media: None,
@@ -109,12 +112,33 @@ impl SemiPlayerHandle {
         f(&mut *player_ptr)
     }
 
-    pub fn start_sync_worker(&mut self, player_ptr: *mut SemiPlayerHandle) {
+    pub fn start_workers(&mut self, player_ptr: *mut SemiPlayerHandle) {
         if self.sync_worker.is_some() {
             return;
         }
 
         self.sync_worker = Some(SyncWorkerHandle::start(player_ptr));
+        self.decode_worker = Some(DecodeWorkerHandle::start(player_ptr));
+    }
+
+    pub fn notify_workers(&self) {
+        if let Some(sync_worker) = self.sync_worker.as_ref() {
+            sync_worker.notify();
+        }
+
+        if let Some(decode_worker) = self.decode_worker.as_ref() {
+            decode_worker.notify();
+        }
+    }
+
+    pub fn stop_workers(&mut self) {
+        if let Some(mut sync_worker) = self.sync_worker.take() {
+            sync_worker.stop();
+        }
+
+        if let Some(mut decode_worker) = self.decode_worker.take() {
+            decode_worker.stop();
+        }
     }
 
     pub fn notify_sync_worker(&self) {
@@ -123,9 +147,9 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn stop_sync_worker(&mut self) {
-        if let Some(mut sync_worker) = self.sync_worker.take() {
-            sync_worker.stop();
+    pub fn notify_decode_worker(&self) {
+        if let Some(decode_worker) = self.decode_worker.as_ref() {
+            decode_worker.notify();
         }
     }
 

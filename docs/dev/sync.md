@@ -25,6 +25,7 @@ Current sync behavior is spread across these layers:
 
 - [`audio/core/clock.rs`](../../semi_player_rs/src/audio/core/clock.rs)
 - [`render/core/scheduler.rs`](../../semi_player_rs/src/render/core/scheduler.rs)
+- [`core/player/decode_worker.rs`](../../semi_player_rs/src/core/player/decode_worker.rs)
 - [`core/player/video_sync.rs`](../../semi_player_rs/src/core/player/video_sync.rs)
 - [`core/player/schedule.rs`](../../semi_player_rs/src/core/player/schedule.rs)
 - [`core/player/sync_worker.rs`](../../semi_player_rs/src/core/player/sync_worker.rs)
@@ -116,6 +117,17 @@ Important current consequence:
 
 - frame advancement is no longer primarily driven by UI polling
 
+Current worker state policy:
+
+- `Playing`
+  - stays deadline-driven
+  - keeps advancing playback continuously
+- `Ready` / `Paused`
+  - may run a stabilization pass after wake
+  - does not remain in a timed wait loop once no immediate work is pending
+- `Idle`
+  - sleeps until explicit wake
+
 The worker currently wakes for:
 
 - play
@@ -125,6 +137,9 @@ The worker currently wakes for:
 - speed changes
 - host presentation bias changes
 - explicit host pump calls
+
+Decode refill is now owned by a separate decode worker.
+The sync worker can request decode wakeups, but no longer needs to perform decode work itself.
 
 ## 7. Pump Role Now
 
@@ -177,7 +192,7 @@ A healthy current run usually means:
 
 The current model is much stronger than the original host-pump prototype, but there are still limits:
 
-- decode supply is still synchronous and not yet owned by a dedicated worker
+- decode supply is now worker-owned, but still synchronous under the same serialized player lock
 - the sync worker and FFI calls still serialize on one operation lock
 - end-to-end display timing is still partly host-dependent
 - subtitle timing has not yet been folded into the same worker-owned progression path
@@ -187,6 +202,6 @@ The current model is much stronger than the original host-pump prototype, but th
 Near-term sync work should focus on:
 
 1. objective worker-vs-host sync measurement
-2. decode supply separation into its own execution path
+2. further decoupling decode refill from the shared player lock
 3. tighter wake policy between decode enqueue and video sync
 4. subtitle timing integration

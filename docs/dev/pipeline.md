@@ -22,8 +22,8 @@ Important current rule:
 
 - playback progression is now primarily driven by the internal sync worker
 - `semi_player_pump(...)` still exists and is still useful
-- decode supply is still executed synchronously on the caller/worker thread
-- decode supply has been split logically from playback advancement, but is not yet a separate worker
+- decode supply now has its own internal worker lane
+- decode supply still shares the same serialized player lock, so it is not yet an independently concurrent pipeline
 
 That means the player has already crossed the line from:
 
@@ -34,10 +34,10 @@ host polling decides when frames advance
 to:
 
 ```text
-player-owned worker decides when playback should advance
+player-owned workers decide when playback should advance and when decode should refill
 ```
 
-but decode is not yet split into its own dedicated worker.
+but decode is not yet split into a lock-independent concurrent pipeline.
 
 ## 2. End-to-End Flow
 
@@ -166,12 +166,15 @@ The effective end of the current frame prefers the next frame PTS when available
 
 Relevant files:
 
+- [`semi_player_rs/src/core/player/execution.rs`](../../semi_player_rs/src/core/player/execution.rs)
+- [`semi_player_rs/src/core/player/decode_worker.rs`](../../semi_player_rs/src/core/player/decode_worker.rs)
 - [`semi_player_rs/src/core/player/sync_worker.rs`](../../semi_player_rs/src/core/player/sync_worker.rs)
 - [`semi_player_rs/src/core/player/schedule.rs`](../../semi_player_rs/src/core/player/schedule.rs)
 
 This is the biggest current architectural change.
 
 The player now starts an internal sync worker when the handle is created.
+It also starts a dedicated decode worker.
 
 Worker loop:
 
@@ -179,11 +182,40 @@ Worker loop:
 lock player
   -> inspect current state
   -> evaluate schedule
-  -> if playback is due, advance playback
-  -> if buffering is insufficient, run decode supply
-  -> otherwise sleep until deadline or explicit wake
+  -> if Playing:
+       run timed playback / decode work and sleep until deadline
+  -> if Ready or Paused:
+       run one stabilization pass if work is still pending
+       then stop active waiting
+  -> if Idle:
+       wait for explicit wake
 repeat
 ```
+
+Decode worker loop:
+
+```text
+lock player
+  -> inspect current buffer state
+  -> if decode supply is needed:
+       run synchronous decode refill
+       wake sync worker if new frames arrived
+  -> otherwise wait for explicit wake
+repeat
+```
+
+Current worker modes:
+
+- `Playing`
+  - normal continuous timing mode
+  - follows computed deadlines
+- `Ready` / `Paused`
+  - stabilization mode
+  - lets the player settle internal state after open/seek/pause
+  - does not stay in an active timed loop
+- `Idle`
+  - no media-owned work
+  - sleeps until explicit wake
 
 The worker is woken on:
 
@@ -204,6 +236,22 @@ Current scheduling input combines:
   - dirty sync state
   - stale current video frame
   - unstarted audio backend while playing
+
+Execution ownership is now split more explicitly:
+
+- `schedule.rs`
+  - decides playback-facing work and timing deadlines
+- `execution.rs`
+  - execution facade
+  - coordinates playback advancement and decode supply
+- `execution/playback_advance.rs`
+  - advances audio/video playback state
+- `execution/decode_supply.rs`
+  - runs synchronous decode supply
+- `decode_worker.rs`
+  - owns decode refill wake/sleep policy
+- `pump.rs`
+  - remains as an external/manual entry point
 
 ## 8. Serialized FFI Access
 
@@ -256,7 +304,7 @@ The current pipeline is much healthier than the original pump-only prototype, bu
 
 Main limitations:
 
-- decode supply is still synchronous and still shares the same worker/FFI execution lane
+- decode supply is still synchronous and still shares the same serialized player lock
 - audio output, decode supply, and sync decisions still share one serialized handle lock
 - video frame delivery is still CPU-copy BGRA, not GPU-native
 - subtitle timing and composition are not yet integrated into the worker-driven pipeline
@@ -266,7 +314,7 @@ Main limitations:
 
 The most likely next architecture steps are:
 
-1. move decode supply from a logical split to a real dedicated execution path
+1. reduce coupling between decode worker and the serialized player lock
 2. tighten notification flow between decode enqueue and sync wake-up
 3. add worker-vs-host diagnostic modes for objective sync measurement
 4. introduce real render backend and subtitle composition path

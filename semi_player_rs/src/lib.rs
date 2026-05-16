@@ -290,7 +290,7 @@ pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> 
 
     let player_ptr = Box::into_raw(Box::new(SemiPlayerHandle::new()));
     unsafe {
-        (*player_ptr).start_sync_worker(player_ptr);
+        (*player_ptr).start_workers(player_ptr);
         *out_player = player_ptr;
     }
     SEMI_OK
@@ -300,7 +300,7 @@ pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> 
 pub extern "C" fn semi_player_destroy(player: *mut SemiPlayerHandle) {
     if !player.is_null() {
         unsafe {
-            (*player).stop_sync_worker();
+            (*player).stop_workers();
             drop(Box::from_raw(player));
         };
     }
@@ -345,8 +345,8 @@ pub extern "C" fn semi_player_open(
         player.opened_media = Some(opened_media);
         player.reset_runtime_state();
         VideoSyncService::mark_dirty(player);
-        player.notify_sync_worker();
         player.set_state(PlayerState::Ready);
+        player.notify_workers();
     }) {
         Ok(_) => SEMI_OK,
         Err(code) => code,
@@ -364,7 +364,7 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
         player.set_state(PlayerState::Playing);
         player.audio_output.sync_started_state(player.state());
         VideoSyncService::mark_dirty(player);
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -383,7 +383,7 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
         player.set_state(PlayerState::Paused);
         player.audio_output.sync_started_state(player.state());
         VideoSyncService::mark_dirty(player);
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -419,7 +419,7 @@ pub extern "C" fn semi_player_seek(
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         player.video_sync.reset();
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -432,7 +432,7 @@ pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
     match with_player_locked(player, |player| {
         player.clear_media();
         player.set_state(PlayerState::Idle);
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -453,7 +453,7 @@ pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_
         player.speed = speed;
         player.audio_clock.set_speed(speed);
         VideoSyncService::mark_dirty(player);
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -469,7 +469,7 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     match with_player_locked(player, |player| {
         player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
         VideoSyncService::mark_dirty(player);
-        player.notify_sync_worker();
+        player.notify_workers();
         SEMI_OK
     }) {
         Ok(code) => code,
@@ -623,7 +623,7 @@ pub extern "C" fn semi_player_debug_decode_next(
 pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
     match with_player_locked(player, |player| {
         let code = pump_player(player, max_iterations);
-        player.notify_sync_worker();
+        player.notify_workers();
         code
     }) {
         Ok(code) => code,

@@ -3,7 +3,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
-use crate::core::player::execution::execute_scheduled_work;
+use crate::core::player::execution::advance_playback;
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
 use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
 use crate::util::time::MediaTimeUs;
@@ -62,13 +62,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     loop {
         let action = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::Worker, |player| {
-                if !player.is_media_loaded() || player.state() != PlayerState::Playing {
-                    return WorkerAction::WaitIndefinitely;
-                }
-
-                execute_worker_step(player)
-            })
+            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::Worker, evaluate_worker_action)
         };
 
         match action {
@@ -87,24 +81,48 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     }
 }
 
-fn execute_worker_step(player: &mut SemiPlayerHandle) -> WorkerAction {
+fn evaluate_worker_action(player: &mut SemiPlayerHandle) -> WorkerAction {
+    if !player.is_media_loaded() {
+        return WorkerAction::WaitIndefinitely;
+    }
+
+    match player.state() {
+        PlayerState::Playing => execute_worker_step(player, WorkerMode::Playing),
+        PlayerState::Ready | PlayerState::Paused => execute_worker_step(player, WorkerMode::Stabilizing),
+        PlayerState::Idle => WorkerAction::WaitIndefinitely,
+    }
+}
+
+fn execute_worker_step(player: &mut SemiPlayerHandle, mode: WorkerMode) -> WorkerAction {
     let hint = PlayerScheduleService::evaluate(player);
+    if mode == WorkerMode::Stabilizing && !hint.playback_due_now && !hint.decode_supply_needed {
+        return WorkerAction::WaitIndefinitely;
+    }
+
     let scheduled_work = hint.scheduled_work();
     let deadline_us = scheduled_work.deadline_us();
 
     match scheduled_work {
         ScheduledWork::AdvanceAndDecode { .. } | ScheduledWork::AdvancePlayback { .. } => {
             observe_worker_deadline_slip(player, deadline_us);
-            let _ = execute_scheduled_work(player, scheduled_work, 0);
+            advance_playback(player);
             WorkerAction::ContinueSoon
         }
         ScheduledWork::DecodeSupply => {
-            let _ = execute_scheduled_work(player, scheduled_work, 0);
-            WorkerAction::ContinueSoon
+            player.notify_decode_worker();
+            match mode {
+                WorkerMode::Playing => WorkerAction::WaitFor(Duration::from_micros(
+                    u64::try_from(hint.suggested_wait_us.max(1)).unwrap_or(u64::MAX),
+                )),
+                WorkerMode::Stabilizing => WorkerAction::WaitIndefinitely,
+            }
         }
-        ScheduledWork::WaitFor { wait_us } => WorkerAction::WaitFor(Duration::from_micros(
-            u64::try_from(wait_us.max(1)).unwrap_or(u64::MAX),
-        )),
+        ScheduledWork::WaitFor { wait_us } => match mode {
+            WorkerMode::Playing => WorkerAction::WaitFor(Duration::from_micros(
+                u64::try_from(wait_us.max(1)).unwrap_or(u64::MAX),
+            )),
+            WorkerMode::Stabilizing => WorkerAction::WaitIndefinitely,
+        },
     }
 }
 
@@ -156,4 +174,10 @@ enum WorkerAction {
     ContinueSoon,
     WaitFor(Duration),
     WaitIndefinitely,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum WorkerMode {
+    Playing,
+    Stabilizing,
 }
