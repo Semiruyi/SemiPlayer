@@ -30,6 +30,18 @@ pub struct PlayerDiagnosticsSnapshot {
     pub stale_audio_discard_last_frame_count: u64,
     pub stale_audio_discard_last_lag_us: MediaTimeUs,
     pub stale_audio_discard_max_lag_us: MediaTimeUs,
+    pub seek_event_count: u64,
+    pub seek_active: bool,
+    pub last_seek_target_us: MediaTimeUs,
+    pub seek_api_duration_us: MediaTimeUs,
+    pub seek_lock_wait_us: MediaTimeUs,
+    pub seek_ffmpeg_seek_us: MediaTimeUs,
+    pub seek_reset_us: MediaTimeUs,
+    pub seek_first_video_decoded_us: MediaTimeUs,
+    pub seek_first_audio_decoded_us: MediaTimeUs,
+    pub seek_target_video_ready_us: MediaTimeUs,
+    pub seek_target_audio_ready_us: MediaTimeUs,
+    pub seek_stable_us: MediaTimeUs,
 }
 
 #[derive(Default)]
@@ -47,6 +59,45 @@ struct PlayerDiagnostics {
     stale_audio_discard_last_frame_count: AtomicU64,
     stale_audio_discard_last_lag_us: AtomicI64,
     stale_audio_discard_max_lag_us: AtomicI64,
+    seek: Mutex<SeekDiagnosticsState>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SeekDiagnosticsSnapshot {
+    seek_event_count: u64,
+    seek_active: bool,
+    last_seek_target_us: MediaTimeUs,
+    seek_api_duration_us: MediaTimeUs,
+    seek_lock_wait_us: MediaTimeUs,
+    seek_ffmpeg_seek_us: MediaTimeUs,
+    seek_reset_us: MediaTimeUs,
+    seek_first_video_decoded_us: MediaTimeUs,
+    seek_first_audio_decoded_us: MediaTimeUs,
+    seek_target_video_ready_us: MediaTimeUs,
+    seek_target_audio_ready_us: MediaTimeUs,
+    seek_stable_us: MediaTimeUs,
+}
+
+#[derive(Debug)]
+struct SeekObservation {
+    requested_at: Instant,
+    target_us: MediaTimeUs,
+    seek_api_duration_us: Option<MediaTimeUs>,
+    seek_lock_wait_us: Option<MediaTimeUs>,
+    seek_ffmpeg_seek_us: Option<MediaTimeUs>,
+    seek_reset_us: Option<MediaTimeUs>,
+    seek_first_video_decoded_us: Option<MediaTimeUs>,
+    seek_first_audio_decoded_us: Option<MediaTimeUs>,
+    seek_target_video_ready_us: Option<MediaTimeUs>,
+    seek_target_audio_ready_us: Option<MediaTimeUs>,
+    seek_stable_us: Option<MediaTimeUs>,
+}
+
+#[derive(Debug, Default)]
+struct SeekDiagnosticsState {
+    seek_event_count: u64,
+    active: Option<SeekObservation>,
+    last_completed: Option<SeekDiagnosticsSnapshot>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -218,6 +269,54 @@ impl SemiPlayerHandle {
     pub fn observe_stale_audio_discard(&self, discard: AudioDiscardSummary) {
         self.diagnostics.observe_stale_audio_discard(discard);
     }
+
+    pub fn observe_seek_requested(&self, target_us: MediaTimeUs) {
+        self.diagnostics.observe_seek_requested(target_us);
+    }
+
+    pub fn observe_seek_lock_acquired(&self) {
+        self.diagnostics.observe_seek_lock_acquired();
+    }
+
+    pub fn observe_seek_ffmpeg_seek_started(&self) {
+        self.diagnostics.observe_seek_ffmpeg_seek_started();
+    }
+
+    pub fn observe_seek_ffmpeg_seek_finished(&self) {
+        self.diagnostics.observe_seek_ffmpeg_seek_finished();
+    }
+
+    pub fn observe_seek_reset_finished(&self) {
+        self.diagnostics.observe_seek_reset_finished();
+    }
+
+    pub fn observe_seek_api_completed(&self) {
+        self.diagnostics.observe_seek_api_completed();
+    }
+
+    pub fn observe_seek_aborted(&self) {
+        self.diagnostics.observe_seek_aborted();
+    }
+
+    pub fn observe_seek_first_video_decoded(&self) {
+        self.diagnostics.observe_seek_first_video_decoded();
+    }
+
+    pub fn observe_seek_first_audio_decoded(&self) {
+        self.diagnostics.observe_seek_first_audio_decoded();
+    }
+
+    pub fn observe_seek_target_video_ready(&self) {
+        self.diagnostics.observe_seek_target_video_ready();
+    }
+
+    pub fn observe_seek_target_audio_ready(&self) {
+        self.diagnostics.observe_seek_target_audio_ready();
+    }
+
+    pub fn observe_seek_stable(&self) {
+        self.diagnostics.observe_seek_stable();
+    }
 }
 
 impl PlayerDiagnostics {
@@ -266,7 +365,111 @@ impl PlayerDiagnostics {
         update_atomic_max(&self.stale_audio_discard_max_lag_us, discard.max_lag_us);
     }
 
+    fn observe_seek_requested(&self, target_us: MediaTimeUs) {
+        let mut seek = self.seek.lock().unwrap();
+        seek.seek_event_count = seek.seek_event_count.saturating_add(1);
+        seek.active = Some(SeekObservation::new(target_us));
+    }
+
+    fn observe_seek_lock_acquired(&self) {
+        self.with_active_seek(|seek| {
+            seek.seek_lock_wait_us = Some(seek.elapsed_us());
+        });
+    }
+
+    fn observe_seek_ffmpeg_seek_started(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_lock_wait_us.is_none() {
+                seek.seek_lock_wait_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
+    fn observe_seek_ffmpeg_seek_finished(&self) {
+        self.with_active_seek(|seek| {
+            seek.seek_ffmpeg_seek_us = Some(seek.elapsed_us());
+        });
+    }
+
+    fn observe_seek_reset_finished(&self) {
+        self.with_active_seek(|seek| {
+            seek.seek_reset_us = Some(seek.elapsed_us());
+        });
+    }
+
+    fn observe_seek_api_completed(&self) {
+        self.with_active_seek(|seek| {
+            seek.seek_api_duration_us = Some(seek.elapsed_us());
+        });
+    }
+
+    fn observe_seek_aborted(&self) {
+        let mut seek = self.seek.lock().unwrap();
+        let Some(mut active) = seek.active.take() else {
+            return;
+        };
+
+        if active.seek_api_duration_us.is_none() {
+            active.seek_api_duration_us = Some(active.elapsed_us());
+        }
+        seek.last_completed = Some(active.snapshot(seek.seek_event_count, false));
+    }
+
+    fn observe_seek_first_video_decoded(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_first_video_decoded_us.is_none() {
+                seek.seek_first_video_decoded_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
+    fn observe_seek_first_audio_decoded(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_first_audio_decoded_us.is_none() {
+                seek.seek_first_audio_decoded_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
+    fn observe_seek_target_video_ready(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_target_video_ready_us.is_none() {
+                seek.seek_target_video_ready_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
+    fn observe_seek_target_audio_ready(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_target_audio_ready_us.is_none() {
+                seek.seek_target_audio_ready_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
+    fn observe_seek_stable(&self) {
+        let mut seek = self.seek.lock().unwrap();
+        let Some(mut active) = seek.active.take() else {
+            return;
+        };
+
+        if active.seek_stable_us.is_none() {
+            active.seek_stable_us = Some(active.elapsed_us());
+        }
+
+        seek.last_completed = Some(active.snapshot(seek.seek_event_count, false));
+    }
+
+    fn with_active_seek(&self, f: impl FnOnce(&mut SeekObservation)) {
+        let mut seek = self.seek.lock().unwrap();
+        if let Some(active) = seek.active.as_mut() {
+            f(active);
+        }
+    }
+
     fn snapshot(&self) -> PlayerDiagnosticsSnapshot {
+        let seek_snapshot = self.seek.lock().unwrap().snapshot();
+
         PlayerDiagnosticsSnapshot {
             ffi_lock_wait_last_us: self.ffi_lock_wait_last_us.load(Ordering::Relaxed),
             ffi_lock_wait_max_us: self.ffi_lock_wait_max_us.load(Ordering::Relaxed),
@@ -297,7 +500,71 @@ impl PlayerDiagnostics {
             stale_audio_discard_max_lag_us: self
                 .stale_audio_discard_max_lag_us
                 .load(Ordering::Relaxed),
+            seek_event_count: seek_snapshot.seek_event_count,
+            seek_active: seek_snapshot.seek_active,
+            last_seek_target_us: seek_snapshot.last_seek_target_us,
+            seek_api_duration_us: seek_snapshot.seek_api_duration_us,
+            seek_lock_wait_us: seek_snapshot.seek_lock_wait_us,
+            seek_ffmpeg_seek_us: seek_snapshot.seek_ffmpeg_seek_us,
+            seek_reset_us: seek_snapshot.seek_reset_us,
+            seek_first_video_decoded_us: seek_snapshot.seek_first_video_decoded_us,
+            seek_first_audio_decoded_us: seek_snapshot.seek_first_audio_decoded_us,
+            seek_target_video_ready_us: seek_snapshot.seek_target_video_ready_us,
+            seek_target_audio_ready_us: seek_snapshot.seek_target_audio_ready_us,
+            seek_stable_us: seek_snapshot.seek_stable_us,
         }
+    }
+}
+
+impl SeekObservation {
+    fn new(target_us: MediaTimeUs) -> Self {
+        Self {
+            requested_at: Instant::now(),
+            target_us,
+            seek_api_duration_us: None,
+            seek_lock_wait_us: None,
+            seek_ffmpeg_seek_us: None,
+            seek_reset_us: None,
+            seek_first_video_decoded_us: None,
+            seek_first_audio_decoded_us: None,
+            seek_target_video_ready_us: None,
+            seek_target_audio_ready_us: None,
+            seek_stable_us: None,
+        }
+    }
+
+    fn elapsed_us(&self) -> MediaTimeUs {
+        i64::try_from(self.requested_at.elapsed().as_micros()).unwrap_or(i64::MAX)
+    }
+
+    fn snapshot(&self, seek_event_count: u64, seek_active: bool) -> SeekDiagnosticsSnapshot {
+        SeekDiagnosticsSnapshot {
+            seek_event_count,
+            seek_active,
+            last_seek_target_us: self.target_us,
+            seek_api_duration_us: self.seek_api_duration_us.unwrap_or(-1),
+            seek_lock_wait_us: self.seek_lock_wait_us.unwrap_or(-1),
+            seek_ffmpeg_seek_us: self.seek_ffmpeg_seek_us.unwrap_or(-1),
+            seek_reset_us: self.seek_reset_us.unwrap_or(-1),
+            seek_first_video_decoded_us: self.seek_first_video_decoded_us.unwrap_or(-1),
+            seek_first_audio_decoded_us: self.seek_first_audio_decoded_us.unwrap_or(-1),
+            seek_target_video_ready_us: self.seek_target_video_ready_us.unwrap_or(-1),
+            seek_target_audio_ready_us: self.seek_target_audio_ready_us.unwrap_or(-1),
+            seek_stable_us: self.seek_stable_us.unwrap_or(-1),
+        }
+    }
+}
+
+impl SeekDiagnosticsState {
+    fn snapshot(&self) -> SeekDiagnosticsSnapshot {
+        if let Some(active) = self.active.as_ref() {
+            return active.snapshot(self.seek_event_count, true);
+        }
+
+        self.last_completed.unwrap_or(SeekDiagnosticsSnapshot {
+            seek_event_count: self.seek_event_count,
+            ..SeekDiagnosticsSnapshot::default()
+        })
     }
 }
 

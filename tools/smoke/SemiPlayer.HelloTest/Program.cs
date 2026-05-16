@@ -767,6 +767,14 @@ internal sealed class PlayerSmokeWindow : Window
         string audioBufferPart =
             $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  " +
             $"PumpAt {snapshot.NextPumpDeadlineMs} ms  Wait {snapshot.SuggestedPumpWaitMs} ms";
+        string seekPart =
+            $"Seek#{snapshot.SeekEventCount} {(snapshot.SeekActive != 0 ? "active" : "done")}  " +
+            $"Target {snapshot.LastSeekTargetMs} ms  Api {FormatSeekMetricUs(snapshot.SeekApiDurationUs)}  " +
+            $"Lock {FormatSeekMetricUs(snapshot.SeekLockWaitUs)}  Ffmpeg {FormatSeekMetricUs(snapshot.SeekFfmpegSeekUs)}  Reset {FormatSeekMetricUs(snapshot.SeekResetUs)}";
+        string seekRecoveryPart =
+            $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)}  ADec {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
+            $"VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)}  AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
+            $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}";
         string coreSyncPart =
             $"CoreSync Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
             $"AbsMean {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
@@ -799,9 +807,21 @@ internal sealed class PlayerSmokeWindow : Window
             $"{timelinePart}{Environment.NewLine}" +
             $"{audioOutputPart}{Environment.NewLine}" +
             $"{audioBufferPart}{Environment.NewLine}" +
+            $"{seekPart}{Environment.NewLine}" +
+            $"{seekRecoveryPart}{Environment.NewLine}" +
             $"{playbackPart}{Environment.NewLine}" +
             $"{anomalyPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
+    }
+
+    private static string FormatSeekMetricUs(long valueUs)
+    {
+        if (valueUs < 0)
+        {
+            return "n/a";
+        }
+
+        return $"{valueUs / 1000.0:F1} ms";
     }
 
     private string BuildSourcePart()
@@ -1569,6 +1589,18 @@ internal struct SemiPlaybackSnapshot
     internal ulong StaleAudioDiscardLastFrameCount;
     internal long StaleAudioDiscardLastLagUs;
     internal long StaleAudioDiscardMaxLagUs;
+    internal ulong SeekEventCount;
+    internal uint SeekActive;
+    internal long LastSeekTargetMs;
+    internal long SeekApiDurationUs;
+    internal long SeekLockWaitUs;
+    internal long SeekFfmpegSeekUs;
+    internal long SeekResetUs;
+    internal long SeekFirstVideoDecodedUs;
+    internal long SeekFirstAudioDecodedUs;
+    internal long SeekTargetVideoReadyUs;
+    internal long SeekTargetAudioReadyUs;
+    internal long SeekStableUs;
     internal uint AudioOutputStarted;
     internal uint PendingDeviceFrames;
     internal ulong RenderedFramesTotal;

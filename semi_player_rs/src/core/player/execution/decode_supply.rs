@@ -58,6 +58,7 @@ pub(crate) fn apply_decoded_output(
         DecodedOutput::Video(frame) => {
             player.runtime.push_video_frame(frame);
             VideoSyncService::mark_dirty(player);
+            player.observe_seek_first_video_decoded();
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: true,
@@ -65,6 +66,7 @@ pub(crate) fn apply_decoded_output(
         }
         DecodedOutput::Audio(frame) => {
             player.runtime.push_audio_frame(frame);
+            player.observe_seek_first_audio_decoded();
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: should_wake_sync_for_audio_enqueue(player),

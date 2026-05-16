@@ -115,8 +115,22 @@ Status: next active design/implementation track after wake-policy baseline
 
 Tasks:
 
-- measure end-to-end seek latency from API call to first stable post-seek frame/audio
+- add seek result metrics:
+  - API seek duration
+  - first video frame latency
+  - first audible audio latency
+  - stable post-seek settle time
+- add internal seek stage timing metrics:
+  - lock wait
+  - FFmpeg seek
+  - immediate reset
+  - decode-to-first-video
+  - decode-to-first-audio
+  - target-video-ready
+  - target-audio-ready
+  - stable settle
 - separate seek correctness from seek speed so regressions are visible
+- start with core-internal observability before adding end-to-end host timing
 - document the current seek path and the target seek-recovery model explicitly
 - adopt a performance-first keyframe-anchored seek strategy for local playback
 - add a dedicated seek-recovery path instead of treating seek as a plain full reset + refill

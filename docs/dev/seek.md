@@ -178,7 +178,17 @@ Near-term rules:
 
 Seek work should be driven by explicit metrics, not only by feel.
 
-The first measurement set should include:
+The measurement model should be split into two layers:
+
+### 8.1 Result Metrics
+
+These are the user-visible or player-visible outcome metrics that answer:
+
+```text
+how good did the seek feel?
+```
+
+The first result set should include:
 
 - API seek call duration
 - first video frame after seek latency
@@ -191,6 +201,65 @@ The project should track both:
 - seek speed
 
 so that a faster implementation does not silently become sloppier.
+
+### 8.2 Stage Timing Metrics
+
+Result metrics alone are not enough.
+
+They can show that seek is slow, but they cannot explain which stage is slow.
+
+The player should therefore also record internal stage timestamps and compute per-stage durations.
+
+Recommended timestamp points:
+
+- `seek_requested_at`
+- `seek_lock_acquired_at`
+- `ffmpeg_seek_started_at`
+- `ffmpeg_seek_finished_at`
+- `seek_reset_finished_at`
+- `first_post_seek_video_decoded_at`
+- `first_post_seek_audio_decoded_at`
+- `target_video_ready_at`
+- `target_audio_ready_at`
+- `seek_stable_at`
+
+Recommended derived stage durations:
+
+- lock wait duration
+- FFmpeg seek duration
+- immediate reset duration
+- decode-to-first-video duration
+- decode-to-first-audio duration
+- target-video-ready duration
+- target-audio-ready duration
+- stable-settle duration
+
+These metrics should answer:
+
+- is the cost dominated by lock wait?
+- is the FFmpeg seek itself expensive?
+- is forward decode to the target point expensive?
+- is video post-processing the problem?
+- is audio recovery the problem?
+- is refill-to-stable-state the problem?
+
+### 8.3 Core-Internal vs End-to-End
+
+The first implementation stage should focus on:
+
+- core-internal metrics
+
+That means the Rust player should first measure:
+
+- when internal milestones are reached
+- not when the host actually displays or audibly renders them
+
+Later, the host may add end-to-end timestamps such as:
+
+- first displayed frame after seek
+- first heard audio after seek
+
+But those should be a second-stage validation layer, not a prerequisite for improving the core seek path.
 
 ## 9. Non-Goals For This Stage
 
@@ -210,7 +279,7 @@ Hardware decode may help later, especially for high-resolution content, but the 
 Recommended order:
 
 1. document the current seek path and target recovery model
-2. add seek latency and settle metrics
+2. add seek result metrics and internal stage timing metrics
 3. introduce explicit seek recovery state
 4. implement keyframe-anchored recovery as the default real-seek path
 5. trim audio to the target point during recovery

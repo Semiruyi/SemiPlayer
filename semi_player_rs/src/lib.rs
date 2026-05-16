@@ -230,6 +230,18 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         stale_audio_discard_last_frame_count: diagnostics.stale_audio_discard_last_frame_count,
         stale_audio_discard_last_lag_us: diagnostics.stale_audio_discard_last_lag_us,
         stale_audio_discard_max_lag_us: diagnostics.stale_audio_discard_max_lag_us,
+        seek_event_count: diagnostics.seek_event_count,
+        seek_active: u32::from(diagnostics.seek_active),
+        last_seek_target_ms: us_to_ms(diagnostics.last_seek_target_us),
+        seek_api_duration_us: diagnostics.seek_api_duration_us,
+        seek_lock_wait_us: diagnostics.seek_lock_wait_us,
+        seek_ffmpeg_seek_us: diagnostics.seek_ffmpeg_seek_us,
+        seek_reset_us: diagnostics.seek_reset_us,
+        seek_first_video_decoded_us: diagnostics.seek_first_video_decoded_us,
+        seek_first_audio_decoded_us: diagnostics.seek_first_audio_decoded_us,
+        seek_target_video_ready_us: diagnostics.seek_target_video_ready_us,
+        seek_target_audio_ready_us: diagnostics.seek_target_audio_ready_us,
+        seek_stable_us: diagnostics.seek_stable_us,
         audio_output_started: u32::from(audio_output_snapshot.started),
         pending_device_frames: u32::try_from(audio_output_snapshot.pending_device_frames)
             .unwrap_or(u32::MAX),
@@ -412,25 +424,36 @@ pub extern "C" fn semi_player_seek(
     position_ms: i64,
     _exact: c_int,
 ) -> c_int {
+    let target_us = ms_to_us(position_ms.max(0));
+    if !player.is_null() {
+        unsafe { (&*player).observe_seek_requested(target_us) };
+    }
+
     match with_playback_coordinated_player_locked(player, |player| {
+        player.observe_seek_lock_acquired();
         if !player.is_media_loaded() {
+            player.observe_seek_aborted();
             return SEMI_E_INVALID_STATE;
         }
         if position_ms < 0 {
+            player.observe_seek_aborted();
             return SEMI_E_INVALID_ARG;
         }
 
-        let target_us = ms_to_us(position_ms);
         let Some(opened_media) = player.opened_media.as_ref() else {
+            player.observe_seek_aborted();
             return SEMI_E_INVALID_STATE;
         };
 
+        player.observe_seek_ffmpeg_seek_started();
         if opened_media
             .with_mut(|opened_media| opened_media.seek(target_us))
             .is_err()
         {
+            player.observe_seek_aborted();
             return SEMI_E_SEEK_FAILED;
         }
+        player.observe_seek_ffmpeg_seek_finished();
 
         player.bump_media_generation();
         player.runtime.clear();
@@ -440,7 +463,9 @@ pub extern "C" fn semi_player_seek(
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         player.video_sync.reset();
+        player.observe_seek_reset_finished();
         player.notify_workers();
+        player.observe_seek_api_completed();
         SEMI_OK
     }) {
         Ok(code) => code,
