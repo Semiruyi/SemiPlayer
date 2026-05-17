@@ -782,11 +782,16 @@ internal sealed class PlayerSmokeWindow : Window
         string videoLine =
             $"Video  Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
             $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
+        string decodeLine =
+            $"Decode  {FormatDecodeBackend(snapshot.VideoDecodeBackend)}  " +
+            $"HwReq {snapshot.VideoHardwareRequested}  HwOn {snapshot.VideoHardwareActive}  " +
+            $"Fallback {FormatDecodeFallbackReason(snapshot.VideoDecodeFallbackReason)}";
         string surfaceLine =
             surfaceDesc is SemiVideoSurfaceDesc desc
                 ? $"Surface  {FormatSurfaceKind(desc.Kind)}  PixFmt {desc.PixelFormat}  " +
                   $"Stride {desc.Stride}  Bytes {desc.ByteLen}  Tex 0x{desc.TexturePtr:X}"
-                : "Surface  n/a";
+                : $"Surface  {FormatSurfaceKind(snapshot.CurrentVideoSurfaceKind)}  " +
+                  $"PixFmt {snapshot.CurrentVideoSurfacePixelFormat}";
 
         string audioLine1 =
             $"AudioOut  {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
@@ -852,6 +857,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"{syncLine1}{Environment.NewLine}" +
             $"{syncLine2}{Environment.NewLine}" +
             $"{videoLine}{Environment.NewLine}" +
+            $"{decodeLine}{Environment.NewLine}" +
             $"{surfaceLine}{Environment.NewLine}" +
             $"{audioLine1}{Environment.NewLine}" +
             $"{audioLine2}{Environment.NewLine}" +
@@ -911,6 +917,24 @@ internal sealed class PlayerSmokeWindow : Window
         (uint)SemiVideoSurfaceKind.CpuPacked => "CpuPacked",
         (uint)SemiVideoSurfaceKind.D3d11Texture2D => "D3D11",
         _ => "Unknown",
+    };
+
+    private static string FormatDecodeBackend(uint backend) => backend switch
+    {
+        (uint)SemiVideoDecodeBackend.SoftwareBgra => "SoftwareBgra",
+        (uint)SemiVideoDecodeBackend.D3d11va => "D3D11VA",
+        _ => "Unknown",
+    };
+
+    private static string FormatDecodeFallbackReason(uint reason) => reason switch
+    {
+        (uint)SemiVideoDecodeFallbackReason.None => "none",
+        (uint)SemiVideoDecodeFallbackReason.NoHardwareConfig => "no-hw-config",
+        (uint)SemiVideoDecodeFallbackReason.HwDeviceCreateFailed => "hw-device-create",
+        (uint)SemiVideoDecodeFallbackReason.HwDeviceContextBindFailed => "hw-device-bind",
+        (uint)SemiVideoDecodeFallbackReason.HwDecoderOpenFailed => "hw-open",
+        (uint)SemiVideoDecodeFallbackReason.HwDecoderTypeMismatch => "hw-type",
+        _ => "unknown",
     };
 
     private string BuildSourcePart()
@@ -1652,6 +1676,12 @@ internal struct SemiPlaybackSnapshot
     internal uint HasCurrentVideoFrame;
     internal long CurrentVideoPtsMs;
     internal long CurrentVideoDurationMs;
+    internal uint VideoDecodeBackend;
+    internal uint VideoHardwareRequested;
+    internal uint VideoHardwareActive;
+    internal uint VideoDecodeFallbackReason;
+    internal uint CurrentVideoSurfaceKind;
+    internal uint CurrentVideoSurfacePixelFormat;
     internal long CurrentVideoEffectiveEndMs;
     internal long NextVideoPtsMs;
     internal long CurrentToNextVideoDeltaMs;
@@ -1791,4 +1821,21 @@ internal enum SemiVideoSurfaceKind : uint
     Unknown = 0,
     CpuPacked = 1,
     D3d11Texture2D = 2,
+}
+
+internal enum SemiVideoDecodeBackend : uint
+{
+    Unknown = 0,
+    SoftwareBgra = 1,
+    D3d11va = 2,
+}
+
+internal enum SemiVideoDecodeFallbackReason : uint
+{
+    None = 0,
+    NoHardwareConfig = 1,
+    HwDeviceCreateFailed = 2,
+    HwDeviceContextBindFailed = 3,
+    HwDecoderOpenFailed = 4,
+    HwDecoderTypeMismatch = 5,
 }

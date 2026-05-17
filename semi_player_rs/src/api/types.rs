@@ -81,6 +81,12 @@ pub struct SemiPlaybackSnapshot {
     pub has_current_video_frame: u32,
     pub current_video_pts_ms: i64,
     pub current_video_duration_ms: i64,
+    pub video_decode_backend: u32,
+    pub video_hardware_requested: u32,
+    pub video_hardware_active: u32,
+    pub video_decode_fallback_reason: u32,
+    pub current_video_surface_kind: u32,
+    pub current_video_surface_pixel_format: u32,
     pub current_video_effective_end_ms: i64,
     pub next_video_pts_ms: i64,
     pub current_to_next_video_delta_ms: i64,
@@ -209,6 +215,39 @@ pub enum SemiVideoSurfaceKind {
 }
 
 impl SemiVideoSurfaceKind {
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum SemiVideoDecodeBackend {
+    Unknown = 0,
+    SoftwareBgra = 1,
+    D3d11va = 2,
+}
+
+impl SemiVideoDecodeBackend {
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum SemiVideoDecodeFallbackReason {
+    None = 0,
+    NoHardwareConfig = 1,
+    HwDeviceCreateFailed = 2,
+    HwDeviceContextBindFailed = 3,
+    HwDecoderOpenFailed = 4,
+    HwDecoderTypeMismatch = 5,
+}
+
+impl SemiVideoDecodeFallbackReason {
     pub const fn as_raw(self) -> u32 {
         self as u32
     }

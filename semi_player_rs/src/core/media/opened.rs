@@ -40,8 +40,10 @@ pub struct OpenedVideoDecoder {
     scaler: Option<ScalingContext>,
     estimated_frame_duration_us: Option<MediaTimeUs>,
     backend: VideoDecodeBackend,
+    hardware_requested: bool,
+    fallback_reason: VideoDecodeFallbackReason,
     #[allow(dead_code)]
-    hardware_context: Option<VideoHardwareContext>,
+    hardware_context: Option<Box<VideoHardwareContext>>,
 }
 
 pub struct OpenedAudioDecoder {
@@ -61,15 +63,36 @@ struct DecoderDrainingState {
     end_of_stream_emitted: bool,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum VideoDecodeBackend {
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VideoDecodeBackend {
+    #[default]
+    Unknown,
     SoftwareBgra,
     D3d11va,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VideoDecodeFallbackReason {
+    #[default]
+    None,
+    NoHardwareConfig,
+    HwDeviceCreateFailed,
+    HwDeviceContextBindFailed,
+    HwDecoderOpenFailed,
+    HwDecoderTypeMismatch,
 }
 
 struct VideoHardwareContext {
     hw_device_ctx: *mut ffi::AVBufferRef,
     hw_pix_fmt: ffi::AVPixelFormat,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VideoDecodeDiagnosticsSnapshot {
+    pub backend: VideoDecodeBackend,
+    pub hardware_requested: bool,
+    pub hardware_active: bool,
+    pub fallback_reason: VideoDecodeFallbackReason,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -263,6 +286,13 @@ impl OpenedMedia {
 
     pub fn seek_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
         self.seek_diagnostics.snapshot()
+    }
+
+    pub fn video_decode_diagnostics_snapshot(&self) -> VideoDecodeDiagnosticsSnapshot {
+        self.video_decoder
+            .as_ref()
+            .map(OpenedVideoDecoder::diagnostics_snapshot)
+            .unwrap_or_default()
     }
 
     pub fn finish_seek_diagnostics(&mut self) {
@@ -647,6 +677,11 @@ impl SharedOpenedMedia {
         let guard = self.inner.lock().unwrap();
         guard.seek_diagnostics_snapshot()
     }
+
+    pub fn video_decode_diagnostics_snapshot(&self) -> VideoDecodeDiagnosticsSnapshot {
+        let guard = self.inner.lock().unwrap();
+        guard.video_decode_diagnostics_snapshot()
+    }
 }
 
 pub struct MediaPacket {
@@ -671,11 +706,15 @@ fn open_video_decoder(
         .ok_or(ffmpeg::Error::DecoderNotFound)
         .map_err(MediaOpenError::VideoDecoder)?;
 
-    if let Some(decoder) = try_open_d3d11va_video_decoder(stream_index, &stream, codec)? {
-        return Ok(Some(decoder));
+    match try_open_d3d11va_video_decoder(stream_index, &stream, codec)? {
+        Ok(decoder) => return Ok(Some(decoder)),
+        Err(fallback_reason) => {
+            let mut decoder = open_software_video_decoder(stream_index, &stream, codec)?;
+            decoder.hardware_requested = true;
+            decoder.fallback_reason = fallback_reason;
+            return Ok(Some(decoder));
+        }
     }
-
-    open_software_video_decoder(stream_index, &stream, codec).map(Some)
 }
 
 fn open_software_video_decoder(
@@ -699,6 +738,8 @@ fn open_software_video_decoder(
         scaler: None,
         estimated_frame_duration_us: estimate_stream_frame_duration_us(stream.avg_frame_rate()),
         backend: VideoDecodeBackend::SoftwareBgra,
+        hardware_requested: false,
+        fallback_reason: VideoDecodeFallbackReason::None,
         hardware_context: None,
     })
 }
@@ -707,9 +748,9 @@ fn try_open_d3d11va_video_decoder(
     stream_index: usize,
     stream: &ffmpeg::Stream<'_>,
     codec: ffmpeg::Codec,
-) -> Result<Option<OpenedVideoDecoder>, MediaOpenError> {
+) -> Result<Result<OpenedVideoDecoder, VideoDecodeFallbackReason>, MediaOpenError> {
     let Some(hw_pix_fmt) = find_d3d11va_hw_pixel_format(&codec) else {
-        return Ok(None);
+        return Ok(Err(VideoDecodeFallbackReason::NoHardwareConfig));
     };
 
     let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
@@ -717,24 +758,27 @@ fn try_open_d3d11va_video_decoder(
     let mut decoder = context.decoder();
     decoder.set_packet_time_base(stream.time_base());
 
-    let Some(hardware_context) = prepare_d3d11va_context(&mut decoder, hw_pix_fmt) else {
-        return Ok(None);
+    let hardware_context = match prepare_d3d11va_context(&mut decoder, hw_pix_fmt) {
+        Ok(hardware_context) => hardware_context,
+        Err(fallback_reason) => return Ok(Err(fallback_reason)),
     };
 
     let decoder = match decoder.open_as(codec) {
         Ok(opened) => match opened.video() {
             Ok(video) => video,
-            Err(_) => return Ok(None),
+            Err(_) => return Ok(Err(VideoDecodeFallbackReason::HwDecoderTypeMismatch)),
         },
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(Err(VideoDecodeFallbackReason::HwDecoderOpenFailed)),
     };
 
-    Ok(Some(OpenedVideoDecoder {
+    Ok(Ok(OpenedVideoDecoder {
         index: stream_index,
         decoder,
         scaler: None,
         estimated_frame_duration_us: estimate_stream_frame_duration_us(stream.avg_frame_rate()),
         backend: VideoDecodeBackend::D3d11va,
+        hardware_requested: true,
+        fallback_reason: VideoDecodeFallbackReason::None,
         hardware_context: Some(hardware_context),
     }))
 }
@@ -1008,6 +1052,17 @@ fn map_audio_frame(
         .convert(&decoder.decoder, frame, pts_us, duration_us)
 }
 
+impl OpenedVideoDecoder {
+    fn diagnostics_snapshot(&self) -> VideoDecodeDiagnosticsSnapshot {
+        VideoDecodeDiagnosticsSnapshot {
+            backend: self.backend,
+            hardware_requested: self.hardware_requested,
+            hardware_active: self.backend == VideoDecodeBackend::D3d11va,
+            fallback_reason: self.fallback_reason,
+        }
+    }
+}
+
 fn frame_timestamp_us(timestamp: Option<i64>, time_base: Rational) -> MediaTimeUs {
     timestamp
         .map_or(0, |value| value.rescale(time_base, (1, 1_000_000)))
@@ -1251,7 +1306,7 @@ fn find_d3d11va_hw_pixel_format(codec: &ffmpeg::Codec) -> Option<ffi::AVPixelFor
 fn prepare_d3d11va_context(
     decoder: &mut ffmpeg::codec::decoder::Decoder,
     hw_pix_fmt: ffi::AVPixelFormat,
-) -> Option<VideoHardwareContext> {
+) -> Result<Box<VideoHardwareContext>, VideoDecodeFallbackReason> {
     let mut hw_device_ctx = ptr::null_mut();
     let create_result = unsafe {
         ffi::av_hwdevice_ctx_create(
@@ -1263,16 +1318,16 @@ fn prepare_d3d11va_context(
         )
     };
     if create_result < 0 || hw_device_ctx.is_null() {
-        return None;
+        return Err(VideoDecodeFallbackReason::HwDeviceCreateFailed);
     }
 
     let avctx = unsafe { decoder.as_mut_ptr() };
-    let hardware_context = VideoHardwareContext {
+    let mut hardware_context = Box::new(VideoHardwareContext {
         hw_device_ctx,
         hw_pix_fmt,
-    };
+    });
     let hardware_context_ptr =
-        (&hardware_context as *const VideoHardwareContext).cast_mut().cast::<std::ffi::c_void>();
+        (hardware_context.as_mut() as *mut VideoHardwareContext).cast::<std::ffi::c_void>();
 
     let avctx_hw_device_ref = unsafe { ffi::av_buffer_ref(hw_device_ctx) };
     if avctx_hw_device_ref.is_null() {
@@ -1280,7 +1335,7 @@ fn prepare_d3d11va_context(
         unsafe {
             ffi::av_buffer_unref(&mut owned_ref);
         }
-        return None;
+        return Err(VideoDecodeFallbackReason::HwDeviceContextBindFailed);
     }
 
     unsafe {
@@ -1289,7 +1344,7 @@ fn prepare_d3d11va_context(
         (*avctx).hw_device_ctx = avctx_hw_device_ref;
     }
 
-    Some(hardware_context)
+    Ok(hardware_context)
 }
 
 unsafe extern "C" fn select_d3d11va_pixel_format(

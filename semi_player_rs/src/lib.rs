@@ -12,11 +12,12 @@ use crate::api::error::{
 };
 use crate::api::types::{
     PlayerState, SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
-    SemiPlaybackSnapshot, SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
+    SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
+    SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
 use crate::core::media::{
     open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
-    StreamKind,
+    StreamKind, VideoDecodeBackend, VideoDecodeFallbackReason,
 };
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
@@ -184,6 +185,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .as_ref()
         .map(crate::core::media::SharedOpenedMedia::seek_diagnostics_snapshot)
         .unwrap_or_default();
+    let video_decode = player
+        .opened_media
+        .as_ref()
+        .map(crate::core::media::SharedOpenedMedia::video_decode_diagnostics_snapshot)
+        .unwrap_or_default();
     let audio_output_snapshot = player
         .audio_output
         .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
@@ -202,6 +208,17 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let current_to_next_video_delta_ms = runtime_video
         .current_to_next_delta_us
         .map_or(0, us_to_ms);
+    let (current_video_surface_kind, current_video_surface_pixel_format) = runtime_video
+        .current_frame
+        .as_ref()
+        .map(|frame| {
+            let surface_kind = match &frame.surface.storage {
+                VideoSurfaceStorage::CpuPacked { .. } => SemiVideoSurfaceKind::CpuPacked,
+                VideoSurfaceStorage::D3d11Texture2D { .. } => SemiVideoSurfaceKind::D3d11Texture2D,
+            };
+            (surface_kind.as_raw(), frame.pixel_format().as_raw())
+        })
+        .unwrap_or((SemiVideoSurfaceKind::Unknown.as_raw(), 0));
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
@@ -212,6 +229,13 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
         current_video_pts_ms: runtime_video.current_pts_us.map_or(0, us_to_ms),
         current_video_duration_ms: runtime_video.current_duration_us.map_or(0, us_to_ms),
+        video_decode_backend: map_video_decode_backend(video_decode.backend).as_raw(),
+        video_hardware_requested: u32::from(video_decode.hardware_requested),
+        video_hardware_active: u32::from(video_decode.hardware_active),
+        video_decode_fallback_reason: map_video_decode_fallback_reason(video_decode.fallback_reason)
+            .as_raw(),
+        current_video_surface_kind,
+        current_video_surface_pixel_format,
         current_video_effective_end_ms: sync_snapshot
             .current_video_effective_end_us
             .map_or(0, us_to_ms),
@@ -335,6 +359,37 @@ fn stream_kind_to_u32(kind: StreamKind) -> u32 {
         StreamKind::Subtitle => 3,
         StreamKind::Data => 4,
         StreamKind::Attachment => 5,
+    }
+}
+
+fn map_video_decode_backend(backend: VideoDecodeBackend) -> SemiVideoDecodeBackend {
+    match backend {
+        VideoDecodeBackend::Unknown => SemiVideoDecodeBackend::Unknown,
+        VideoDecodeBackend::SoftwareBgra => SemiVideoDecodeBackend::SoftwareBgra,
+        VideoDecodeBackend::D3d11va => SemiVideoDecodeBackend::D3d11va,
+    }
+}
+
+fn map_video_decode_fallback_reason(
+    reason: VideoDecodeFallbackReason,
+) -> SemiVideoDecodeFallbackReason {
+    match reason {
+        VideoDecodeFallbackReason::None => SemiVideoDecodeFallbackReason::None,
+        VideoDecodeFallbackReason::NoHardwareConfig => {
+            SemiVideoDecodeFallbackReason::NoHardwareConfig
+        }
+        VideoDecodeFallbackReason::HwDeviceCreateFailed => {
+            SemiVideoDecodeFallbackReason::HwDeviceCreateFailed
+        }
+        VideoDecodeFallbackReason::HwDeviceContextBindFailed => {
+            SemiVideoDecodeFallbackReason::HwDeviceContextBindFailed
+        }
+        VideoDecodeFallbackReason::HwDecoderOpenFailed => {
+            SemiVideoDecodeFallbackReason::HwDecoderOpenFailed
+        }
+        VideoDecodeFallbackReason::HwDecoderTypeMismatch => {
+            SemiVideoDecodeFallbackReason::HwDecoderTypeMismatch
+        }
     }
 }
 
