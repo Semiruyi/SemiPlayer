@@ -466,7 +466,62 @@ Why:
 - later subtitle timing needs a stable video-time anchor
 - surface lifetime should naturally follow frame lifetime
 
-### 11.5 Host adapter boundary
+### 11.5 Video-render boundary
+
+The next important architectural step is to stop treating:
+
+```text
+decoded surface
+```
+
+and:
+
+```text
+host-presentable frame
+```
+
+as the same thing.
+
+The preferred pipeline direction is:
+
+```text
+compressed packet
+  ->
+decoder-native surface
+  ->
+player-owned video render
+  ->
+presentation-friendly frame
+  ->
+host presenter
+```
+
+Representative internal model split:
+
+```text
+DecodedVideoFrame
+  -> pts / duration / dimensions
+  -> DecoderSurface
+
+PresentationFrame
+  -> pts / duration / dimensions
+  -> RenderSurface
+```
+
+Where:
+
+- `DecoderSurface` keeps decoder-native formats such as `D3D11 NV12`
+- `RenderSurface` keeps presentation-oriented outputs such as `D3D11 BGRA`
+
+This lets the player own:
+
+- color conversion
+- scaling
+- future subtitle composition
+
+without forcing each host to understand decoder-native formats.
+
+### 11.6 Host adapter boundary
 
 The Rust core should expose a surface-oriented contract over FFI.
 
@@ -475,11 +530,19 @@ The host-specific adapters should live above that boundary:
 - WPF adapter
 - future Avalonia adapter
 
+But the normal host contract should trend toward presentation-oriented frames, not raw decoder
+surfaces.
+
+In other words:
+
+- decoder-native surfaces are primarily an internal decode/render concern
+- host adapters should usually consume presentation frames
+
 This means the ABI should move toward:
 
-- surface descriptors
-- explicit acquire/release semantics for host-visible surfaces
-- host-side presenter adapters
+- presentation-frame descriptors
+- explicit acquire/release semantics for host-visible render surfaces
+- optional low-level decoder-surface diagnostics where needed
 
 instead of only:
 
@@ -490,15 +553,17 @@ Short-term WPF delivery can therefore be implemented as:
 
 ```text
 Rust core
-  -> D3D11 video surface
-  -> FFI surface descriptor
+  -> D3D11 decoder-native surface
+  -> player-owned video render
+  -> presentation-friendly RGB surface
+  -> FFI frame/surface descriptor
   -> WPF-specific presenter adapter
   -> final host presentation
 ```
 
 without redefining the Rust core around WPF types.
 
-### 11.6 Subtitle compatibility rule
+### 11.7 Subtitle compatibility rule
 
 Subtitles should not be burned into decoded video surfaces in the first hardware-decode design.
 
@@ -508,14 +573,15 @@ Instead, subtitle work should remain a parallel timing/composition path:
 subtitle source
   -> subtitle cues
   -> subtitle scheduler
-  -> host overlay or future compositor
+  -> player-owned video render or transitional host overlay
 ```
 
 The short-term preferred approach is:
 
-- decode video into D3D11 surfaces
-- keep subtitle timing independent
-- let the host render subtitle overlays
+- decode video into decoder-native surfaces
+- render video into presentation-friendly RGB surfaces
+- keep subtitle timing independent first
+- allow a transitional host overlay path before folding subtitle composition into player-owned video render
 
 Reasons:
 
@@ -524,16 +590,24 @@ Reasons:
 - subtitle visibility/style changes stay outside the decode path
 - later GPU composition remains possible without redesigning seek/sync semantics
 
-### 11.7 First implementation phases
+Long-term architectural target:
+
+- subtitle composition should belong to the player render stage
+
+### 11.8 First implementation phases
 
 Recommended implementation order:
 
 1. split frame timing from surface storage
 2. preserve the existing software BGRA path under the new surface model
-3. add D3D11 surface types and resource ownership
-4. add a surface-oriented FFI contract
-5. build the first WPF presenter adapter on top of that contract
-6. introduce subtitle timing and overlay work on a parallel path
+3. add explicit decoded-surface vs presentation-surface contracts
+4. add D3D11 surface types and resource ownership
+5. implement a player-owned video-render stage:
+   - native surface in
+   - RGB presentation surface out
+6. add a presentation-oriented FFI contract
+7. build the first WPF presenter adapter on top of that contract
+8. introduce subtitle timing first, then subtitle composition in the render stage
 
 ## 12. Near-Term Direction
 
@@ -542,5 +616,6 @@ The most likely next architecture steps are:
 1. reduce coupling between decode worker and the serialized player lock
 2. tighten notification flow between decode enqueue and sync wake-up
 3. add worker-vs-host diagnostic modes for objective sync measurement
-4. introduce the output-surface abstraction and Windows D3D11 decode path
-5. add subtitle timing and host overlay composition boundaries
+4. introduce the decoded-surface / presentation-surface split
+5. introduce the player-owned video-render stage and Windows D3D11 decode path
+6. add subtitle timing and host overlay composition boundaries, then move composition into the render stage

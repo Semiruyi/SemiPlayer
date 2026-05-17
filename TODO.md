@@ -41,8 +41,10 @@ Not done yet:
 
 - lock-independent decode pipeline beyond the shared player handle lock
 - real render backend / output surface abstraction
-- D3D11 hardware video decode and surface delivery
-- WPF presenter adapter for GPU-native video surfaces
+- D3D11 hardware video decode and decoder-native surface delivery
+- player-owned video-render stage for decoder-surface to presentation-surface conversion
+- presentation-oriented host ABI
+- WPF presenter adapter for presentation-friendly GPU video frames
 - subtitle pipeline and libass integration
 - real host adapter projects beyond the smoke app
 - finer-grained worker/locking model
@@ -206,32 +208,48 @@ Tasks:
 
 ### P1.3 Implement first real Windows video backend
 
-Status: started at the type/ABI layer; real decode-device integration still pending
+Status: started at the type/ABI layer; render-stage split now needs to be made explicit
 
 Tasks:
 
 - establish `render/backends/d3d11/`
 - create device/resources for hardware video decode
 - configure FFmpeg hardware decode against D3D11
-- output GPU-native video surfaces
+- output decoder-native GPU video surfaces
 - prefer native hardware formats such as:
   - `NV12`
   - `P010`
 - keep a software decode fallback for unsupported media/devices
 - keep backend details out of portable core contracts
 
-### P1.4 Define the surface-oriented host ABI
+### P1.4 Add a real player-owned video-render stage
 
 Tasks:
 
-- add ABI-visible video surface descriptors
-- add explicit acquire/release rules for host-visible video surfaces
-- keep host contracts surface-oriented instead of WPF-object-oriented
+- introduce explicit `DecodedVideoFrame` / `DecoderSurface` concepts where needed
+- introduce explicit `PresentationFrame` / `RenderSurface` concepts where needed
+- keep color conversion inside the player, not the host
+- make the first D3D11 render path handle:
+  - decoder-native input such as `NV12`
+  - presentation-friendly RGB output such as `BGRA`
+- reserve the same stage for future:
+  - scaling
+  - subtitle composition
+  - OSD / overlays
+
+### P1.5 Define the presentation-oriented host ABI
+
+Tasks:
+
+- add ABI-visible presentation-frame / render-surface descriptors
+- add explicit acquire/release rules for host-visible presentation surfaces
+- keep raw decoder-surface exposure diagnostic-first, not the default host contract
+- keep host contracts presentation-oriented instead of WPF-object-oriented
 - make room for both:
   - CPU compatibility read path
   - GPU-native host presentation path
 
-### P1.5 Clarify host adapter boundary
+### P1.6 Clarify host adapter boundary
 
 Tasks:
 
@@ -240,14 +258,15 @@ Tasks:
   - interop layer
   - WPF adapter
   - future Avalonia adapter
+- keep video color conversion and future subtitle composition in the player render stage
 - treat WPF as the first presenter adapter, not as the render definition
 
-### P1.6 Deliver the first WPF GPU presentation path
+### P1.7 Deliver the first WPF GPU presentation path
 
 Tasks:
 
-- build the first WPF-facing adapter on top of the new surface ABI
-- present D3D11-backed video without requiring GPU readback
+- build the first WPF-facing adapter on top of the presentation-oriented ABI
+- present player-rendered GPU video without requiring GPU readback
 - keep WPF-specific interop details out of the portable playback core
 
 ## P2 - Subtitle and Host Integration
@@ -280,7 +299,8 @@ Tasks:
   - seek
   - speed
   - host presentation bias rules where relevant
-- keep the first subtitle path as overlay composition, not burned-in video decode output
+- keep subtitle composition out of decode output itself
+- first allow a transitional overlay path, then fold subtitle composition into the player render stage
 
 ## P3 - Quality and Portability
 
@@ -354,7 +374,8 @@ Do these next, in order:
 3. improve seek responsiveness and reduce seek-path cost
 4. start the timed video-surface abstraction
 5. refit the current software path onto that abstraction
-6. start the first real Windows D3D11 video backend
-7. define the surface-oriented host ABI and WPF presentation path
-8. reduce seek-related coupling to the shared player lock
-9. integrate subtitle timing into the worker-owned playback model
+6. split decoder-native surfaces from presentation-friendly render surfaces
+7. add the player-owned video-render stage
+8. start the first real Windows D3D11 video backend and presentation-oriented host ABI
+9. reduce seek-related coupling to the shared player lock
+10. integrate subtitle timing into the worker-owned playback/render model

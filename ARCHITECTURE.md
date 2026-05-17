@@ -290,7 +290,149 @@ Near-term render rule:
 - WPF is the first host adapter, not the render definition
 - Avalonia should be able to reuse the same surface-oriented core contract later
 
-## 13. Public ABI Direction
+## 13. Video Pipeline Direction
+
+The video path should now be treated as three distinct responsibilities:
+
+```text
+decode
+  ->
+video render
+  ->
+platform presenter
+```
+
+This is an important refinement of the earlier "surface-oriented host contract" direction.
+
+### 13.1 Decode is not presentation
+
+The decode layer should output:
+
+- timed decoded frames
+- carrying decoder-native surfaces
+
+Examples:
+
+- `D3D11 NV12`
+- `D3D11 P010`
+- software YUV formats when hardware decode is unavailable
+
+The decode layer should not be responsible for:
+
+- WPF object creation
+- Avalonia object creation
+- final RGB presentation format
+- subtitle composition
+
+Its job is:
+
+- get compressed video into a decoder-native surface with stable timing metadata
+
+### 13.2 A dedicated video-render stage should own color conversion
+
+The player should contain a real video-render stage between decode and host presentation.
+
+That stage should own:
+
+- YUV / hardware-native to RGB conversion
+- scaling
+- future subtitle / OSD composition
+- final render-surface preparation for the active host backend
+
+This means the player should not force the host to understand:
+
+- `NV12`
+- `P010`
+- decoder-specific D3D11 surface semantics
+- subtitle composition rules
+
+Instead, the player should produce a host-consumable presentation frame.
+
+Representative direction:
+
+```text
+DecodedVideoFrame
+  -> pts / duration / dimensions
+  -> DecoderSurface
+
+PresentationFrame
+  -> pts / duration / dimensions
+  -> RenderSurface
+```
+
+Where:
+
+- `DecoderSurface` is decoder-native storage
+- `RenderSurface` is presentation-oriented storage
+
+### 13.3 Host adapters should consume presentation frames, not decoder internals
+
+The host adapter boundary should move toward:
+
+- "give me the current presentation frame"
+
+not:
+
+- "here is the raw decoder surface, now the host must turn it into displayable RGB"
+
+Why:
+
+- WPF and Avalonia should not each reimplement video color conversion
+- subtitle composition should stay inside player-owned timing/render rules
+- decoder details should remain isolated from platform UI frameworks
+
+Short-term practical rule:
+
+- internal decode output may remain `D3D11 NV12`
+- internal render output for Windows hosts should become a presentation-friendly RGB surface
+- WPF should receive a frame/presenter contract that is already display-oriented
+
+### 13.4 Subtitle placement
+
+Subtitles should conceptually belong to the video-render stage, not the decode stage and not the
+host shell.
+
+Reason:
+
+- subtitle timing follows the same playback timeline as video
+- subtitle composition is part of how the final video image is produced
+- host overlays can still exist as an implementation phase, but the architecture should reserve the
+  long-term ownership for the player render pipeline
+
+The near-term implementation can still phase this in conservatively:
+
+1. decode to decoder-native surfaces
+2. render to presentation-friendly RGB surfaces
+3. later add subtitle composition into the same render stage
+
+### 13.5 Current recommended internal split
+
+The preferred internal direction is:
+
+```text
+core/media/
+  decode-facing FFmpeg + hardware decode ownership
+
+render/core/
+  portable decoded-surface and presentation-surface contracts
+
+render/backends/d3d11/
+  Windows video-render implementation
+  - color conversion
+  - scaling
+  - future subtitle composition support
+
+platform/host adapters
+  WPF presenter
+  future Avalonia presenter
+```
+
+The key rule is:
+
+- decoder-native surfaces are an internal playback/render concern
+- presentation-friendly frames are the handoff to host adapters
+
+## 14. Public ABI Direction
 
 The public ABI remains:
 
@@ -306,27 +448,37 @@ Important current ABI ideas:
 - playback snapshot queries
 - host presentation bias input
 
-## 14. Near-Term Architecture Priorities
+For the video path, the ABI direction should now distinguish between:
+
+- decoder-internal surfaces
+- host-visible presentation frames
+
+The long-term ABI target should favor presentation-oriented contracts for normal host use, while
+still allowing low-level diagnostics where needed.
+
+## 15. Near-Term Architecture Priorities
 
 The next architectural steps should focus on:
 
 1. separating decode supply into a real dedicated execution path
 2. measuring worker-driven sync behavior objectively
 3. improving seek responsiveness with a real recovery-oriented seek model and hardware-backed video path
-4. defining real render backend/output surface boundaries
-5. integrating subtitle timing into the worker-owned playback model
-6. reducing coarse locking where safe
+4. defining the decode-surface / video-render / presenter split explicitly
+5. adding a real player-owned video-render stage
+6. integrating subtitle timing into that worker-owned playback/render model
+7. reducing coarse locking where safe
 
 Reference:
 
 - [docs/dev/seek.md](c:/y-s/project/Semi/docs/dev/seek.md)
 
-## 15. Summary
+## 16. Summary
 
 SemiPlayer should now be viewed as:
 
 - a cross-platform Rust playback core
 - already owning its internal playback timing
+- moving toward a player-owned decode-to-render-to-present video pipeline
 - still in transition from a shared synchronous execution lane to a fuller multi-service playback engine
 
 Windows is the first verified implementation target.
