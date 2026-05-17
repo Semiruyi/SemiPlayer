@@ -10,7 +10,7 @@ use crate::audio::core::resampler::NormalizedAudioResampler;
 use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
 use crate::util::time::MediaTimeUs;
 
-use super::probe::{collect_media_info, MediaInfo, MediaProbeError};
+use super::probe::{collect_media_info, MediaInfo, MediaProbeError, StreamKind};
 
 pub struct OpenedMedia {
     path: String,
@@ -20,6 +20,7 @@ pub struct OpenedMedia {
     audio_decoder: Option<OpenedAudioDecoder>,
     pending_outputs: VecDeque<DecodedOutput>,
     draining_state: DecoderDrainingState,
+    seek_diagnostics: SeekDemuxDiagnostics,
 }
 
 #[derive(Clone)]
@@ -48,6 +49,36 @@ struct DecoderDrainingState {
     video_drained: bool,
     audio_drained: bool,
     end_of_stream_emitted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SeekDemuxDiagnosticsSnapshot {
+    pub first_video_packet_pts_us: MediaTimeUs,
+    pub first_video_packet_dts_us: MediaTimeUs,
+    pub first_video_packet_is_key: bool,
+    pub first_video_packet_pos: i64,
+    pub first_video_packet_stream_index: i64,
+    pub first_video_packet_stream_kind: StreamKind,
+    pub video_packets_read: u64,
+    pub audio_packets_read: u64,
+    pub expected_left_keyframe_pts_us: MediaTimeUs,
+    pub expected_left_keyframe_dts_us: MediaTimeUs,
+}
+
+#[derive(Debug, Default)]
+struct SeekDemuxDiagnostics {
+    active: bool,
+    first_video_packet_pts_us: Option<MediaTimeUs>,
+    first_video_packet_dts_us: Option<MediaTimeUs>,
+    first_video_packet_is_key: bool,
+    first_video_packet_pos: Option<i64>,
+    first_video_packet_stream_index: Option<i64>,
+    first_video_packet_stream_kind: StreamKind,
+    video_packets_read: u64,
+    audio_packets_read: u64,
+    expected_left_keyframe_pts_us: Option<MediaTimeUs>,
+    expected_left_keyframe_dts_us: Option<MediaTimeUs>,
+    last_completed: SeekDemuxDiagnosticsSnapshot,
 }
 
 #[derive(Debug)]
@@ -121,6 +152,7 @@ impl OpenedMedia {
             audio_decoder,
             pending_outputs: VecDeque::new(),
             draining_state: DecoderDrainingState::default(),
+            seek_diagnostics: SeekDemuxDiagnostics::default(),
         })
     }
 
@@ -145,12 +177,25 @@ impl OpenedMedia {
     }
 
     pub fn seek(&mut self, position_us: MediaTimeUs) -> Result<(), MediaOpenError> {
+        self.seek_diagnostics.begin();
+        self.seek_diagnostics.observe_expected_left_keyframe(
+            probe_expected_left_keyframe_pts(&self.path, self.info.best_video_stream_index, position_us),
+        );
         let position = position_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
-        self.input
-            .seek(position, ..)
-            .map_err(MediaOpenError::Seek)?;
+        if let Err(error) = self.input.seek(position, ..) {
+            self.seek_diagnostics.finish();
+            return Err(MediaOpenError::Seek(error));
+        }
         self.flush_decoders();
         Ok(())
+    }
+
+    pub fn seek_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
+        self.seek_diagnostics.snapshot()
+    }
+
+    pub fn finish_seek_diagnostics(&mut self) {
+        self.seek_diagnostics.finish();
     }
 
     pub fn flush_decoders(&mut self) {
@@ -169,10 +214,20 @@ impl OpenedMedia {
     pub fn read_next_packet(&mut self) -> Result<Option<MediaPacket>, MediaOpenError> {
         let mut packet = Packet::empty();
         match packet.read(&mut self.input) {
-            Ok(()) => Ok(Some(MediaPacket {
-                stream_index: packet.stream(),
-                packet,
-            })),
+            Ok(()) => {
+                let stream_index = packet.stream();
+                self.seek_diagnostics.observe_packet(
+                    stream_index,
+                    &packet,
+                    self.info.best_video_stream_index,
+                    self.info.best_audio_stream_index,
+                    self.input.stream(stream_index).map(|stream| stream.time_base()),
+                );
+                Ok(Some(MediaPacket {
+                    stream_index,
+                    packet,
+                }))
+            }
             Err(ffmpeg::Error::Eof) => Ok(None),
             Err(error) => Err(MediaOpenError::ReadPacket(error)),
         }
@@ -310,6 +365,150 @@ impl OpenedMedia {
     }
 }
 
+impl SeekDemuxDiagnostics {
+    fn begin(&mut self) {
+        self.active = true;
+        self.first_video_packet_pts_us = None;
+        self.first_video_packet_dts_us = None;
+        self.first_video_packet_is_key = false;
+        self.first_video_packet_pos = None;
+        self.first_video_packet_stream_index = None;
+        self.first_video_packet_stream_kind = StreamKind::Unknown;
+        self.video_packets_read = 0;
+        self.audio_packets_read = 0;
+        self.expected_left_keyframe_pts_us = None;
+        self.expected_left_keyframe_dts_us = None;
+        self.last_completed = SeekDemuxDiagnosticsSnapshot::default();
+    }
+
+    fn observe_packet(
+        &mut self,
+        stream_index: usize,
+        packet: &Packet,
+        best_video_stream_index: Option<usize>,
+        best_audio_stream_index: Option<usize>,
+        time_base: Option<Rational>,
+    ) {
+        if !self.active {
+            return;
+        }
+
+        if Some(stream_index) == best_video_stream_index {
+            self.video_packets_read = self.video_packets_read.saturating_add(1);
+            if self.first_video_packet_pts_us.is_none() {
+                self.first_video_packet_pts_us =
+                    Some(packet_timestamp_us(packet.pts(), time_base));
+                self.first_video_packet_dts_us =
+                    Some(packet_timestamp_us(packet.dts(), time_base));
+                self.first_video_packet_is_key = packet.is_key();
+                self.first_video_packet_pos = i64::try_from(packet.position()).ok();
+                self.first_video_packet_stream_index = i64::try_from(stream_index).ok();
+                self.first_video_packet_stream_kind = StreamKind::Video;
+            }
+        } else if Some(stream_index) == best_audio_stream_index {
+            self.audio_packets_read = self.audio_packets_read.saturating_add(1);
+        }
+    }
+
+    fn observe_expected_left_keyframe(
+        &mut self,
+        expected_left_keyframe: Option<(MediaTimeUs, MediaTimeUs)>,
+    ) {
+        if let Some((pts_us, dts_us)) = expected_left_keyframe {
+            self.expected_left_keyframe_pts_us = Some(pts_us);
+            self.expected_left_keyframe_dts_us = Some(dts_us);
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.active {
+            return;
+        }
+
+        self.last_completed = self.snapshot();
+        self.active = false;
+    }
+
+    fn snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
+        let first_video_packet_pts_us = self.first_video_packet_pts_us.unwrap_or(-1);
+        let first_video_packet_dts_us = self.first_video_packet_dts_us.unwrap_or(-1);
+        let first_video_packet_pos = self.first_video_packet_pos.unwrap_or(-1);
+        let first_video_packet_stream_index = self.first_video_packet_stream_index.unwrap_or(-1);
+        let video_packets_read = self.video_packets_read;
+        let audio_packets_read = self.audio_packets_read;
+        let expected_left_keyframe_pts_us = self.expected_left_keyframe_pts_us.unwrap_or(-1);
+        let expected_left_keyframe_dts_us = self.expected_left_keyframe_dts_us.unwrap_or(-1);
+
+        if self.active {
+            SeekDemuxDiagnosticsSnapshot {
+                first_video_packet_pts_us,
+                first_video_packet_dts_us,
+                first_video_packet_is_key: self.first_video_packet_is_key,
+                first_video_packet_pos,
+                first_video_packet_stream_index,
+                first_video_packet_stream_kind: self.first_video_packet_stream_kind,
+                video_packets_read,
+                audio_packets_read,
+                expected_left_keyframe_pts_us,
+                expected_left_keyframe_dts_us,
+            }
+        } else {
+            self.last_completed
+        }
+    }
+}
+
+fn probe_expected_left_keyframe_pts(
+    path: &str,
+    best_video_stream_index: Option<usize>,
+    target_us: MediaTimeUs,
+) -> Option<(MediaTimeUs, MediaTimeUs)> {
+    const VIDEO_PACKET_SCAN_LIMIT: usize = 512;
+
+    let video_stream_index = best_video_stream_index?;
+    let mut input = ffmpeg::format::input(path).ok()?;
+    let target = target_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
+    // Diagnostic-only heuristic: reopen the input and scan nearby main-video packets
+    // so we can compare the player's actual anchor against an expected left keyframe.
+    let _ = input.seek(target, ..target);
+
+    let mut best: Option<(MediaTimeUs, MediaTimeUs)> = None;
+    let mut seen_past_target = false;
+    let mut video_packets_scanned = 0usize;
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != video_stream_index {
+            continue;
+        }
+
+        video_packets_scanned = video_packets_scanned.saturating_add(1);
+        let time_base = stream.time_base();
+        let pts_us = packet_timestamp_us(packet.pts(), Some(time_base));
+        let dts_us = packet_timestamp_us(packet.dts(), Some(time_base));
+
+        if pts_us > target_us && dts_us > target_us {
+            seen_past_target = true;
+            if best.is_some() {
+                break;
+            }
+        }
+
+        if packet.is_key() && pts_us >= 0 && pts_us <= target_us {
+            best = Some((pts_us, dts_us));
+        }
+
+        if seen_past_target && best.is_some() {
+            break;
+        }
+
+        if video_packets_scanned >= VIDEO_PACKET_SCAN_LIMIT {
+            break;
+        }
+    }
+
+    best
+}
+
 impl SharedOpenedMedia {
     pub fn new(opened_media: OpenedMedia) -> Self {
         Self {
@@ -325,6 +524,11 @@ impl SharedOpenedMedia {
     pub fn with_mut<T>(&self, f: impl FnOnce(&mut OpenedMedia) -> T) -> T {
         let mut guard = self.inner.lock().unwrap();
         f(&mut guard)
+    }
+
+    pub fn seek_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
+        let guard = self.inner.lock().unwrap();
+        guard.seek_diagnostics_snapshot()
     }
 }
 
@@ -556,6 +760,13 @@ fn frame_timestamp_us(timestamp: Option<i64>, time_base: Rational) -> MediaTimeU
     timestamp
         .map(|value| value.rescale(time_base, (1, 1_000_000)))
         .unwrap_or(0)
+}
+
+fn packet_timestamp_us(timestamp: Option<i64>, time_base: Option<Rational>) -> MediaTimeUs {
+    match (timestamp, time_base) {
+        (Some(value), Some(time_base)) => value.rescale(time_base, (1, 1_000_000)),
+        _ => -1,
+    }
 }
 
 fn frame_duration_us(duration: i64, time_base: Rational) -> Option<MediaTimeUs> {

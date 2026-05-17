@@ -43,6 +43,12 @@ pub enum StreamKind {
     Attachment,
 }
 
+impl Default for StreamKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
 #[derive(Debug)]
 pub enum MediaProbeError {
     FfmpegInit(ffmpeg::Error),

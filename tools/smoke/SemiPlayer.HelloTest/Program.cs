@@ -781,6 +781,15 @@ internal sealed class PlayerSmokeWindow : Window
             $"AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
             $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}  " +
             $"PreTarget Dec {snapshot.SeekPreTargetVideoDecodedCount}  Cur {snapshot.SeekPreTargetCurrentVideoCount}";
+        string seekAnchorPart =
+            $"Seek FirstVideoPkt {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketPtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketDtsMs)}  " +
+            $"Key {(snapshot.SeekFirstVideoPacketIsKey != 0 ? 1 : 0)}  " +
+            $"S{snapshot.SeekFirstVideoPacketStreamIndex}/{FormatStreamKind(snapshot.SeekFirstVideoPacketStreamKind)}  " +
+            $"dT {FormatSignedMs(snapshot.SeekFirstVideoPacketPtsMs >= 0 ? snapshot.SeekFirstVideoPacketPtsMs - snapshot.LastSeekTargetMs : -1)}  " +
+            $"Pkts V{snapshot.SeekVideoPacketsRead} A{snapshot.SeekAudioPacketsRead}";
+        string seekExpectedPart =
+            $"Seek ExpectKF {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframePtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframeDtsMs)}  " +
+            $"Err {FormatSignedMs(snapshot.SeekExpectedLeftKeyframePtsMs >= 0 && snapshot.SeekFirstVideoPacketPtsMs >= 0 ? snapshot.SeekFirstVideoPacketPtsMs - snapshot.SeekExpectedLeftKeyframePtsMs : -1)}";
         string coreSyncPart =
             $"CoreSync Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
             $"AbsMean {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
@@ -816,6 +825,8 @@ internal sealed class PlayerSmokeWindow : Window
             $"{seekPart}{Environment.NewLine}" +
             $"{seekRecoveryPart}{Environment.NewLine}" +
             $"{seekTargetPart}{Environment.NewLine}" +
+            $"{seekAnchorPart}{Environment.NewLine}" +
+            $"{seekExpectedPart}{Environment.NewLine}" +
             $"{playbackPart}{Environment.NewLine}" +
             $"{anomalyPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
@@ -841,6 +852,16 @@ internal sealed class PlayerSmokeWindow : Window
     {
         return valueMs < 0 ? $"{valueMs} ms" : $"+{valueMs} ms";
     }
+
+    private static string FormatStreamKind(uint kind) => kind switch
+    {
+        1 => "V",
+        2 => "A",
+        3 => "Sub",
+        4 => "Data",
+        5 => "Att",
+        _ => "?",
+    };
 
     private string BuildSourcePart()
     {
@@ -1626,6 +1647,16 @@ internal struct SemiPlaybackSnapshot
     internal long SeekStableUs;
     internal ulong SeekPreTargetVideoDecodedCount;
     internal ulong SeekPreTargetCurrentVideoCount;
+    internal long SeekFirstVideoPacketPtsMs;
+    internal long SeekFirstVideoPacketDtsMs;
+    internal uint SeekFirstVideoPacketIsKey;
+    internal long SeekFirstVideoPacketPos;
+    internal long SeekFirstVideoPacketStreamIndex;
+    internal uint SeekFirstVideoPacketStreamKind;
+    internal ulong SeekVideoPacketsRead;
+    internal ulong SeekAudioPacketsRead;
+    internal long SeekExpectedLeftKeyframePtsMs;
+    internal long SeekExpectedLeftKeyframeDtsMs;
     internal uint AudioOutputStarted;
     internal uint PendingDeviceFrames;
     internal ulong RenderedFramesTotal;

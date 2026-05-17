@@ -16,6 +16,7 @@ use crate::api::types::{
 };
 use crate::core::media::{
     open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
+    StreamKind,
 };
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
@@ -166,6 +167,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
     let diagnostics = player.diagnostics_snapshot();
+    let seek_demux = player
+        .opened_media
+        .as_ref()
+        .map(|opened_media| opened_media.seek_diagnostics_snapshot())
+        .unwrap_or_default();
     let audio_output_snapshot = player
         .audio_output
         .with_ref(|audio_output| audio_output.snapshot());
@@ -272,12 +278,37 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_stable_us: diagnostics.seek_stable_us,
         seek_pre_target_video_decoded_count: diagnostics.seek_pre_target_video_decoded_count,
         seek_pre_target_current_video_count: diagnostics.seek_pre_target_current_video_count,
+        seek_first_video_packet_pts_ms: diagnostic_us_to_ms(seek_demux.first_video_packet_pts_us),
+        seek_first_video_packet_dts_ms: diagnostic_us_to_ms(seek_demux.first_video_packet_dts_us),
+        seek_first_video_packet_is_key: u32::from(seek_demux.first_video_packet_is_key),
+        seek_first_video_packet_pos: seek_demux.first_video_packet_pos,
+        seek_first_video_packet_stream_index: seek_demux.first_video_packet_stream_index,
+        seek_first_video_packet_stream_kind: stream_kind_to_u32(seek_demux.first_video_packet_stream_kind),
+        seek_video_packets_read: seek_demux.video_packets_read,
+        seek_audio_packets_read: seek_demux.audio_packets_read,
+        seek_expected_left_keyframe_pts_ms: diagnostic_us_to_ms(
+            seek_demux.expected_left_keyframe_pts_us,
+        ),
+        seek_expected_left_keyframe_dts_ms: diagnostic_us_to_ms(
+            seek_demux.expected_left_keyframe_dts_us,
+        ),
         audio_output_started: u32::from(audio_output_snapshot.started),
         pending_device_frames: u32::try_from(audio_output_snapshot.pending_device_frames)
             .unwrap_or(u32::MAX),
         rendered_frames_total: audio_output_snapshot.rendered_frames_total,
         audible_frames_total: audio_output_snapshot.audible_frames_total,
         end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
+    }
+}
+
+fn stream_kind_to_u32(kind: StreamKind) -> u32 {
+    match kind {
+        StreamKind::Unknown => 0,
+        StreamKind::Video => 1,
+        StreamKind::Audio => 2,
+        StreamKind::Subtitle => 3,
+        StreamKind::Data => 4,
+        StreamKind::Attachment => 5,
     }
 }
 

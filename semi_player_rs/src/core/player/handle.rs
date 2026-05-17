@@ -49,6 +49,12 @@ pub struct PlayerDiagnosticsSnapshot {
     pub seek_stable_us: MediaTimeUs,
     pub seek_pre_target_video_decoded_count: u64,
     pub seek_pre_target_current_video_count: u64,
+    pub seek_first_video_packet_pts_us: MediaTimeUs,
+    pub seek_first_video_packet_dts_us: MediaTimeUs,
+    pub seek_first_video_packet_is_key: bool,
+    pub seek_first_video_packet_pos: i64,
+    pub seek_video_packets_read: u64,
+    pub seek_audio_packets_read: u64,
 }
 
 #[derive(Default)]
@@ -341,6 +347,9 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_aborted(&self) {
         self.diagnostics.observe_seek_aborted();
+        if let Some(opened_media) = self.opened_media.as_ref() {
+            opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
+        }
         self.clear_seek_recovery();
     }
 
@@ -367,6 +376,9 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_stable(&self) {
         self.diagnostics.observe_seek_stable();
+        if let Some(opened_media) = self.opened_media.as_ref() {
+            opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
+        }
         self.clear_seek_recovery();
     }
 }
@@ -604,6 +616,12 @@ impl PlayerDiagnostics {
             seek_pre_target_video_decoded_count: seek_snapshot.seek_pre_target_video_decoded_count,
             seek_pre_target_current_video_count: seek_snapshot
                 .seek_pre_target_current_video_count,
+            seek_first_video_packet_pts_us: -1,
+            seek_first_video_packet_dts_us: -1,
+            seek_first_video_packet_is_key: false,
+            seek_first_video_packet_pos: -1,
+            seek_video_packets_read: 0,
+            seek_audio_packets_read: 0,
         }
     }
 }

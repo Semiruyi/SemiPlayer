@@ -6,3 +6,4 @@ pub use opened::{
     SeekRecoveryPolicy, SharedOpenedMedia,
 };
 pub use probe::{MediaInfo, MediaProbeError};
+pub use probe::StreamKind;
