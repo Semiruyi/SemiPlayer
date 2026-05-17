@@ -93,6 +93,7 @@ pub(crate) fn execute_playback_plan(plan: &PlaybackAdvancePlan) -> PlaybackAdvan
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn finish_playback_advance(
     player: &mut SemiPlayerHandle,
     plan: PlaybackAdvancePlan,

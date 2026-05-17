@@ -103,8 +103,8 @@ impl PlayerRuntime {
     pub fn current_audio_format(&self) -> Option<crate::audio::core::output::AudioStreamFormat> {
         self.queued_audio_frames
             .front()
-            .map(|frame| frame.format())
-            .or_else(|| self.last_audio_frame.as_ref().map(|frame| frame.format()))
+            .map(crate::audio::core::frame::AudioFrame::format)
+            .or_else(|| self.last_audio_frame.as_ref().map(crate::audio::core::frame::AudioFrame::format))
     }
 
     pub fn has_reached_end_of_stream(&self) -> bool {
@@ -142,7 +142,7 @@ impl PlayerRuntime {
     }
 
     pub fn decode_supply_status(&self) -> DecodeSupplyStatus {
-        let target_total_video_frames = 1 + TARGET_FUTURE_VIDEO_QUEUE_LEN;
+        let target_total_video_frames = TARGET_FUTURE_VIDEO_QUEUE_LEN + 1;
         let audio_queue_len = self.audio_queue_len();
         let buffered_video_frame_count = self.buffered_video_frame_count();
         let has_sufficient_buffer = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN
@@ -233,7 +233,8 @@ impl PlayerRuntime {
 
             if chunk.pts_us.is_none() {
                 let consumed_frames = start_sample / channel_count;
-                let consumed_us = (consumed_frames as i64)
+                let consumed_us = i64::try_from(consumed_frames)
+                    .unwrap_or(i64::MAX)
                     .saturating_mul(1_000_000)
                     .saturating_div(i64::from(front_frame.sample_rate));
                 chunk.pts_us = Some(front_frame.pts_us.saturating_add(consumed_us));
@@ -294,7 +295,8 @@ impl PlayerRuntime {
                 None
             } else {
                 Some(
-                    (chunk.frame_count as i64)
+                    i64::try_from(chunk.frame_count)
+                        .unwrap_or(i64::MAX)
                         .saturating_mul(1_000_000)
                         .saturating_div(i64::from(format.sample_rate)),
                 )
@@ -347,7 +349,6 @@ impl PlayerRuntime {
                         on_drop(&frame);
                     }
                     stats.dropped_frames = stats.dropped_frames.saturating_add(1);
-                    continue;
                 }
                 VideoScheduleDecision::NeedMoreFrames => {
                     stats.needs_more_frames = true;

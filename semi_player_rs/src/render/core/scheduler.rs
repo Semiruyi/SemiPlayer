@@ -16,6 +16,7 @@ impl VideoScheduler {
         Self
     }
 
+    #[allow(clippy::unused_self)]
     pub fn decide(
         &self,
         target_time_us: MediaTimeUs,

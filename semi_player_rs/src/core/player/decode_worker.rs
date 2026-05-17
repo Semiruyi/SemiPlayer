@@ -58,6 +58,7 @@ impl DecodeWorkerHandle {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Condvar)>) {
     loop {
         let plan = unsafe {

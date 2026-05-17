@@ -26,6 +26,7 @@ pub struct OpenedMedia {
 }
 
 #[derive(Clone)]
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct SharedOpenedMedia {
     inner: Arc<Mutex<OpenedMedia>>,
 }
@@ -555,6 +556,7 @@ fn probe_expected_left_keyframe_pts(
 }
 
 impl SharedOpenedMedia {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(opened_media: OpenedMedia) -> Self {
         Self {
             inner: Arc::new(Mutex::new(opened_media)),

@@ -60,6 +60,7 @@ impl SyncWorkerHandle {
     }
 }
 
+#[allow(clippy::needless_pass_by_value)]
 fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condvar)>) {
     loop {
         let action = unsafe {
@@ -80,10 +81,10 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                         player_ptr,
                         LockOwner::SyncWorker,
                         |player| {
-                            if !player.is_media_loaded() {
-                                None
-                            } else {
+                            if player.is_media_loaded() {
                                 Some(plan_playback_advance(player))
+                            } else {
+                                None
                             }
                         },
                     )
@@ -104,7 +105,6 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                         },
                     );
                 }
-                continue;
             }
             WorkerAction::WaitFor(duration) => {
                 if wait_for_signal(&control, Some(duration)) {

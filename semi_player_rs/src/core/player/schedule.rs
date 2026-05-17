@@ -21,6 +21,7 @@ pub struct PumpScheduleHint {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct DecodeScheduleHint {
     pub media_loaded: bool,
     pub worker_active: bool,
@@ -106,7 +107,7 @@ impl<'a> ScheduleContext<'a> {
             video_snapshot: VideoSyncService::evaluate(player, playback_time_us),
             audio_output: player
                 .audio_output
-                .with_ref(|audio_output| audio_output.snapshot()),
+                .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot),
         }
     }
 }
@@ -191,7 +192,8 @@ fn frames_to_us(frame_count: usize, sample_rate: u32) -> MediaTimeUs {
         return 0;
     }
 
-    (frame_count as i64)
+    i64::try_from(frame_count)
+        .unwrap_or(i64::MAX)
         .saturating_mul(1_000_000)
         .saturating_div(i64::from(sample_rate))
 }

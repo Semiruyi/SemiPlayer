@@ -25,6 +25,7 @@ pub struct VideoSyncStats {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(clippy::struct_field_names)]
 pub struct VideoSyncSnapshot {
     pub target_video_time_us: i64,
     pub current_video_pts_us: i64,

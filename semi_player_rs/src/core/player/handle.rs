@@ -404,6 +404,7 @@ impl SemiPlayerHandle {
     pub fn observe_seek_aborted(&self) {
         self.diagnostics.observe_seek_aborted();
         if let Some(opened_media) = self.opened_media.as_ref() {
+            #[allow(clippy::redundant_closure_for_method_calls)]
             opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
         }
         self.clear_seek_recovery();
@@ -451,6 +452,7 @@ impl SemiPlayerHandle {
     pub fn observe_seek_stable(&self) {
         self.diagnostics.observe_seek_stable();
         if let Some(opened_media) = self.opened_media.as_ref() {
+            #[allow(clippy::redundant_closure_for_method_calls)]
             opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
         }
         self.clear_seek_recovery();

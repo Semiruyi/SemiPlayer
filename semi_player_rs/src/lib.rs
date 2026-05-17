@@ -169,6 +169,7 @@ fn diagnostic_us_to_ms(value_us: i64) -> i64 {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let runtime_video = player.runtime.video_snapshot();
     let last_audio_frame = player.runtime.last_audio_frame();
@@ -181,7 +182,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let seek_demux = player
         .opened_media
         .as_ref()
-        .map(|opened_media| opened_media.seek_diagnostics_snapshot())
+        .map(crate::core::media::SharedOpenedMedia::seek_diagnostics_snapshot)
         .unwrap_or_default();
     let audio_output_snapshot = player
         .audio_output
@@ -196,13 +197,11 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         });
     let core_av_delta_ms = runtime_video
         .current_pts_us
-        .map(|pts_us| playback_position_ms - us_to_ms(pts_us))
-        .unwrap_or(0);
+        .map_or(0, |pts_us| playback_position_ms - us_to_ms(pts_us));
     let next_video_pts_ms = runtime_video.next_pts_us.map_or(0, us_to_ms);
     let current_to_next_video_delta_ms = runtime_video
         .current_to_next_delta_us
-        .map(us_to_ms)
-        .unwrap_or(0);
+        .map_or(0, us_to_ms);
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
@@ -378,14 +377,21 @@ fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnap
 }
 
 #[no_mangle]
-pub extern "C" fn semi_free_string(s: *mut c_char) {
+/// # Safety
+///
+/// `s` must be null or a pointer previously returned by this library from
+/// `CString::into_raw`, and it must not be freed more than once.
+pub unsafe extern "C" fn semi_free_string(s: *mut c_char) {
     if !s.is_null() {
         unsafe { drop(CString::from_raw(s)) };
     }
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> c_int {
+/// # Safety
+///
+/// `out_player` must be a valid, writable pointer to receive the created player handle.
+pub unsafe extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> c_int {
     if out_player.is_null() {
         return SEMI_E_INVALID_ARG;
     }
@@ -399,7 +405,11 @@ pub extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHandle) -> 
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_destroy(player: *mut SemiPlayerHandle) {
+/// # Safety
+///
+/// `player` must be null or a valid handle previously returned by `semi_player_create`.
+/// It must not be used again after destruction.
+pub unsafe extern "C" fn semi_player_destroy(player: *mut SemiPlayerHandle) {
     if !player.is_null() {
         unsafe {
             (*player).stop_workers();
@@ -497,7 +507,10 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_seek(
+/// # Safety
+///
+/// `player` must be a valid handle previously returned by `semi_player_create`.
+pub unsafe extern "C" fn semi_player_seek(
     player: *mut SemiPlayerHandle,
     position_ms: i64,
     _exact: c_int,
@@ -615,7 +628,10 @@ pub extern "C" fn semi_player_set_subtitle_visible(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_state(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_state` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_state(
     player: *mut SemiPlayerHandle,
     out_state: *mut u32,
 ) -> c_int {
@@ -632,7 +648,10 @@ pub extern "C" fn semi_player_get_state(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_position_ms(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_position_ms` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_position_ms(
     player: *mut SemiPlayerHandle,
     out_position_ms: *mut i64,
 ) -> c_int {
@@ -649,7 +668,11 @@ pub extern "C" fn semi_player_get_position_ms(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_duration_ms(
+#[allow(clippy::redundant_closure_for_method_calls)]
+/// # Safety
+///
+/// `player` must be a valid handle and `out_duration_ms` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_duration_ms(
     player: *mut SemiPlayerHandle,
     out_duration_ms: *mut i64,
 ) -> c_int {
@@ -670,7 +693,10 @@ pub extern "C" fn semi_player_get_duration_ms(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_media_info(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_media_info` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_media_info(
     player: *mut SemiPlayerHandle,
     out_media_info: *mut SemiMediaInfo,
 ) -> c_int {
@@ -699,7 +725,10 @@ pub extern "C" fn semi_player_get_media_info(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_debug_decode_next(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_output` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_debug_decode_next(
     player: *mut SemiPlayerHandle,
     out_output: *mut SemiDecodedOutput,
 ) -> c_int {
@@ -747,7 +776,10 @@ pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_playback_snapshot(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_snapshot` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_playback_snapshot(
     player: *mut SemiPlayerHandle,
     out_snapshot: *mut SemiPlaybackSnapshot,
 ) -> c_int {
@@ -770,7 +802,10 @@ pub extern "C" fn semi_player_get_playback_snapshot(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_audio_output_snapshot(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_snapshot` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_audio_output_snapshot(
     player: *mut SemiPlayerHandle,
     out_snapshot: *mut SemiAudioOutputSnapshot,
 ) -> c_int {
@@ -793,7 +828,10 @@ pub extern "C" fn semi_player_get_audio_output_snapshot(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_get_current_video_frame_info(
+/// # Safety
+///
+/// `player` must be a valid handle and `out_frame_info` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_current_video_frame_info(
     player: *mut SemiPlayerHandle,
     out_frame_info: *mut SemiVideoFrameInfo,
 ) -> c_int {
@@ -820,7 +858,11 @@ pub extern "C" fn semi_player_get_current_video_frame_info(
 }
 
 #[no_mangle]
-pub extern "C" fn semi_player_copy_current_video_frame_bgra(
+/// # Safety
+///
+/// `player` must be a valid handle. `destination` must be a valid writable buffer of at least
+/// `destination_len` bytes.
+pub unsafe extern "C" fn semi_player_copy_current_video_frame_bgra(
     player: *mut SemiPlayerHandle,
     destination: *mut u8,
     destination_len: u32,

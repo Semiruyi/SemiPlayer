@@ -15,6 +15,7 @@ pub struct AudioOutputController {
 }
 
 #[derive(Clone)]
+#[allow(clippy::arc_with_non_send_sync)]
 pub struct SharedAudioOutputController {
     inner: Arc<Mutex<AudioOutputController>>,
 }
@@ -125,6 +126,7 @@ impl Default for AudioOutputController {
 }
 
 impl SharedAudioOutputController {
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn new(controller: AudioOutputController) -> Self {
         Self {
             inner: Arc::new(Mutex::new(controller)),

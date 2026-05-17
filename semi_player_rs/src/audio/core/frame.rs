@@ -95,8 +95,9 @@ fn normalized_duration_us(sample_rate: u32, sample_count: usize) -> Option<Media
         return None;
     }
 
+    let sample_count = i64::try_from(sample_count).ok()?;
     Some(
-        (sample_count as i64)
+        sample_count
             .saturating_mul(1_000_000)
             .saturating_div(i64::from(sample_rate)),
     )
@@ -111,7 +112,8 @@ fn ceil_frames_for_duration_us(duration_us: MediaTimeUs, sample_rate: u32) -> us
         return 0;
     }
 
-    let numerator = (duration_us as u128)
+    let numerator = u128::try_from(duration_us)
+        .unwrap_or(0)
         .saturating_mul(u128::from(sample_rate))
         .saturating_add(999_999);
     usize::try_from(numerator / 1_000_000).unwrap_or(usize::MAX)
@@ -122,14 +124,16 @@ mod tests {
     use super::{AudioFrame, AudioSampleFormatCategory};
 
     fn frame(pts_us: i64, samples: usize) -> AudioFrame {
+        let duration_us = i64::try_from(samples).unwrap_or(i64::MAX).saturating_mul(1_000);
         AudioFrame {
             pts_us,
-            duration_us: Some((samples as i64) * 1_000),
+            duration_us: Some(duration_us),
             sample_rate: 1_000,
             channels: 2,
             sample_count: samples,
             sample_format: AudioSampleFormatCategory::F32,
             is_planar: false,
+            #[allow(clippy::cast_precision_loss)]
             data: (0..samples * 2).map(|index| index as f32).collect(),
         }
     }
