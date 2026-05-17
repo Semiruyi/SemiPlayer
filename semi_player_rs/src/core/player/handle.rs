@@ -38,10 +38,17 @@ pub struct PlayerDiagnosticsSnapshot {
     pub seek_ffmpeg_seek_us: MediaTimeUs,
     pub seek_reset_us: MediaTimeUs,
     pub seek_first_video_decoded_us: MediaTimeUs,
+    pub seek_first_video_pts_us: MediaTimeUs,
     pub seek_first_audio_decoded_us: MediaTimeUs,
+    pub seek_first_current_video_ready_us: MediaTimeUs,
+    pub seek_first_current_video_pts_us: MediaTimeUs,
+    pub seek_current_video_minus_target_us: MediaTimeUs,
     pub seek_target_video_ready_us: MediaTimeUs,
+    pub seek_target_video_pts_us: MediaTimeUs,
     pub seek_target_audio_ready_us: MediaTimeUs,
     pub seek_stable_us: MediaTimeUs,
+    pub seek_pre_target_video_decoded_count: u64,
+    pub seek_pre_target_current_video_count: u64,
 }
 
 #[derive(Default)]
@@ -72,10 +79,17 @@ struct SeekDiagnosticsSnapshot {
     seek_ffmpeg_seek_us: MediaTimeUs,
     seek_reset_us: MediaTimeUs,
     seek_first_video_decoded_us: MediaTimeUs,
+    seek_first_video_pts_us: MediaTimeUs,
     seek_first_audio_decoded_us: MediaTimeUs,
+    seek_first_current_video_ready_us: MediaTimeUs,
+    seek_first_current_video_pts_us: MediaTimeUs,
+    seek_current_video_minus_target_us: MediaTimeUs,
     seek_target_video_ready_us: MediaTimeUs,
+    seek_target_video_pts_us: MediaTimeUs,
     seek_target_audio_ready_us: MediaTimeUs,
     seek_stable_us: MediaTimeUs,
+    seek_pre_target_video_decoded_count: u64,
+    seek_pre_target_current_video_count: u64,
 }
 
 #[derive(Debug)]
@@ -87,10 +101,18 @@ struct SeekObservation {
     seek_ffmpeg_seek_us: Option<MediaTimeUs>,
     seek_reset_us: Option<MediaTimeUs>,
     seek_first_video_decoded_us: Option<MediaTimeUs>,
+    seek_first_video_pts_us: Option<MediaTimeUs>,
     seek_first_audio_decoded_us: Option<MediaTimeUs>,
+    seek_first_current_video_ready_us: Option<MediaTimeUs>,
+    seek_first_current_video_pts_us: Option<MediaTimeUs>,
+    seek_current_video_minus_target_us: Option<MediaTimeUs>,
     seek_target_video_ready_us: Option<MediaTimeUs>,
+    seek_target_video_pts_us: Option<MediaTimeUs>,
     seek_target_audio_ready_us: Option<MediaTimeUs>,
     seek_stable_us: Option<MediaTimeUs>,
+    seek_pre_target_video_decoded_count: u64,
+    seek_pre_target_current_video_count: u64,
+    last_observed_current_video_pts_us: Option<MediaTimeUs>,
 }
 
 #[derive(Debug, Default)]
@@ -298,16 +320,21 @@ impl SemiPlayerHandle {
         self.diagnostics.observe_seek_aborted();
     }
 
-    pub fn observe_seek_first_video_decoded(&self) {
-        self.diagnostics.observe_seek_first_video_decoded();
+    pub fn observe_seek_video_decoded(&self, frame_pts_us: MediaTimeUs) {
+        self.diagnostics.observe_seek_video_decoded(frame_pts_us);
     }
 
     pub fn observe_seek_first_audio_decoded(&self) {
         self.diagnostics.observe_seek_first_audio_decoded();
     }
 
-    pub fn observe_seek_target_video_ready(&self) {
-        self.diagnostics.observe_seek_target_video_ready();
+    pub fn observe_seek_current_video(
+        &self,
+        current_pts_us: MediaTimeUs,
+        current_effective_end_us: Option<MediaTimeUs>,
+    ) {
+        self.diagnostics
+            .observe_seek_current_video(current_pts_us, current_effective_end_us);
     }
 
     pub fn observe_seek_target_audio_ready(&self) {
@@ -415,10 +442,17 @@ impl PlayerDiagnostics {
         seek.last_completed = Some(active.snapshot(seek.seek_event_count, false));
     }
 
-    fn observe_seek_first_video_decoded(&self) {
+    fn observe_seek_video_decoded(&self, frame_pts_us: MediaTimeUs) {
         self.with_active_seek(|seek| {
             if seek.seek_first_video_decoded_us.is_none() {
                 seek.seek_first_video_decoded_us = Some(seek.elapsed_us());
+            }
+            if seek.seek_first_video_pts_us.is_none() {
+                seek.seek_first_video_pts_us = Some(frame_pts_us);
+            }
+            if frame_pts_us < seek.target_us {
+                seek.seek_pre_target_video_decoded_count =
+                    seek.seek_pre_target_video_decoded_count.saturating_add(1);
             }
         });
     }
@@ -431,10 +465,35 @@ impl PlayerDiagnostics {
         });
     }
 
-    fn observe_seek_target_video_ready(&self) {
+    fn observe_seek_current_video(
+        &self,
+        current_pts_us: MediaTimeUs,
+        current_effective_end_us: Option<MediaTimeUs>,
+    ) {
         self.with_active_seek(|seek| {
-            if seek.seek_target_video_ready_us.is_none() {
+            let is_new_current = seek.last_observed_current_video_pts_us != Some(current_pts_us);
+
+            if is_new_current {
+                seek.last_observed_current_video_pts_us = Some(current_pts_us);
+                seek.seek_current_video_minus_target_us =
+                    Some(current_pts_us.saturating_sub(seek.target_us));
+
+                if seek.seek_first_current_video_ready_us.is_none() {
+                    seek.seek_first_current_video_ready_us = Some(seek.elapsed_us());
+                    seek.seek_first_current_video_pts_us = Some(current_pts_us);
+                }
+
+                if current_pts_us < seek.target_us {
+                    seek.seek_pre_target_current_video_count =
+                        seek.seek_pre_target_current_video_count.saturating_add(1);
+                }
+            }
+
+            if seek.seek_target_video_ready_us.is_none()
+                && is_seek_target_ready(seek.target_us, current_pts_us, current_effective_end_us)
+            {
                 seek.seek_target_video_ready_us = Some(seek.elapsed_us());
+                seek.seek_target_video_pts_us = Some(current_pts_us);
             }
         });
     }
@@ -508,10 +567,18 @@ impl PlayerDiagnostics {
             seek_ffmpeg_seek_us: seek_snapshot.seek_ffmpeg_seek_us,
             seek_reset_us: seek_snapshot.seek_reset_us,
             seek_first_video_decoded_us: seek_snapshot.seek_first_video_decoded_us,
+            seek_first_video_pts_us: seek_snapshot.seek_first_video_pts_us,
             seek_first_audio_decoded_us: seek_snapshot.seek_first_audio_decoded_us,
+            seek_first_current_video_ready_us: seek_snapshot.seek_first_current_video_ready_us,
+            seek_first_current_video_pts_us: seek_snapshot.seek_first_current_video_pts_us,
+            seek_current_video_minus_target_us: seek_snapshot.seek_current_video_minus_target_us,
             seek_target_video_ready_us: seek_snapshot.seek_target_video_ready_us,
+            seek_target_video_pts_us: seek_snapshot.seek_target_video_pts_us,
             seek_target_audio_ready_us: seek_snapshot.seek_target_audio_ready_us,
             seek_stable_us: seek_snapshot.seek_stable_us,
+            seek_pre_target_video_decoded_count: seek_snapshot.seek_pre_target_video_decoded_count,
+            seek_pre_target_current_video_count: seek_snapshot
+                .seek_pre_target_current_video_count,
         }
     }
 }
@@ -526,10 +593,18 @@ impl SeekObservation {
             seek_ffmpeg_seek_us: None,
             seek_reset_us: None,
             seek_first_video_decoded_us: None,
+            seek_first_video_pts_us: None,
             seek_first_audio_decoded_us: None,
+            seek_first_current_video_ready_us: None,
+            seek_first_current_video_pts_us: None,
+            seek_current_video_minus_target_us: None,
             seek_target_video_ready_us: None,
+            seek_target_video_pts_us: None,
             seek_target_audio_ready_us: None,
             seek_stable_us: None,
+            seek_pre_target_video_decoded_count: 0,
+            seek_pre_target_current_video_count: 0,
+            last_observed_current_video_pts_us: None,
         }
     }
 
@@ -547,10 +622,19 @@ impl SeekObservation {
             seek_ffmpeg_seek_us: self.seek_ffmpeg_seek_us.unwrap_or(-1),
             seek_reset_us: self.seek_reset_us.unwrap_or(-1),
             seek_first_video_decoded_us: self.seek_first_video_decoded_us.unwrap_or(-1),
+            seek_first_video_pts_us: self.seek_first_video_pts_us.unwrap_or(-1),
             seek_first_audio_decoded_us: self.seek_first_audio_decoded_us.unwrap_or(-1),
+            seek_first_current_video_ready_us: self.seek_first_current_video_ready_us.unwrap_or(-1),
+            seek_first_current_video_pts_us: self.seek_first_current_video_pts_us.unwrap_or(-1),
+            seek_current_video_minus_target_us: self
+                .seek_current_video_minus_target_us
+                .unwrap_or(-1),
             seek_target_video_ready_us: self.seek_target_video_ready_us.unwrap_or(-1),
+            seek_target_video_pts_us: self.seek_target_video_pts_us.unwrap_or(-1),
             seek_target_audio_ready_us: self.seek_target_audio_ready_us.unwrap_or(-1),
             seek_stable_us: self.seek_stable_us.unwrap_or(-1),
+            seek_pre_target_video_decoded_count: self.seek_pre_target_video_decoded_count,
+            seek_pre_target_current_video_count: self.seek_pre_target_current_video_count,
         }
     }
 }
@@ -576,4 +660,16 @@ fn update_atomic_max(target: &AtomicI64, value: MediaTimeUs) {
             Err(observed) => current = observed,
         }
     }
+}
+
+fn is_seek_target_ready(
+    target_us: MediaTimeUs,
+    current_pts_us: MediaTimeUs,
+    current_effective_end_us: Option<MediaTimeUs>,
+) -> bool {
+    if current_pts_us >= target_us {
+        return true;
+    }
+
+    current_effective_end_us.is_some_and(|end_us| target_us < end_us)
 }

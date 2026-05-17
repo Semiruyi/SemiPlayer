@@ -138,6 +138,14 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
     }
 }
 
+fn diagnostic_us_to_ms(value_us: i64) -> i64 {
+    if value_us < 0 {
+        value_us
+    } else {
+        us_to_ms(value_us)
+    }
+}
+
 fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let runtime_video = player.runtime.video_snapshot();
     let last_audio_frame = player.runtime.last_audio_frame();
@@ -238,10 +246,21 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_ffmpeg_seek_us: diagnostics.seek_ffmpeg_seek_us,
         seek_reset_us: diagnostics.seek_reset_us,
         seek_first_video_decoded_us: diagnostics.seek_first_video_decoded_us,
+        seek_first_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_first_video_pts_us),
         seek_first_audio_decoded_us: diagnostics.seek_first_audio_decoded_us,
+        seek_first_current_video_ready_us: diagnostics.seek_first_current_video_ready_us,
+        seek_first_current_video_pts_ms: diagnostic_us_to_ms(
+            diagnostics.seek_first_current_video_pts_us,
+        ),
+        seek_current_video_minus_target_ms: diagnostic_us_to_ms(
+            diagnostics.seek_current_video_minus_target_us,
+        ),
         seek_target_video_ready_us: diagnostics.seek_target_video_ready_us,
+        seek_target_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_target_video_pts_us),
         seek_target_audio_ready_us: diagnostics.seek_target_audio_ready_us,
         seek_stable_us: diagnostics.seek_stable_us,
+        seek_pre_target_video_decoded_count: diagnostics.seek_pre_target_video_decoded_count,
+        seek_pre_target_current_video_count: diagnostics.seek_pre_target_current_video_count,
         audio_output_started: u32::from(audio_output_snapshot.started),
         pending_device_frames: u32::try_from(audio_output_snapshot.pending_device_frames)
             .unwrap_or(u32::MAX),

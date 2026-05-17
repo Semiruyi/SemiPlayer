@@ -56,9 +56,9 @@ pub(crate) fn apply_decoded_output(
 ) -> DecodedOutputApplyResult {
     match output {
         DecodedOutput::Video(frame) => {
+            player.observe_seek_video_decoded(frame.pts_us);
             player.runtime.push_video_frame(frame);
             VideoSyncService::mark_dirty(player);
-            player.observe_seek_first_video_decoded();
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: true,

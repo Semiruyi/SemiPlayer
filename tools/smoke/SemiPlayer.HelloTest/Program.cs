@@ -772,9 +772,15 @@ internal sealed class PlayerSmokeWindow : Window
             $"Target {snapshot.LastSeekTargetMs} ms  Api {FormatSeekMetricUs(snapshot.SeekApiDurationUs)}  " +
             $"Lock {FormatSeekMetricUs(snapshot.SeekLockWaitUs)}  Ffmpeg {FormatSeekMetricUs(snapshot.SeekFfmpegSeekUs)}  Reset {FormatSeekMetricUs(snapshot.SeekResetUs)}";
         string seekRecoveryPart =
-            $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)}  ADec {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
-            $"VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)}  AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
-            $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}";
+            $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstVideoPtsMs)}  " +
+            $"ADec {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
+            $"Cur {FormatSeekMetricUs(snapshot.SeekFirstCurrentVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstCurrentVideoPtsMs)}  " +
+            $"dT {FormatSignedMs(snapshot.SeekCurrentVideoMinusTargetMs)}";
+        string seekTargetPart =
+            $"Seek VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekTargetVideoPtsMs)}  " +
+            $"AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
+            $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}  " +
+            $"PreTarget Dec {snapshot.SeekPreTargetVideoDecodedCount}  Cur {snapshot.SeekPreTargetCurrentVideoCount}";
         string coreSyncPart =
             $"CoreSync Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
             $"AbsMean {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
@@ -809,9 +815,11 @@ internal sealed class PlayerSmokeWindow : Window
             $"{audioBufferPart}{Environment.NewLine}" +
             $"{seekPart}{Environment.NewLine}" +
             $"{seekRecoveryPart}{Environment.NewLine}" +
+            $"{seekTargetPart}{Environment.NewLine}" +
             $"{playbackPart}{Environment.NewLine}" +
             $"{anomalyPart}{Environment.NewLine}" +
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
+
     }
 
     private static string FormatSeekMetricUs(long valueUs)
@@ -822,6 +830,16 @@ internal sealed class PlayerSmokeWindow : Window
         }
 
         return $"{valueUs / 1000.0:F1} ms";
+    }
+
+    private static string FormatSeekPtsMs(long valueMs)
+    {
+        return valueMs < 0 ? "n/a" : $"{valueMs} ms";
+    }
+
+    private static string FormatSignedMs(long valueMs)
+    {
+        return valueMs < 0 ? $"{valueMs} ms" : $"+{valueMs} ms";
     }
 
     private string BuildSourcePart()
@@ -1597,10 +1615,17 @@ internal struct SemiPlaybackSnapshot
     internal long SeekFfmpegSeekUs;
     internal long SeekResetUs;
     internal long SeekFirstVideoDecodedUs;
+    internal long SeekFirstVideoPtsMs;
     internal long SeekFirstAudioDecodedUs;
+    internal long SeekFirstCurrentVideoReadyUs;
+    internal long SeekFirstCurrentVideoPtsMs;
+    internal long SeekCurrentVideoMinusTargetMs;
     internal long SeekTargetVideoReadyUs;
+    internal long SeekTargetVideoPtsMs;
     internal long SeekTargetAudioReadyUs;
     internal long SeekStableUs;
+    internal ulong SeekPreTargetVideoDecodedCount;
+    internal ulong SeekPreTargetCurrentVideoCount;
     internal uint AudioOutputStarted;
     internal uint PendingDeviceFrames;
     internal ulong RenderedFramesTotal;

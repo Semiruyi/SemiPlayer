@@ -118,27 +118,30 @@ pub(crate) fn finish_playback_advance(
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
     player.observe_stale_audio_discard(post_sync_discard);
-    let _ = VideoSyncService::tick(player, playback_time_us);
+    let sync_snapshot = VideoSyncService::tick(player, playback_time_us);
     let audio_snapshot = player.audio_output.with_ref(|audio_output| audio_output.snapshot());
-    if player.runtime.current_video_frame().is_some() {
-        player.observe_seek_target_video_ready();
+    if let Some(current_pts_us) = player.runtime.current_video_frame().map(|frame| frame.pts_us) {
+        player.observe_seek_current_video(current_pts_us, sync_snapshot.current_video_effective_end_us);
     }
     if audio_snapshot.started && audio_snapshot.audible_frames_total > 0 {
         player.observe_seek_target_audio_ready();
     }
     let decode_status = player.runtime.decode_supply_status();
-    if player.runtime.current_video_frame().is_some() {
+    if sync_snapshot.current_video_pts_us != 0 || player.runtime.current_video_frame().is_some() {
         match player.state() {
             PlayerState::Playing => {
                 if audio_snapshot.started
                     && audio_snapshot.audible_frames_total > 0
                     && decode_status.has_sufficient_buffer
+                    && sync_snapshot.core_sync_error_us == 0
                 {
                     player.observe_seek_stable();
                 }
             }
             PlayerState::Ready | PlayerState::Paused => {
-                player.observe_seek_stable();
+                if sync_snapshot.core_sync_error_us == 0 {
+                    player.observe_seek_stable();
+                }
             }
             PlayerState::Idle => {}
         }
