@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::audio::core::output::AudioOutputChunk;
-use crate::render::core::frame::VideoFrame;
+use crate::render::core::frame::PresentationFrame;
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
@@ -11,8 +11,8 @@ pub const TARGET_FUTURE_VIDEO_QUEUE_LEN: usize = 2;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RuntimeVideoSnapshot<'a> {
-    pub current_frame: Option<&'a VideoFrame>,
-    pub next_frame: Option<&'a VideoFrame>,
+    pub current_frame: Option<&'a PresentationFrame>,
+    pub next_frame: Option<&'a PresentationFrame>,
     pub current_pts_us: Option<MediaTimeUs>,
     pub next_pts_us: Option<MediaTimeUs>,
     pub current_duration_us: Option<MediaTimeUs>,
@@ -48,8 +48,8 @@ pub struct DecodeSupplyStatus {
 pub struct PlayerRuntime {
     queued_audio_frames: VecDeque<AudioFrame>,
     queued_audio_sample_offset: usize,
-    queued_video_frames: VecDeque<VideoFrame>,
-    current_video_frame: Option<VideoFrame>,
+    queued_video_frames: VecDeque<PresentationFrame>,
+    current_video_frame: Option<PresentationFrame>,
     last_audio_frame: Option<AudioFrame>,
     end_of_stream: bool,
 }
@@ -80,7 +80,7 @@ impl PlayerRuntime {
         self.queued_audio_frames.push_back(frame);
     }
 
-    pub fn push_video_frame(&mut self, frame: VideoFrame) {
+    pub fn push_video_frame(&mut self, frame: PresentationFrame) {
         self.queued_video_frames.push_back(frame);
     }
 
@@ -111,11 +111,11 @@ impl PlayerRuntime {
         self.end_of_stream
     }
 
-    pub fn current_video_frame(&self) -> Option<&VideoFrame> {
+    pub fn current_video_frame(&self) -> Option<&PresentationFrame> {
         self.current_video_frame.as_ref()
     }
 
-    pub fn next_video_frame(&self) -> Option<&VideoFrame> {
+    pub fn next_video_frame(&self) -> Option<&PresentationFrame> {
         self.queued_video_frames.front()
     }
 
@@ -321,7 +321,7 @@ impl PlayerRuntime {
         &mut self,
         scheduler: &VideoScheduler,
         target_time_us: MediaTimeUs,
-        mut on_drop: impl FnMut(&VideoFrame),
+        mut on_drop: impl FnMut(&PresentationFrame),
     ) -> VideoSelectionStats {
         let mut stats = VideoSelectionStats::default();
 

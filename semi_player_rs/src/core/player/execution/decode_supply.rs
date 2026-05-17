@@ -62,7 +62,9 @@ pub(crate) fn apply_decoded_output(
         DecodedOutput::Video(frame) => {
             let playback_time_us = player.audio_clock.presentation_time_us();
             player.observe_seek_video_decoded(frame.pts_us, playback_time_us);
-            player.runtime.push_video_frame(frame);
+            player
+                .runtime
+                .push_video_frame(frame.into_presentation_frame());
             VideoSyncService::mark_dirty(player);
             DecodedOutputApplyResult {
                 reached_end: false,

@@ -101,7 +101,20 @@ pub struct VideoFrame {
     pub surface: Arc<VideoSurface>,
 }
 
+// Decoder-owned frames may remain in decoder-native formats such as NV12.
+// The first implementation keeps the storage model shared with presentation frames
+// so the pipeline can be split incrementally without destabilizing scheduling.
+pub type DecodedVideoFrame = VideoFrame;
+
+// Presentation frames are what runtime scheduling and host-facing paths should
+// converge on over time. Today this is still the same underlying frame type.
+pub type PresentationFrame = VideoFrame;
+
 impl VideoFrame {
+    pub fn into_presentation_frame(self) -> PresentationFrame {
+        self
+    }
+
     pub fn pixel_format(&self) -> PixelFormatCategory {
         self.surface.pixel_format
     }

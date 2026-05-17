@@ -12,7 +12,9 @@ use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
 use crate::render::backends::d3d11::D3d11TextureSurfaceDesc;
-use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
+use crate::render::core::frame::{
+    DecodedVideoFrame, PixelFormatCategory, VideoFrame, VideoSurface,
+};
 use crate::util::time::MediaTimeUs;
 
 use super::probe::{collect_media_info, MediaInfo, MediaProbeError, StreamKind};
@@ -179,7 +181,7 @@ impl Error for MediaOpenError {
 }
 
 pub enum DecodedOutput {
-    Video(VideoFrame),
+    Video(DecodedVideoFrame),
     SkippedVideo(SkippedVideoFrame),
     Audio(AudioFrame),
     SkippedAudio(SkippedAudioFrame),
@@ -975,7 +977,7 @@ fn map_video_frame(
     frame: &frame::Video,
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
-) -> Result<VideoFrame, MediaOpenError> {
+) -> Result<DecodedVideoFrame, MediaOpenError> {
     if let Some(mapped) = map_d3d11_video_frame(decoder, frame, pts_us, duration_us) {
         return Ok(mapped);
     }
@@ -1003,7 +1005,7 @@ fn map_d3d11_video_frame(
     frame: &frame::Video,
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
-) -> Option<VideoFrame> {
+) -> Option<DecodedVideoFrame> {
     if decoder.backend != VideoDecodeBackend::D3d11va {
         return None;
     }
