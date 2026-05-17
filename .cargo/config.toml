@@ -1,3 +1,0 @@
-[env]
-FFMPEG_DIR = { value = "C:/y-s/project/Semi/third_party/ffmpeg/current/ffmpeg", force = true }
-LIBCLANG_PATH = { value = "C:/Program Files/LLVM/bin", force = true }

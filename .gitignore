@@ -2,12 +2,14 @@ tools/smoke/SemiPlayer.HelloTest/bin/
 tools/smoke/SemiPlayer.HelloTest/obj/
 semi_player_rs/target/
 
+.cargo/config.toml
 .claude/
 .vs/
 .idea/
 .vscode/
 
-tmp
+tmp/
+tools/tmp/
 *.tmp
 Thumbs.db
 .DS_Store
