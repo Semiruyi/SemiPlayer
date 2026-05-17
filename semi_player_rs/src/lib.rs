@@ -136,6 +136,17 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
             sample_count: u32::try_from(frame.sample_count).unwrap_or(u32::MAX),
             flags: u32::from(frame.is_planar),
         },
+        DecodedOutput::SkippedAudio(frame) => SemiDecodedOutput {
+            kind: SemiDecodedKind::None.as_raw(),
+            pts_ms: us_to_ms(frame.pts_us),
+            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            width: 0,
+            height: 0,
+            sample_rate: 0,
+            channels: 0,
+            sample_count: 0,
+            flags: 0,
+        },
         DecodedOutput::EndOfStream => SemiDecodedOutput {
             kind: SemiDecodedKind::EndOfStream.as_raw(),
             pts_ms: 0,
@@ -264,6 +275,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_reset_us: diagnostics.seek_reset_us,
         seek_first_video_decoded_us: diagnostics.seek_first_video_decoded_us,
         seek_first_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_first_video_pts_us),
+        seek_first_audio_decoder_output_us: diagnostics.seek_first_audio_decoder_output_us,
         seek_first_audio_decoded_us: diagnostics.seek_first_audio_decoded_us,
         seek_first_current_video_ready_us: diagnostics.seek_first_current_video_ready_us,
         seek_first_current_video_pts_ms: diagnostic_us_to_ms(

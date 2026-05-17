@@ -98,6 +98,7 @@ pub enum DecodedOutput {
     Video(VideoFrame),
     SkippedVideo(SkippedVideoFrame),
     Audio(AudioFrame),
+    SkippedAudio(SkippedAudioFrame),
     EndOfStream,
 }
 
@@ -119,6 +120,12 @@ pub struct SeekRecoveryPolicy {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SkippedVideoFrame {
+    pub pts_us: MediaTimeUs,
+    pub duration_us: Option<MediaTimeUs>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SkippedAudioFrame {
     pub pts_us: MediaTimeUs,
     pub duration_us: Option<MediaTimeUs>,
 }
@@ -253,7 +260,7 @@ impl OpenedMedia {
         }
 
         if self.draining_state.input_exhausted {
-            self.collect_drained_outputs()?;
+            self.collect_drained_outputs(policy)?;
 
             if let Some(output) = self.pending_outputs.pop_front() {
                 return Ok(DecodedOutputPoll::Output(output));
@@ -302,6 +309,7 @@ impl OpenedMedia {
                     audio_decoder,
                     &media_packet.packet,
                     &mut self.pending_outputs,
+                    policy,
                 )?;
             }
 
@@ -333,7 +341,7 @@ impl OpenedMedia {
         Ok(())
     }
 
-    fn collect_drained_outputs(&mut self) -> Result<(), MediaOpenError> {
+    fn collect_drained_outputs(&mut self, policy: DecodePolicy) -> Result<(), MediaOpenError> {
         if !self.draining_state.video_drained {
             if let Some(video_decoder) = self.video_decoder.as_mut() {
                 self.draining_state.video_drained =
@@ -341,7 +349,7 @@ impl OpenedMedia {
                         video_decoder,
                         &mut self.pending_outputs,
                         true,
-                        DecodePolicy::default(),
+                        policy,
                     )?;
             } else {
                 self.draining_state.video_drained = true;
@@ -351,7 +359,7 @@ impl OpenedMedia {
         if !self.draining_state.audio_drained {
             if let Some(audio_decoder) = self.audio_decoder.as_mut() {
                 self.draining_state.audio_drained =
-                    collect_audio_frames(audio_decoder, &mut self.pending_outputs, true)?;
+                    collect_audio_frames(audio_decoder, &mut self.pending_outputs, true, policy)?;
             } else {
                 self.draining_state.audio_drained = true;
             }
@@ -618,16 +626,17 @@ fn decode_audio_packet(
     decoder: &mut OpenedAudioDecoder,
     packet: &Packet,
     outputs: &mut VecDeque<DecodedOutput>,
+    policy: DecodePolicy,
 ) -> Result<(), MediaOpenError> {
     loop {
         match decoder.decoder.send_packet(packet) {
             Ok(()) => {
-                let _ = collect_audio_frames(decoder, outputs, false)?;
+                let _ = collect_audio_frames(decoder, outputs, false, policy)?;
                 return Ok(());
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
                 let output_count_before = outputs.len();
-                let drained = collect_audio_frames(decoder, outputs, false)?;
+                let drained = collect_audio_frames(decoder, outputs, false, policy)?;
                 if drained || outputs.len() == output_count_before {
                     return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
                         errno: ffmpeg::error::EAGAIN,
@@ -686,13 +695,33 @@ fn collect_audio_frames(
     decoder: &mut OpenedAudioDecoder,
     outputs: &mut VecDeque<DecodedOutput>,
     draining: bool,
+    policy: DecodePolicy,
 ) -> Result<bool, MediaOpenError> {
     let mut reached_decoder_eof = false;
 
     loop {
         let mut frame = frame::Audio::empty();
         match decoder.decoder.receive_frame(&mut frame) {
-            Ok(()) => outputs.push_back(DecodedOutput::Audio(map_audio_frame(decoder, &frame)?)),
+            Ok(()) => {
+                let time_base = decoder.decoder.packet_time_base();
+                let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
+                let duration_us = audio_duration_us(&frame);
+
+                if should_skip_audio_frame_for_seek_recovery(policy, pts_us, duration_us) {
+                    outputs.push_back(DecodedOutput::SkippedAudio(SkippedAudioFrame {
+                        pts_us,
+                        duration_us,
+                    }));
+                    continue;
+                }
+
+                outputs.push_back(DecodedOutput::Audio(map_audio_frame(
+                    decoder,
+                    &frame,
+                    pts_us,
+                    duration_us,
+                )?));
+            }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
             Err(ffmpeg::Error::Eof) => {
                 reached_decoder_eof = true;
@@ -746,11 +775,9 @@ fn map_video_frame(
 fn map_audio_frame(
     decoder: &mut OpenedAudioDecoder,
     frame: &frame::Audio,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
 ) -> Result<AudioFrame, MediaOpenError> {
-    let time_base = decoder.decoder.packet_time_base();
-    let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
-    let duration_us = audio_duration_us(frame);
-
     decoder
         .resampler
         .convert(&decoder.decoder, frame, pts_us, duration_us)
@@ -805,6 +832,22 @@ fn estimate_stream_frame_duration_us(frame_rate: Rational) -> Option<MediaTimeUs
 }
 
 fn should_skip_video_frame_for_seek_recovery(
+    policy: DecodePolicy,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
+) -> bool {
+    let Some(seek_recovery) = policy.seek_recovery else {
+        return false;
+    };
+
+    let Some(end_us) = duration_us.and_then(|duration_us| pts_us.checked_add(duration_us)) else {
+        return false;
+    };
+
+    end_us <= seek_recovery.target_video_us
+}
+
+fn should_skip_audio_frame_for_seek_recovery(
     policy: DecodePolicy,
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
@@ -895,7 +938,8 @@ fn copy_packed_plane(frame: &frame::Video) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        should_skip_video_frame_for_seek_recovery, DecodePolicy, SeekRecoveryPolicy,
+        should_skip_audio_frame_for_seek_recovery, should_skip_video_frame_for_seek_recovery,
+        DecodePolicy, SeekRecoveryPolicy,
     };
 
     #[test]
@@ -922,6 +966,36 @@ mod tests {
         };
 
         assert!(!should_skip_video_frame_for_seek_recovery(
+            policy,
+            5_000,
+            Some(6_000),
+        ));
+    }
+
+    #[test]
+    fn seek_recovery_skips_audio_frame_that_ends_before_target() {
+        let policy = DecodePolicy {
+            seek_recovery: Some(SeekRecoveryPolicy {
+                target_video_us: 10_000,
+            }),
+        };
+
+        assert!(should_skip_audio_frame_for_seek_recovery(
+            policy,
+            5_000,
+            Some(4_000),
+        ));
+    }
+
+    #[test]
+    fn seek_recovery_keeps_audio_frame_that_covers_target() {
+        let policy = DecodePolicy {
+            seek_recovery: Some(SeekRecoveryPolicy {
+                target_video_us: 10_000,
+            }),
+        };
+
+        assert!(!should_skip_audio_frame_for_seek_recovery(
             policy,
             5_000,
             Some(6_000),

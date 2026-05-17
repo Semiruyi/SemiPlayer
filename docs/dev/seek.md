@@ -59,6 +59,14 @@ The current implementation baseline now also includes:
 - explicit seek timing metrics
 - target-aware seek video recovery metrics
 - a first video fast path during seek recovery that skips BGRA conversion for pure pre-target pass-through frames
+- anchor diagnostics that compare the actual FFmpeg recovery point against the expected nearest-left video keyframe
+
+Current diagnostic findings:
+
+- FFmpeg seek placement is currently good enough for the main local-playback path; observed actual anchor packets match the expected nearest-left main-video keyframe in tested samples
+- pure pre-target video frames already avoid the most expensive CPU playback work because they skip BGRA conversion, frame copy, runtime video queue insertion, and sync dirties
+- pre-target audio is still much heavier than pre-target video because audio frames are currently resampled and copied into normalized `AudioFrame` objects before seek recovery decides whether they will be discarded or trimmed
+- the next optimization stage should therefore focus less on "did FFmpeg pick the right keyframe?" and more on "how expensive is recovery from the correct anchor?"
 
 ## 3. Design Goals
 
@@ -160,6 +168,12 @@ Current implementation direction:
 
 This is the first practical fast path because the expensive work currently happens in the FFmpeg-facing media layer, before runtime queue logic ever sees the frame.
 
+Current assessment:
+
+- the video side is already close to the intended recovery shape
+- remaining pre-target video cost is now mostly packet read, packet feed, and codec decode itself
+- video may still have smaller framework costs such as `SkippedVideo` bookkeeping, but it no longer appears to be the main "recovery did playback work too early" problem
+
 ### 6.2 Audio during recovery
 
 Before the target point:
@@ -175,6 +189,13 @@ Current implementation direction:
 - audio frames fully before the seek target should not enter normal post-seek playback
 - the first audio frame that overlaps the seek target should be trimmed at a sample boundary before entering the runtime queue
 - this is currently implemented as a runtime-apply trim step, which is enough to correct audible restart position before deeper seek-pipeline work lands
+
+Current assessment:
+
+- the audio side is not yet shaped like the video side
+- seek recovery currently decides too late whether a decoded audio frame has any post-target playback value
+- fully pre-target audio still pays for resample, normalized sample copy, `AudioFrame` allocation, and then discard
+- the highest-value recovery optimization on the audio side is to move target gating earlier so that obviously pre-target audio can be discarded before full playback-grade conversion work is done
 
 ## 7. State and Concurrency Rules
 
@@ -272,6 +293,20 @@ The seek diagnostics should also retain recovery-shape data such as:
 - pre-target decoded video count
 - pre-target current-frame promotion count
 
+The next measurement pass should add explicit "work-accounting" metrics for recovery, especially:
+
+- pre-target video decoded count vs queued/current/promoted count
+- pre-target audio decoded count vs queued/submitted/discarded count
+- how many pre-target audio frames were fully resampled and copied before being discarded
+- reset sub-stage timings such as runtime clear, audio backend clear, clock move, and sync/scheduler reset
+- the delay from first post-target decoded video to first post-target current frame
+- the delay from seek reset completion to first submitted post-target audio chunk
+
+Those metrics should answer two concrete questions before code changes land:
+
+- is pre-target audio still doing playback work instead of only recovery work?
+- is reset itself, or the rebuild work caused by reset, a primary blocker in end-to-end seek latency?
+
 ### 8.3 Core-Internal vs End-to-End
 
 The first implementation stage should focus on:
@@ -297,7 +332,7 @@ This stage should not try to solve everything at once.
 Explicit non-goals:
 
 - drag-preview scrub pipeline
-- hardware decode integration as a prerequisite for better seek
+- hardware decode integration as a prerequisite for understanding current recovery costs
 - fully generic host-side preview semantics
 - broad lock refactors unrelated to seek hot paths
 
@@ -312,8 +347,10 @@ Recommended order:
 3. introduce explicit seek recovery state
 4. implement keyframe-anchored recovery as the default real-seek path
 5. avoid expensive video post-processing on pure pre-target frames
-6. trim audio to the target point during recovery
-7. add a lightweight buffered-seek fast path where it is clearly worthwhile
+6. add recovery work-accounting metrics for pre-target video, pre-target audio, and reset sub-stages
+7. move seek-audio target gating earlier so fully pre-target audio can be discarded before full playback-grade conversion
+8. review reset granularity and remove obviously unnecessary rebuild work from the hot seek path
+9. add a lightweight buffered-seek fast path only if later measurements show a clear payoff
 
 ## 11. Summary
 
@@ -325,6 +362,12 @@ The next seek architecture should become:
 - recovery-oriented
 - performance-first
 - still correctness-guarded by generation and worker coordination
+
+Near-term optimization work should assume:
+
+- the current FFmpeg anchor choice is not the main local seek problem
+- pure pre-target video is already on a mostly-correct fast path
+- pre-target audio and reset/rebuild costs are the most suspicious remaining recovery blockers
 
 That is the best fit for the current product shape:
 

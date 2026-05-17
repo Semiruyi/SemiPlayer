@@ -39,6 +39,7 @@ pub struct PlayerDiagnosticsSnapshot {
     pub seek_reset_us: MediaTimeUs,
     pub seek_first_video_decoded_us: MediaTimeUs,
     pub seek_first_video_pts_us: MediaTimeUs,
+    pub seek_first_audio_decoder_output_us: MediaTimeUs,
     pub seek_first_audio_decoded_us: MediaTimeUs,
     pub seek_first_current_video_ready_us: MediaTimeUs,
     pub seek_first_current_video_pts_us: MediaTimeUs,
@@ -86,6 +87,7 @@ struct SeekDiagnosticsSnapshot {
     seek_reset_us: MediaTimeUs,
     seek_first_video_decoded_us: MediaTimeUs,
     seek_first_video_pts_us: MediaTimeUs,
+    seek_first_audio_decoder_output_us: MediaTimeUs,
     seek_first_audio_decoded_us: MediaTimeUs,
     seek_first_current_video_ready_us: MediaTimeUs,
     seek_first_current_video_pts_us: MediaTimeUs,
@@ -108,6 +110,7 @@ struct SeekObservation {
     seek_reset_us: Option<MediaTimeUs>,
     seek_first_video_decoded_us: Option<MediaTimeUs>,
     seek_first_video_pts_us: Option<MediaTimeUs>,
+    seek_first_audio_decoder_output_us: Option<MediaTimeUs>,
     seek_first_audio_decoded_us: Option<MediaTimeUs>,
     seek_first_current_video_ready_us: Option<MediaTimeUs>,
     seek_first_current_video_pts_us: Option<MediaTimeUs>,
@@ -361,6 +364,10 @@ impl SemiPlayerHandle {
         self.diagnostics.observe_seek_first_audio_decoded();
     }
 
+    pub fn observe_seek_first_audio_decoder_output(&self) {
+        self.diagnostics.observe_seek_first_audio_decoder_output();
+    }
+
     pub fn observe_seek_current_video(
         &self,
         current_pts_us: MediaTimeUs,
@@ -502,6 +509,14 @@ impl PlayerDiagnostics {
         });
     }
 
+    fn observe_seek_first_audio_decoder_output(&self) {
+        self.with_active_seek(|seek| {
+            if seek.seek_first_audio_decoder_output_us.is_none() {
+                seek.seek_first_audio_decoder_output_us = Some(seek.elapsed_us());
+            }
+        });
+    }
+
     fn observe_seek_current_video(
         &self,
         current_pts_us: MediaTimeUs,
@@ -605,6 +620,7 @@ impl PlayerDiagnostics {
             seek_reset_us: seek_snapshot.seek_reset_us,
             seek_first_video_decoded_us: seek_snapshot.seek_first_video_decoded_us,
             seek_first_video_pts_us: seek_snapshot.seek_first_video_pts_us,
+            seek_first_audio_decoder_output_us: seek_snapshot.seek_first_audio_decoder_output_us,
             seek_first_audio_decoded_us: seek_snapshot.seek_first_audio_decoded_us,
             seek_first_current_video_ready_us: seek_snapshot.seek_first_current_video_ready_us,
             seek_first_current_video_pts_us: seek_snapshot.seek_first_current_video_pts_us,
@@ -637,6 +653,7 @@ impl SeekObservation {
             seek_reset_us: None,
             seek_first_video_decoded_us: None,
             seek_first_video_pts_us: None,
+            seek_first_audio_decoder_output_us: None,
             seek_first_audio_decoded_us: None,
             seek_first_current_video_ready_us: None,
             seek_first_current_video_pts_us: None,
@@ -666,6 +683,9 @@ impl SeekObservation {
             seek_reset_us: self.seek_reset_us.unwrap_or(-1),
             seek_first_video_decoded_us: self.seek_first_video_decoded_us.unwrap_or(-1),
             seek_first_video_pts_us: self.seek_first_video_pts_us.unwrap_or(-1),
+            seek_first_audio_decoder_output_us: self
+                .seek_first_audio_decoder_output_us
+                .unwrap_or(-1),
             seek_first_audio_decoded_us: self.seek_first_audio_decoded_us.unwrap_or(-1),
             seek_first_current_video_ready_us: self.seek_first_current_video_ready_us.unwrap_or(-1),
             seek_first_current_video_pts_us: self.seek_first_current_video_pts_us.unwrap_or(-1),

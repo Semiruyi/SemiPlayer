@@ -773,7 +773,8 @@ internal sealed class PlayerSmokeWindow : Window
             $"Lock {FormatSeekMetricUs(snapshot.SeekLockWaitUs)}  Ffmpeg {FormatSeekMetricUs(snapshot.SeekFfmpegSeekUs)}  Reset {FormatSeekMetricUs(snapshot.SeekResetUs)}";
         string seekRecoveryPart =
             $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstVideoPtsMs)}  " +
-            $"ADec {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
+            $"ADecRaw {FormatSeekMetricUs(snapshot.SeekFirstAudioDecoderOutputUs)}  " +
+            $"APlay {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
             $"Cur {FormatSeekMetricUs(snapshot.SeekFirstCurrentVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstCurrentVideoPtsMs)}  " +
             $"dT {FormatSignedMs(snapshot.SeekCurrentVideoMinusTargetMs)}";
         string seekTargetPart =
@@ -1637,6 +1638,7 @@ internal struct SemiPlaybackSnapshot
     internal long SeekResetUs;
     internal long SeekFirstVideoDecodedUs;
     internal long SeekFirstVideoPtsMs;
+    internal long SeekFirstAudioDecoderOutputUs;
     internal long SeekFirstAudioDecodedUs;
     internal long SeekFirstCurrentVideoReadyUs;
     internal long SeekFirstCurrentVideoPtsMs;

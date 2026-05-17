@@ -129,6 +129,7 @@ pub struct SemiPlaybackSnapshot {
     pub seek_reset_us: i64,
     pub seek_first_video_decoded_us: i64,
     pub seek_first_video_pts_ms: i64,
+    pub seek_first_audio_decoder_output_us: i64,
     pub seek_first_audio_decoded_us: i64,
     pub seek_first_current_video_ready_us: i64,
     pub seek_first_current_video_pts_ms: i64,

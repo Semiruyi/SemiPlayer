@@ -76,6 +76,7 @@ pub(crate) fn apply_decoded_output(
             }
         }
         DecodedOutput::Audio(frame) => {
+            player.observe_seek_first_audio_decoder_output();
             player.observe_seek_first_audio_decoded();
             let Some(frame) = trim_audio_for_seek_recovery(player, frame) else {
                 return DecodedOutputApplyResult {
@@ -87,6 +88,14 @@ pub(crate) fn apply_decoded_output(
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: should_wake_sync_for_audio_enqueue(player),
+            }
+        }
+        DecodedOutput::SkippedAudio(frame) => {
+            player.observe_seek_first_audio_decoder_output();
+            let _ = frame;
+            DecodedOutputApplyResult {
+                reached_end: false,
+                should_wake_sync: false,
             }
         }
         DecodedOutput::EndOfStream => {
