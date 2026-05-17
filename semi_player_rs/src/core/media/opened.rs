@@ -1,4 +1,6 @@
 use std::collections::VecDeque;
+use std::error::Error;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
 use ffmpeg_next as ffmpeg;
@@ -42,6 +44,7 @@ pub struct OpenedAudioDecoder {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)]
 struct DecoderDrainingState {
     input_exhausted: bool,
     video_eof_sent: bool,
@@ -92,6 +95,38 @@ pub enum MediaOpenError {
     ScaleFrame(ffmpeg::Error),
     ResampleFrame(ffmpeg::Error),
     Seek(ffmpeg::Error),
+}
+
+impl fmt::Display for MediaOpenError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Probe(error) => write!(f, "failed to probe media: {error}"),
+            Self::VideoDecoder(error) => write!(f, "failed to open video decoder: {error}"),
+            Self::AudioDecoder(error) => write!(f, "failed to open audio decoder: {error}"),
+            Self::ReadPacket(error) => write!(f, "failed to read media packet: {error}"),
+            Self::SendPacket(error) => write!(f, "failed to send packet to decoder: {error}"),
+            Self::ReceiveFrame(error) => write!(f, "failed to receive decoded frame: {error}"),
+            Self::ScaleFrame(error) => write!(f, "failed to scale video frame: {error}"),
+            Self::ResampleFrame(error) => write!(f, "failed to resample audio frame: {error}"),
+            Self::Seek(error) => write!(f, "failed to seek media input: {error}"),
+        }
+    }
+}
+
+impl Error for MediaOpenError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Probe(error) => Some(error),
+            Self::VideoDecoder(error)
+            | Self::AudioDecoder(error)
+            | Self::ReadPacket(error)
+            | Self::SendPacket(error)
+            | Self::ReceiveFrame(error)
+            | Self::ScaleFrame(error)
+            | Self::ResampleFrame(error)
+            | Self::Seek(error) => Some(error),
+        }
+    }
 }
 
 pub enum DecodedOutput {
@@ -163,6 +198,7 @@ impl OpenedMedia {
         })
     }
 
+    #[allow(dead_code)]
     pub fn path(&self) -> &str {
         &self.path
     }
@@ -175,10 +211,12 @@ impl OpenedMedia {
         self.info.duration_us
     }
 
+    #[allow(dead_code)]
     pub fn best_video_decoder(&self) -> Option<&OpenedVideoDecoder> {
         self.video_decoder.as_ref()
     }
 
+    #[allow(dead_code)]
     pub fn best_audio_decoder(&self) -> Option<&OpenedAudioDecoder> {
         self.audio_decoder.as_ref()
     }
@@ -244,7 +282,7 @@ impl OpenedMedia {
         loop {
             match self.poll_decoded_output(usize::MAX, DecodePolicy::default())? {
                 DecodedOutputPoll::Output(output) => return Ok(Some(output)),
-                DecodedOutputPoll::Pending => continue,
+                DecodedOutputPoll::Pending => {}
                 DecodedOutputPoll::Finished => return Ok(None),
             }
         }
@@ -288,8 +326,7 @@ impl OpenedMedia {
             if self
                 .video_decoder
                 .as_ref()
-                .map(|decoder| decoder.index == media_packet.stream_index)
-                .unwrap_or(false)
+                .is_some_and(|decoder| decoder.index == media_packet.stream_index)
             {
                 let video_decoder = self.video_decoder.as_mut().expect("video decoder exists");
                 decode_video_packet(
@@ -301,8 +338,7 @@ impl OpenedMedia {
             } else if self
                 .audio_decoder
                 .as_ref()
-                .map(|decoder| decoder.index == media_packet.stream_index)
-                .unwrap_or(false)
+                .is_some_and(|decoder| decoder.index == media_packet.stream_index)
             {
                 let audio_decoder = self.audio_decoder.as_mut().expect("audio decoder exists");
                 decode_audio_packet(
@@ -437,28 +473,29 @@ impl SeekDemuxDiagnostics {
         self.active = false;
     }
 
+    #[allow(clippy::similar_names)]
     fn snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
-        let first_video_packet_pts_us = self.first_video_packet_pts_us.unwrap_or(-1);
-        let first_video_packet_dts_us = self.first_video_packet_dts_us.unwrap_or(-1);
-        let first_video_packet_pos = self.first_video_packet_pos.unwrap_or(-1);
-        let first_video_packet_stream_index = self.first_video_packet_stream_index.unwrap_or(-1);
+        let first_pts = self.first_video_packet_pts_us.unwrap_or(-1);
+        let first_dts = self.first_video_packet_dts_us.unwrap_or(-1);
+        let first_pos = self.first_video_packet_pos.unwrap_or(-1);
+        let first_stream_index = self.first_video_packet_stream_index.unwrap_or(-1);
         let video_packets_read = self.video_packets_read;
         let audio_packets_read = self.audio_packets_read;
-        let expected_left_keyframe_pts_us = self.expected_left_keyframe_pts_us.unwrap_or(-1);
-        let expected_left_keyframe_dts_us = self.expected_left_keyframe_dts_us.unwrap_or(-1);
+        let expected_keyframe_pts = self.expected_left_keyframe_pts_us.unwrap_or(-1);
+        let expected_keyframe_dts = self.expected_left_keyframe_dts_us.unwrap_or(-1);
 
         if self.active {
             SeekDemuxDiagnosticsSnapshot {
-                first_video_packet_pts_us,
-                first_video_packet_dts_us,
+                first_video_packet_pts_us: first_pts,
+                first_video_packet_dts_us: first_dts,
                 first_video_packet_is_key: self.first_video_packet_is_key,
-                first_video_packet_pos,
-                first_video_packet_stream_index,
+                first_video_packet_pos: first_pos,
+                first_video_packet_stream_index: first_stream_index,
                 first_video_packet_stream_kind: self.first_video_packet_stream_kind,
                 video_packets_read,
                 audio_packets_read,
-                expected_left_keyframe_pts_us,
-                expected_left_keyframe_dts_us,
+                expected_left_keyframe_pts_us: expected_keyframe_pts,
+                expected_left_keyframe_dts_us: expected_keyframe_dts,
             }
         } else {
             self.last_completed
@@ -736,16 +773,14 @@ fn collect_audio_frames(
 
 fn send_video_decoder_eof(decoder: &mut ffmpeg::decoder::Video) -> Result<(), MediaOpenError> {
     match decoder.send_eof() {
-        Ok(()) => Ok(()),
-        Err(ffmpeg::Error::Eof) => Ok(()),
+        Ok(()) | Err(ffmpeg::Error::Eof) => Ok(()),
         Err(error) => Err(MediaOpenError::SendPacket(error)),
     }
 }
 
 fn send_audio_decoder_eof(decoder: &mut ffmpeg::decoder::Audio) -> Result<(), MediaOpenError> {
     match decoder.send_eof() {
-        Ok(()) => Ok(()),
-        Err(ffmpeg::Error::Eof) => Ok(()),
+        Ok(()) | Err(ffmpeg::Error::Eof) => Ok(()),
         Err(error) => Err(MediaOpenError::SendPacket(error)),
     }
 }
@@ -785,8 +820,7 @@ fn map_audio_frame(
 
 fn frame_timestamp_us(timestamp: Option<i64>, time_base: Rational) -> MediaTimeUs {
     timestamp
-        .map(|value| value.rescale(time_base, (1, 1_000_000)))
-        .unwrap_or(0)
+        .map_or(0, |value| value.rescale(time_base, (1, 1_000_000)))
 }
 
 fn packet_timestamp_us(timestamp: Option<i64>, time_base: Option<Rational>) -> MediaTimeUs {
@@ -863,17 +897,6 @@ fn should_skip_audio_frame_for_seek_recovery(
     end_us <= seek_recovery.target_video_us
 }
 
-fn map_pixel_format(pixel: format::Pixel) -> PixelFormatCategory {
-    match pixel {
-        format::Pixel::YUV420P => PixelFormatCategory::Yuv420p,
-        format::Pixel::NV12 => PixelFormatCategory::Nv12,
-        format::Pixel::RGBA => PixelFormatCategory::Rgba8,
-        format::Pixel::BGRA => PixelFormatCategory::Bgra8,
-        format::Pixel::GRAY8 => PixelFormatCategory::Gray8,
-        _ => PixelFormatCategory::Unknown,
-    }
-}
-
 fn convert_video_frame_to_bgra(
     decoder: &mut OpenedVideoDecoder,
     input: &frame::Video,
@@ -898,15 +921,14 @@ fn ensure_video_scaler(
     let needs_rebuild = decoder
         .scaler
         .as_ref()
-        .map(|scaler| {
+        .is_none_or(|scaler| {
             scaler.input().format != input.format()
                 || scaler.input().width != input.width()
                 || scaler.input().height != input.height()
                 || scaler.output().format != format::Pixel::BGRA
                 || scaler.output().width != input.width()
                 || scaler.output().height != input.height()
-        })
-        .unwrap_or(true);
+        });
 
     if needs_rebuild {
         decoder.scaler = Some(

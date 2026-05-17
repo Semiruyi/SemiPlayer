@@ -71,7 +71,7 @@ fn build_media_info_view(media_info: &MediaInfo) -> SemiMediaInfo {
     let best_audio_stream = media_info.best_audio_stream();
 
     SemiMediaInfo {
-        duration_ms: media_info.duration_us.map(us_to_ms).unwrap_or(0),
+        duration_ms: media_info.duration_us.map_or(0, us_to_ms),
         stream_count: media_info.stream_count(),
         video_stream_count: media_info.video_stream_count(),
         audio_stream_count: media_info.audio_stream_count(),
@@ -106,7 +106,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
         DecodedOutput::Video(frame) => SemiDecodedOutput {
             kind: SemiDecodedKind::Video.as_raw(),
             pts_ms: us_to_ms(frame.pts_us),
-            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            duration_ms: frame.duration_us.map_or(0, us_to_ms),
             width: frame.width,
             height: frame.height,
             sample_rate: 0,
@@ -117,7 +117,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
         DecodedOutput::SkippedVideo(frame) => SemiDecodedOutput {
             kind: SemiDecodedKind::None.as_raw(),
             pts_ms: us_to_ms(frame.pts_us),
-            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            duration_ms: frame.duration_us.map_or(0, us_to_ms),
             width: 0,
             height: 0,
             sample_rate: 0,
@@ -128,7 +128,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
         DecodedOutput::Audio(frame) => SemiDecodedOutput {
             kind: SemiDecodedKind::Audio.as_raw(),
             pts_ms: us_to_ms(frame.pts_us),
-            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            duration_ms: frame.duration_us.map_or(0, us_to_ms),
             width: 0,
             height: 0,
             sample_rate: frame.sample_rate,
@@ -139,7 +139,7 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
         DecodedOutput::SkippedAudio(frame) => SemiDecodedOutput {
             kind: SemiDecodedKind::None.as_raw(),
             pts_ms: us_to_ms(frame.pts_us),
-            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            duration_ms: frame.duration_us.map_or(0, us_to_ms),
             width: 0,
             height: 0,
             sample_rate: 0,
@@ -173,7 +173,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let runtime_video = player.runtime.video_snapshot();
     let last_audio_frame = player.runtime.last_audio_frame();
     let audio_position_us = player.audio_clock.presentation_time_us();
-    let audio_position_ms = us_to_ms(audio_position_us);
+    let playback_position_ms = us_to_ms(audio_position_us);
     let sync_snapshot = VideoSyncService::evaluate(player, audio_position_us);
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
@@ -185,7 +185,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .unwrap_or_default();
     let audio_output_snapshot = player
         .audio_output
-        .with_ref(|audio_output| audio_output.snapshot());
+        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
     let host_presentation_offset_ms = i32::try_from(us_to_ms(player.host_presentation_offset_us))
         .unwrap_or_else(|_| {
             if player.host_presentation_offset_us.is_negative() {
@@ -196,9 +196,9 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         });
     let core_av_delta_ms = runtime_video
         .current_pts_us
-        .map(|pts_us| audio_position_ms - us_to_ms(pts_us))
+        .map(|pts_us| playback_position_ms - us_to_ms(pts_us))
         .unwrap_or(0);
-    let next_video_pts_ms = runtime_video.next_pts_us.map(us_to_ms).unwrap_or(0);
+    let next_video_pts_ms = runtime_video.next_pts_us.map_or(0, us_to_ms);
     let current_to_next_video_delta_ms = runtime_video
         .current_to_next_delta_us
         .map(us_to_ms)
@@ -207,25 +207,22 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
     SemiPlaybackSnapshot {
-        audio_position_ms,
+        audio_position_ms: playback_position_ms,
         audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
         has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
-        current_video_pts_ms: runtime_video.current_pts_us.map(us_to_ms).unwrap_or(0),
-        current_video_duration_ms: runtime_video.current_duration_us.map(us_to_ms).unwrap_or(0),
+        current_video_pts_ms: runtime_video.current_pts_us.map_or(0, us_to_ms),
+        current_video_duration_ms: runtime_video.current_duration_us.map_or(0, us_to_ms),
         current_video_effective_end_ms: sync_snapshot
             .current_video_effective_end_us
-            .map(us_to_ms)
-            .unwrap_or(0),
+            .map_or(0, us_to_ms),
         next_video_pts_ms,
         current_to_next_video_delta_ms,
         next_video_wake_deadline_ms: sync_snapshot
             .next_wake_deadline_us
-            .map(us_to_ms)
-            .unwrap_or(0),
+            .map_or(0, us_to_ms),
         last_audio_pts_ms: last_audio_frame
-            .map(|frame| us_to_ms(frame.pts_us))
-            .unwrap_or(0),
+            .map_or(0, |frame| us_to_ms(frame.pts_us)),
         host_presentation_offset_ms,
         core_av_delta_ms,
         core_sync_error_ms,
@@ -247,12 +244,10 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         suggested_pump_wait_ms: us_to_ms(schedule_hint.suggested_wait_us),
         next_audio_refill_deadline_ms: schedule_hint
             .next_audio_refill_deadline_us
-            .map(us_to_ms)
-            .unwrap_or(0),
+            .map_or(0, us_to_ms),
         next_pump_deadline_ms: schedule_hint
             .next_pump_deadline_us
-            .map(us_to_ms)
-            .unwrap_or(0),
+            .map_or(0, us_to_ms),
         ffi_lock_wait_last_us: diagnostics.ffi_lock_wait_last_us,
         ffi_lock_wait_max_us: diagnostics.ffi_lock_wait_max_us,
         sync_worker_lock_wait_last_us: diagnostics.sync_worker_lock_wait_last_us,
@@ -343,7 +338,7 @@ fn stream_kind_to_u32(kind: StreamKind) -> u32 {
 fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
     SemiVideoFrameInfo {
         pts_ms: us_to_ms(frame.pts_us),
-        duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+        duration_ms: frame.duration_us.map_or(0, us_to_ms),
         width: frame.width,
         height: frame.height,
         stride: u32::try_from(frame.stride).unwrap_or(u32::MAX),
@@ -356,18 +351,16 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
 fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnapshot {
     let snapshot = player
         .audio_output
-        .with_ref(|audio_output| audio_output.snapshot());
+        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
     let device_timing = snapshot.device_timing;
 
     SemiAudioOutputSnapshot {
         configured_sample_rate: snapshot
             .configured_format
-            .map(|format| format.sample_rate)
-            .unwrap_or(0),
+            .map_or(0, |format| format.sample_rate),
         configured_channels: snapshot
             .configured_format
-            .map(|format| format.channels)
-            .unwrap_or(0),
+            .map_or(0, |format| format.channels),
         reserved0: 0,
         target_buffer_frames: u32::try_from(snapshot.target_buffer_frames).unwrap_or(u32::MAX),
         buffered_frames: u32::try_from(snapshot.buffered_frames).unwrap_or(u32::MAX),
@@ -378,11 +371,9 @@ fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnap
         started: u32::from(snapshot.started),
         has_device_timing: u32::from(device_timing.is_some()),
         base_pts_ms: device_timing
-            .map(|timing| us_to_ms(timing.base_pts_us))
-            .unwrap_or(0),
+            .map_or(0, |timing| us_to_ms(timing.base_pts_us)),
         device_played_frames: device_timing
-            .map(|timing| timing.played_frames)
-            .unwrap_or(0),
+            .map_or(0, |timing| timing.played_frames),
     }
 }
 
@@ -433,22 +424,24 @@ pub extern "C" fn semi_player_open(
         Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => {
             return SEMI_E_MEDIA_OPEN_FAILED
         }
-        Err(MediaOpenError::Probe(MediaProbeError::FfmpegInit(_)))
-        | Err(MediaOpenError::Probe(MediaProbeError::Decoder(_))) => {
+        Err(
+            MediaOpenError::Probe(
+                MediaProbeError::FfmpegInit(_) | MediaProbeError::Decoder(_),
+            )
+            | MediaOpenError::Seek(_),
+        ) => {
             return SEMI_E_MEDIA_PROBE_FAILED;
         }
-        Err(MediaOpenError::VideoDecoder(_)) | Err(MediaOpenError::AudioDecoder(_)) => {
+        Err(
+            MediaOpenError::VideoDecoder(_)
+            | MediaOpenError::AudioDecoder(_)
+            | MediaOpenError::ReadPacket(_)
+            | MediaOpenError::SendPacket(_)
+            | MediaOpenError::ReceiveFrame(_)
+            | MediaOpenError::ScaleFrame(_)
+            | MediaOpenError::ResampleFrame(_),
+        ) => {
             return SEMI_E_DECODER_OPEN_FAILED;
-        }
-        Err(MediaOpenError::ReadPacket(_))
-        | Err(MediaOpenError::SendPacket(_))
-        | Err(MediaOpenError::ReceiveFrame(_))
-        | Err(MediaOpenError::ScaleFrame(_))
-        | Err(MediaOpenError::ResampleFrame(_)) => {
-            return SEMI_E_DECODER_OPEN_FAILED;
-        }
-        Err(MediaOpenError::Seek(_)) => {
-            return SEMI_E_MEDIA_PROBE_FAILED;
         }
     };
 
@@ -460,14 +453,14 @@ pub extern "C" fn semi_player_open(
         player.set_state(PlayerState::Ready);
         player.notify_workers();
     }) {
-        Ok(_) => SEMI_OK,
+        Ok(()) => SEMI_OK,
         Err(code) => code,
     }
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -480,15 +473,13 @@ pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
         VideoSyncService::mark_dirty(player);
         player.notify_workers();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -501,10 +492,8 @@ pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
         VideoSyncService::mark_dirty(player);
         player.notify_workers();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -518,7 +507,7 @@ pub extern "C" fn semi_player_seek(
         unsafe { (&*player).observe_seek_requested(target_us) };
     }
 
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         player.observe_seek_lock_acquired();
         if !player.is_media_loaded() {
             player.observe_seek_aborted();
@@ -548,41 +537,37 @@ pub extern "C" fn semi_player_seek(
         player.runtime.clear();
         player
             .audio_output
-            .with_mut(|audio_output| audio_output.clear_buffer());
+            .with_mut(crate::audio::core::output_controller::AudioOutputController::clear_buffer);
         player.audio_clock.seek(target_us);
         if player.state() == PlayerState::Playing {
             player.audio_clock.pause();
         }
-        player.video_scheduler = Default::default();
+        player.video_scheduler = crate::render::core::scheduler::VideoScheduler;
         player.video_sync.reset();
         player.begin_seek_recovery(target_us);
         player.observe_seek_reset_finished();
         player.notify_workers();
         player.observe_seek_api_completed();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         player.bump_media_generation();
         player.clear_media();
         player.set_state(PlayerState::Idle);
         player.notify_workers();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_double) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -595,10 +580,8 @@ pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_
         VideoSyncService::mark_dirty(player);
         player.notify_workers();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -606,15 +589,13 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     player: *mut SemiPlayerHandle,
     bias_ms: i32,
 ) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
         VideoSyncService::mark_dirty(player);
         player.notify_workers();
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -622,17 +603,15 @@ pub extern "C" fn semi_player_set_subtitle_visible(
     player: *mut SemiPlayerHandle,
     visible: c_int,
 ) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
 
         player.subtitles_visible = visible != 0;
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -647,7 +626,7 @@ pub extern "C" fn semi_player_get_state(
     match with_player_locked(player, |player| unsafe {
         *out_state = player.state().as_raw();
     }) {
-        Ok(_) => SEMI_OK,
+        Ok(()) => SEMI_OK,
         Err(code) => code,
     }
 }
@@ -664,7 +643,7 @@ pub extern "C" fn semi_player_get_position_ms(
     match with_player_locked(player, |player| unsafe {
         *out_position_ms = us_to_ms(player.audio_clock.presentation_time_us());
     }) {
-        Ok(_) => SEMI_OK,
+        Ok(()) => SEMI_OK,
         Err(code) => code,
     }
 }
@@ -682,13 +661,10 @@ pub extern "C" fn semi_player_get_duration_ms(
         *out_duration_ms = player
             .opened_media
             .as_ref()
-            .and_then(|opened_media| {
-                opened_media.with_ref(|opened_media| opened_media.duration_us())
-            })
-            .map(us_to_ms)
-            .unwrap_or(0);
+            .and_then(|opened_media| opened_media.with_ref(|opened_media| opened_media.duration_us()))
+            .map_or(0, us_to_ms);
     }) {
-        Ok(_) => SEMI_OK,
+        Ok(()) => SEMI_OK,
         Err(code) => code,
     }
 }
@@ -702,7 +678,7 @@ pub extern "C" fn semi_player_get_media_info(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -718,10 +694,8 @@ pub extern "C" fn semi_player_get_media_info(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -733,7 +707,7 @@ pub extern "C" fn semi_player_debug_decode_next(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -758,22 +732,18 @@ pub extern "C" fn semi_player_debug_decode_next(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
-    match with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_locked(player, |player| {
         let code = pump_player(player, max_iterations);
         player.notify_workers();
         code
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -785,7 +755,7 @@ pub extern "C" fn semi_player_get_playback_snapshot(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -795,10 +765,8 @@ pub extern "C" fn semi_player_get_playback_snapshot(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -810,7 +778,7 @@ pub extern "C" fn semi_player_get_audio_output_snapshot(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -820,10 +788,8 @@ pub extern "C" fn semi_player_get_audio_output_snapshot(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -835,7 +801,7 @@ pub extern "C" fn semi_player_get_current_video_frame_info(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -849,10 +815,8 @@ pub extern "C" fn semi_player_get_current_video_frame_info(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -865,7 +829,7 @@ pub extern "C" fn semi_player_copy_current_video_frame_bgra(
         return SEMI_E_INVALID_ARG;
     }
 
-    match with_player_locked(player, |player| {
+    with_player_locked(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
@@ -885,16 +849,14 @@ pub extern "C" fn semi_player_copy_current_video_frame_bgra(
         }
 
         SEMI_OK
-    }) {
-        Ok(code) => code,
-        Err(code) => code,
-    }
+    })
+    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_ffmpeg_version_string() -> *mut c_char {
     let version = ffmpeg_next::util::version();
-    match CString::new(format!("FFmpeg version: {}", version)) {
+    match CString::new(format!("FFmpeg version: {version}")) {
         Ok(value) => value.into_raw(),
         Err(_) => ptr::null_mut(),
     }

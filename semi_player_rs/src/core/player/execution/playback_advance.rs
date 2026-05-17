@@ -39,7 +39,8 @@ pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAd
             return (0, 0);
         }
 
-        let request_frame_count = audio_output.next_request_frame_count();
+        let request_frame_count =
+            crate::audio::core::output_controller::AudioOutputController::next_request_frame_count();
         if request_frame_count == 0 {
             return (0, 0);
         }
@@ -72,7 +73,7 @@ pub(crate) fn execute_playback_plan(plan: &PlaybackAdvancePlan) -> PlaybackAdvan
 
     let configured_format = plan
         .audio_output
-        .with_ref(|audio_output| audio_output.configured_format());
+        .with_ref(crate::audio::core::output_controller::AudioOutputController::configured_format);
     let audio_chunks_submitted =
         !plan.audio_chunks.is_empty() && plan.audio_chunks[0].format() == configured_format;
 
@@ -125,7 +126,7 @@ pub(crate) fn finish_playback_advance(
 
             let device_timing = player
                 .audio_output
-                .with_ref(|audio_output| audio_output.playback_timing());
+                .with_ref(crate::audio::core::output_controller::AudioOutputController::playback_timing);
             if device_timing.is_some() {
                 player.audio_clock.play();
                 player.audio_clock.update_from_device(device_timing);
@@ -149,12 +150,14 @@ pub(crate) fn finish_playback_advance(
     if should_update_clock_from_device {
         let device_timing = player
             .audio_output
-            .with_ref(|audio_output| audio_output.playback_timing());
+            .with_ref(crate::audio::core::output_controller::AudioOutputController::playback_timing);
         player.audio_clock.update_from_device(device_timing);
     }
 
     let playback_time_us = player.current_playback_time_us();
-    let audio_snapshot = player.audio_output.with_ref(|audio_output| audio_output.snapshot());
+    let audio_snapshot = player
+        .audio_output
+        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
     if let Some(current_pts_us) = player.runtime.current_video_frame().map(|frame| frame.pts_us) {
         player.observe_seek_current_video(
             current_pts_us,

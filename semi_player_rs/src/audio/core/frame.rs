@@ -4,6 +4,7 @@ use crate::util::time::MediaTimeUs;
 pub const NORMALIZED_AUDIO_FORMAT: AudioSampleFormatCategory = AudioSampleFormatCategory::F32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum AudioSampleFormatCategory {
     U8,
     I16,

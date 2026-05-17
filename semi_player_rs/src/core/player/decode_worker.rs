@@ -84,7 +84,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
                 };
 
                 match action {
-                    DecodeWorkerAction::ContinueSoon => continue,
+                    DecodeWorkerAction::ContinueSoon => {}
                     DecodeWorkerAction::WaitIndefinitely => {
                         if wait_for_signal(&control) {
                             break;
@@ -111,7 +111,7 @@ fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
         return DecodeWorkerPlan::WaitIndefinitely;
     }
 
-    let Some(opened_media) = player.opened_media.as_ref().cloned() else {
+    let Some(opened_media) = player.opened_media.clone() else {
         return DecodeWorkerPlan::WaitIndefinitely;
     };
 
@@ -141,7 +141,7 @@ fn complete_decode_action(
                 return DecodeWorkerAction::WaitIndefinitely;
             }
         }
-        Ok(DecodedOutputPoll::Pending) | Ok(DecodedOutputPoll::Finished) => {}
+        Ok(DecodedOutputPoll::Pending | DecodedOutputPoll::Finished) => {}
         Err(_) => return DecodeWorkerAction::WaitIndefinitely,
     }
 

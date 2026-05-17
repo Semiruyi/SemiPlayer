@@ -75,11 +75,7 @@ impl AudioOutputController {
         self.backend.configured_format()
     }
 
-    pub fn needs_more_frames(&self) -> bool {
-        self.backend.buffered_frames() < self.backend.target_buffer_frames()
-    }
-
-    pub fn next_request_frame_count(&self) -> usize {
+    pub fn next_request_frame_count() -> usize {
         CHUNK_FRAME_COUNT
     }
 
@@ -92,7 +88,7 @@ impl AudioOutputController {
 
     pub fn playback_timing(&self) -> Option<DevicePlaybackTiming> {
         let backend_timing = self.backend.timing();
-        self.timing_state.to_device_timing(backend_timing)
+        self.timing_state.device_timing_for(backend_timing)
     }
 
     pub fn snapshot(&self) -> AudioOutputSnapshot {
@@ -107,7 +103,7 @@ impl AudioOutputController {
             audible_frames_total: backend_timing.audible_frames_total,
             submitted_frames_total: self.timing_state.submitted_frames_total,
             started: backend_timing.started,
-            device_timing: self.timing_state.to_device_timing(backend_timing),
+            device_timing: self.timing_state.device_timing_for(backend_timing),
         }
     }
 
@@ -180,7 +176,7 @@ impl AudioOutputTimingState {
             .saturating_add(chunk.frame_count as u64);
     }
 
-    fn to_device_timing(&self, backend_timing: AudioBackendTiming) -> Option<DevicePlaybackTiming> {
+    fn device_timing_for(self, backend_timing: AudioBackendTiming) -> Option<DevicePlaybackTiming> {
         let base_pts_us = self.base_pts_us?;
         let format = self.format?;
         let played_frames = backend_timing

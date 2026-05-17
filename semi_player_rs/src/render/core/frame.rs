@@ -2,6 +2,7 @@ use crate::util::time::MediaTimeUs;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum PixelFormatCategory {
     Yuv420p = 1,
     Nv12 = 2,

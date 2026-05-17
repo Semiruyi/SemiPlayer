@@ -287,7 +287,7 @@ impl SemiPlayerHandle {
         self.host_presentation_offset_us = 0;
         self.audio_clock.reset();
         self.audio_output
-            .with_mut(|audio_output| audio_output.stop());
+            .with_mut(crate::audio::core::output_controller::AudioOutputController::stop);
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
         self.video_sync.reset();

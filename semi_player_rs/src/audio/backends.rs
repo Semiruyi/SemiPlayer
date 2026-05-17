@@ -40,8 +40,6 @@ pub trait AudioOutputBackend {
 
     fn submit(&mut self, chunk: &AudioOutputChunk) -> Result<(), AudioBackendError>;
 
-    fn buffered_frames(&self) -> usize;
-
     fn timing(&self) -> AudioBackendTiming;
 }
 
@@ -182,10 +180,6 @@ impl AudioOutputBackend for CpalAudioOutputBackend {
         shared.samples.extend(chunk.samples.iter().copied());
         shared.buffered_frames = shared.buffered_frames.saturating_add(chunk.frame_count);
         Ok(())
-    }
-
-    fn buffered_frames(&self) -> usize {
-        self.shared.lock().unwrap().buffered_frames
     }
 
     fn timing(&self) -> AudioBackendTiming {
@@ -343,8 +337,7 @@ fn fill_output_buffer(
     let mut shared = shared.lock().unwrap();
     let channel_count = shared
         .format
-        .map(|format| format.sample_stride())
-        .unwrap_or(1)
+        .map_or(1, AudioStreamFormat::sample_stride)
         .max(1);
 
     for sample in output.iter_mut() {
@@ -383,7 +376,7 @@ fn fill_output_buffer(
 fn select_buffer_size(config: &SupportedStreamConfigRange, preferred_frames: usize) -> BufferSize {
     match config.buffer_size() {
         cpal::SupportedBufferSize::Range { min, max } => {
-            let preferred = preferred_frames as u32;
+            let preferred = u32::try_from(preferred_frames).unwrap_or(u32::MAX);
             BufferSize::Fixed(preferred.clamp(*min, *max))
         }
         cpal::SupportedBufferSize::Unknown => BufferSize::Default,
@@ -397,7 +390,7 @@ fn frames_to_duration(frame_count: usize, sample_rate: u32) -> Duration {
 
     let nanos = (frame_count as u128)
         .saturating_mul(1_000_000_000)
-        .saturating_div(sample_rate as u128);
+        .saturating_div(u128::from(sample_rate));
     Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
 }
 
@@ -408,7 +401,7 @@ fn duration_to_frames(duration: Duration, sample_rate: u32) -> usize {
 
     let frames = duration
         .as_nanos()
-        .saturating_mul(sample_rate as u128)
+        .saturating_mul(u128::from(sample_rate))
         .saturating_div(1_000_000_000);
     usize::try_from(frames).unwrap_or(usize::MAX)
 }
@@ -422,7 +415,9 @@ mod tests {
 
     #[test]
     fn scheduled_block_reports_partial_audibility() {
-        let start = Instant::now() - Duration::from_millis(10);
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(10))
+            .unwrap();
         let block = ScheduledPlaybackBlock::new(start, 4_800, 48_000);
 
         assert_eq!(block.audible_frames_at(Instant::now()), 480);
@@ -434,7 +429,11 @@ mod tests {
         let mut shared = SharedAudioBuffer {
             completed_audible_frames_total: 1_000,
             scheduled_blocks: VecDeque::from([
-                ScheduledPlaybackBlock::new(now - Duration::from_millis(5), 480, 48_000),
+                ScheduledPlaybackBlock::new(
+                    now.checked_sub(Duration::from_millis(5)).unwrap(),
+                    480,
+                    48_000,
+                ),
                 ScheduledPlaybackBlock::new(now + Duration::from_millis(5), 480, 48_000),
             ]),
             ..Default::default()
@@ -452,7 +451,7 @@ mod tests {
         let now = Instant::now();
         let mut shared = SharedAudioBuffer {
             scheduled_blocks: VecDeque::from([ScheduledPlaybackBlock::new(
-                now - Duration::from_millis(5),
+                now.checked_sub(Duration::from_millis(5)).unwrap(),
                 960,
                 48_000,
             )]),

@@ -13,7 +13,7 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     } else {
         max_iterations
     };
-    let Some(opened_media) = player.opened_media.as_ref().cloned() else {
+    let Some(opened_media) = player.opened_media.clone() else {
         return SEMI_E_INVALID_STATE;
     };
 
@@ -21,7 +21,7 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
         let decode_policy = player.decode_policy();
         let output = match poll_decoded_output_once(&opened_media, decode_policy) {
             Ok(DecodedOutputPoll::Output(output)) => output,
-            Ok(DecodedOutputPoll::Pending) | Ok(DecodedOutputPoll::Finished) => break,
+            Ok(DecodedOutputPoll::Pending | DecodedOutputPoll::Finished) => break,
             Err(code) => return code,
         };
 

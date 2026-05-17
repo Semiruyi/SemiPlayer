@@ -57,15 +57,14 @@ impl NormalizedAudioResampler {
         let needs_rebuild = self
             .context
             .as_ref()
-            .map(|context| {
+            .is_none_or(|context| {
                 context.input().format != input_format
                     || context.input().channel_layout != input_layout
                     || context.input().rate != input_rate
                     || context.output().format != format::Sample::F32(format::sample::Type::Packed)
                     || context.output().channel_layout != output_layout
                     || context.output().rate != input_rate
-            })
-            .unwrap_or(true);
+            });
 
         if needs_rebuild {
             self.context = Some(

@@ -42,7 +42,7 @@ impl AudioClock {
 
     pub fn pause(&self) {
         let mut state = self.state.lock().unwrap();
-        self.reanchor_to_now(&mut state);
+        Self::reanchor_to_now(&mut state);
         state.anchor_instant = None;
         state.device_timing = None;
     }
@@ -58,7 +58,7 @@ impl AudioClock {
 
     pub fn set_speed(&self, speed: f64) {
         let mut state = self.state.lock().unwrap();
-        self.reanchor_to_now(&mut state);
+        Self::reanchor_to_now(&mut state);
         state.speed = speed;
         if state.anchor_instant.is_some() {
             state.anchor_instant = Some(Instant::now());
@@ -81,11 +81,11 @@ impl AudioClock {
         }
 
         if let Some(timing) = timing {
-            state.anchor_media_time_us = self.device_media_time_us(&timing);
+            state.anchor_media_time_us = Self::device_media_time_us(&timing);
             state.anchor_instant = Some(Instant::now());
             state.device_timing = Some(timing);
         } else {
-            self.reanchor_to_now(&mut state);
+            Self::reanchor_to_now(&mut state);
             state.device_timing = None;
             if state.anchor_instant.is_some() {
                 state.anchor_instant = Some(Instant::now());
@@ -95,37 +95,35 @@ impl AudioClock {
 
     pub fn presentation_time_us(&self) -> MediaTimeUs {
         let state = self.state.lock().unwrap();
-        self.projected_media_time_us(&state, Instant::now())
-    }
-
-    pub fn speed(&self) -> f64 {
-        self.state.lock().unwrap().speed
+        Self::projected_media_time_us(&state, Instant::now())
     }
 
     pub fn is_running(&self) -> bool {
         self.state.lock().unwrap().anchor_instant.is_some()
     }
 
-    fn reanchor_to_now(&self, state: &mut ClockState) {
-        state.anchor_media_time_us = self.projected_media_time_us(state, Instant::now());
+    fn reanchor_to_now(state: &mut ClockState) {
+        state.anchor_media_time_us = Self::projected_media_time_us(state, Instant::now());
     }
 
-    fn projected_media_time_us(&self, state: &ClockState, now: Instant) -> MediaTimeUs {
+    fn projected_media_time_us(state: &ClockState, now: Instant) -> MediaTimeUs {
         let Some(anchor_instant) = state.anchor_instant else {
             return state.anchor_media_time_us;
         };
 
-        let elapsed_us = now.duration_since(anchor_instant).as_micros() as f64;
-        let advanced_us = (elapsed_us * state.speed) as MediaTimeUs;
+        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+        let advanced_us = (now.duration_since(anchor_instant).as_micros() as f64 * state.speed)
+            as MediaTimeUs;
         add_media_time_us(state.anchor_media_time_us, advanced_us)
     }
 
-    fn device_media_time_us(&self, timing: &DevicePlaybackTiming) -> MediaTimeUs {
+    fn device_media_time_us(timing: &DevicePlaybackTiming) -> MediaTimeUs {
         if timing.sample_rate == 0 {
             return timing.base_pts_us;
         }
 
-        let advanced_us = (timing.played_frames as i64)
+        let advanced_us = i64::try_from(timing.played_frames)
+            .unwrap_or(i64::MAX)
             .saturating_mul(1_000_000)
             .saturating_div(i64::from(timing.sample_rate));
         add_media_time_us(timing.base_pts_us, advanced_us)

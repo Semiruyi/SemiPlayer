@@ -356,10 +356,10 @@ mod tests {
             },
         );
 
-        assert_eq!(hint.media_loaded, false);
-        assert_eq!(hint.worker_active, false);
-        assert_eq!(hint.needs_decode_supply, true);
-        assert_eq!(hint.should_decode_now, false);
+        assert!(!hint.media_loaded);
+        assert!(!hint.worker_active);
+        assert!(hint.needs_decode_supply);
+        assert!(!hint.should_decode_now);
     }
 
     #[test]

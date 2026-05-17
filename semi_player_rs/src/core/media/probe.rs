@@ -1,4 +1,6 @@
 use ffmpeg_next as ffmpeg;
+use std::error::Error;
+use std::fmt;
 
 use crate::util::time::MediaTimeUs;
 
@@ -33,20 +35,15 @@ pub struct AudioStreamInfo {
     pub channels: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StreamKind {
+    #[default]
     Unknown,
     Video,
     Audio,
     Subtitle,
     Data,
     Attachment,
-}
-
-impl Default for StreamKind {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 #[derive(Debug)]
@@ -56,6 +53,25 @@ pub enum MediaProbeError {
     Decoder(ffmpeg::Error),
 }
 
+impl fmt::Display for MediaProbeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::FfmpegInit(error) => write!(f, "failed to initialize ffmpeg: {error}"),
+            Self::OpenInput(error) => write!(f, "failed to open media input: {error}"),
+            Self::Decoder(error) => write!(f, "failed to inspect stream decoder: {error}"),
+        }
+    }
+}
+
+impl Error for MediaProbeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::FfmpegInit(error) | Self::OpenInput(error) | Self::Decoder(error) => Some(error),
+        }
+    }
+}
+
+#[allow(dead_code)]
 pub fn probe_media(path: &str) -> Result<MediaInfo, MediaProbeError> {
     ffmpeg::init().map_err(MediaProbeError::FfmpegInit)?;
 
@@ -145,28 +161,37 @@ fn format_duration_to_us(duration: i64) -> Option<MediaTimeUs> {
 
 impl MediaInfo {
     pub fn stream_count(&self) -> u32 {
-        self.streams.len() as u32
+        u32::try_from(self.streams.len()).unwrap_or(u32::MAX)
     }
 
     pub fn video_stream_count(&self) -> u32 {
-        self.streams
+        u32::try_from(
+            self.streams
             .iter()
             .filter(|stream| stream.kind == StreamKind::Video)
-            .count() as u32
+            .count(),
+        )
+        .unwrap_or(u32::MAX)
     }
 
     pub fn audio_stream_count(&self) -> u32 {
-        self.streams
+        u32::try_from(
+            self.streams
             .iter()
             .filter(|stream| stream.kind == StreamKind::Audio)
-            .count() as u32
+            .count(),
+        )
+        .unwrap_or(u32::MAX)
     }
 
     pub fn subtitle_stream_count(&self) -> u32 {
-        self.streams
+        u32::try_from(
+            self.streams
             .iter()
             .filter(|stream| stream.kind == StreamKind::Subtitle)
-            .count() as u32
+            .count(),
+        )
+        .unwrap_or(u32::MAX)
     }
 
     pub fn best_video_stream(&self) -> Option<&StreamInfo> {

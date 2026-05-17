@@ -137,16 +137,8 @@ impl PlayerRuntime {
         }
     }
 
-    pub fn has_current_video_frame(&self) -> bool {
-        self.current_video_frame.is_some()
-    }
-
     pub fn buffered_video_frame_count(&self) -> usize {
         self.queued_video_frames.len() + usize::from(self.current_video_frame.is_some())
-    }
-
-    pub fn has_buffered_future_video_frames(&self, min_count: usize) -> bool {
-        self.queued_video_frames.len() >= min_count
     }
 
     pub fn decode_supply_status(&self) -> DecodeSupplyStatus {
@@ -667,7 +659,7 @@ mod tests {
                 audio_queue_len: 0,
                 buffered_video_frame_count: 0,
                 target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
-                target_total_video_frames: 1 + TARGET_FUTURE_VIDEO_QUEUE_LEN,
+                target_total_video_frames: TARGET_FUTURE_VIDEO_QUEUE_LEN + 1,
                 end_of_stream: false,
                 has_sufficient_buffer: false,
                 needs_decode_supply: true,
@@ -675,8 +667,9 @@ mod tests {
         );
 
         for index in 0..TARGET_AUDIO_QUEUE_LEN {
+            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(10_000);
             runtime.push_audio_frame(AudioFrame {
-                pts_us: (index as i64) * 10_000,
+                pts_us,
                 duration_us: Some(10_000),
                 sample_rate: 48_000,
                 channels: 2,
@@ -687,9 +680,10 @@ mod tests {
             });
         }
 
-        for index in 0..(1 + TARGET_FUTURE_VIDEO_QUEUE_LEN) {
+        for index in 0..=TARGET_FUTURE_VIDEO_QUEUE_LEN {
+            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(33_000);
             runtime.push_video_frame(VideoFrame {
-                pts_us: (index as i64) * 33_000,
+                pts_us,
                 duration_us: Some(33_000),
                 width: 1920,
                 height: 1080,

@@ -36,8 +36,4 @@ impl AudioOutputChunk {
     pub fn is_empty(&self) -> bool {
         self.frame_count == 0 || self.samples.is_empty()
     }
-
-    pub fn sample_len(&self) -> usize {
-        self.samples.len()
-    }
 }
