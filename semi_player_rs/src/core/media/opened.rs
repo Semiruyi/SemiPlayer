@@ -9,7 +9,7 @@ use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
-use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 use crate::util::time::MediaTimeUs;
 
 use super::probe::{collect_media_info, MediaInfo, MediaProbeError, StreamKind};
@@ -865,10 +865,12 @@ fn map_video_frame(
         duration_us,
         width: converted.width(),
         height: converted.height(),
-        pixel_format: PixelFormatCategory::Bgra8,
-        stride,
-        data,
         is_key_frame: frame.is_key(),
+        surface: std::sync::Arc::new(VideoSurface::new_cpu_packed(
+            PixelFormatCategory::Bgra8,
+            stride,
+            data,
+        )),
     })
 }
 

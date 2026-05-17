@@ -131,13 +131,15 @@ fn trim_audio_for_seek_recovery(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{apply_decoded_output, DecodedOutputApplyResult};
     use crate::api::types::PlayerState;
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
     use crate::core::player::handle::SemiPlayerHandle;
     use crate::core::media::DecodedOutput;
-    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn audio_frame(pts_us: i64) -> AudioFrame {
         AudioFrame {
@@ -158,10 +160,12 @@ mod tests {
             duration_us: Some(33_000),
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 16],
             is_key_frame: false,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Bgra8,
+                1920 * 4,
+                vec![0; 16],
+            )),
         }
     }
 

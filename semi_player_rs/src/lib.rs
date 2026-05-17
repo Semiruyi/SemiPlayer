@@ -344,8 +344,8 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
         duration_ms: frame.duration_us.map_or(0, us_to_ms),
         width: frame.width,
         height: frame.height,
-        stride: u32::try_from(frame.stride).unwrap_or(u32::MAX),
-        pixel_format: frame.pixel_format.as_raw(),
+        stride: u32::try_from(frame.stride()).unwrap_or(u32::MAX),
+        pixel_format: frame.pixel_format().as_raw(),
         byte_len: u32::try_from(frame.byte_len()).unwrap_or(u32::MAX),
         flags: u32::from(frame.is_key_frame),
     }
@@ -890,8 +890,12 @@ pub unsafe extern "C" fn semi_player_copy_current_video_frame_bgra(
             return SEMI_E_INVALID_ARG;
         }
 
+        let Some(data) = frame.cpu_packed_data() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
         unsafe {
-            std::ptr::copy_nonoverlapping(frame.data.as_ptr(), destination, required_len);
+            std::ptr::copy_nonoverlapping(data.as_ptr(), destination, required_len);
         }
 
         SEMI_OK

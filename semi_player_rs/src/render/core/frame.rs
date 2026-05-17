@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::util::time::MediaTimeUs;
 
 #[repr(u32)]
@@ -19,18 +21,73 @@ impl PixelFormatCategory {
 }
 
 #[derive(Clone, Debug)]
+pub enum VideoSurfaceStorage {
+    CpuPacked {
+        stride: usize,
+        data: Vec<u8>,
+    },
+}
+
+#[derive(Clone, Debug)]
+pub struct VideoSurface {
+    pub pixel_format: PixelFormatCategory,
+    pub storage: VideoSurfaceStorage,
+}
+
+impl VideoSurface {
+    pub fn new_cpu_packed(
+        pixel_format: PixelFormatCategory,
+        stride: usize,
+        data: Vec<u8>,
+    ) -> Self {
+        Self {
+            pixel_format,
+            storage: VideoSurfaceStorage::CpuPacked { stride, data },
+        }
+    }
+
+    pub fn stride(&self) -> usize {
+        match &self.storage {
+            VideoSurfaceStorage::CpuPacked { stride, .. } => *stride,
+        }
+    }
+
+    pub fn byte_len(&self) -> usize {
+        match &self.storage {
+            VideoSurfaceStorage::CpuPacked { data, .. } => data.len(),
+        }
+    }
+
+    pub fn cpu_packed_data(&self) -> Option<&[u8]> {
+        match &self.storage {
+            VideoSurfaceStorage::CpuPacked { data, .. } => Some(data.as_slice()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct VideoFrame {
     pub pts_us: MediaTimeUs,
     pub duration_us: Option<MediaTimeUs>,
     pub width: u32,
     pub height: u32,
-    pub pixel_format: PixelFormatCategory,
-    pub stride: usize,
-    pub data: Vec<u8>,
     pub is_key_frame: bool,
+    pub surface: Arc<VideoSurface>,
 }
 
 impl VideoFrame {
+    pub fn pixel_format(&self) -> PixelFormatCategory {
+        self.surface.pixel_format
+    }
+
+    pub fn stride(&self) -> usize {
+        self.surface.stride()
+    }
+
+    pub fn cpu_packed_data(&self) -> Option<&[u8]> {
+        self.surface.cpu_packed_data()
+    }
+
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {
         self.duration_us
             .map(|duration_us| self.pts_us.saturating_add(duration_us))
@@ -88,6 +145,6 @@ impl VideoFrame {
     }
 
     pub fn byte_len(&self) -> usize {
-        self.data.len()
+        self.surface.byte_len()
     }
 }

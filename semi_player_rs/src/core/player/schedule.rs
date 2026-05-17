@@ -209,12 +209,14 @@ fn min_optional_time(lhs: Option<MediaTimeUs>, rhs: Option<MediaTimeUs>) -> Opti
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{compute_decode_schedule_hint, PlayerScheduleService, PumpScheduleHint};
     use crate::api::types::PlayerState;
     use crate::audio::core::output::AudioOutputChunk;
     use crate::core::player::handle::SemiPlayerHandle;
     use crate::core::player::runtime::DecodeSupplyStatus;
-    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
         VideoFrame {
@@ -222,10 +224,12 @@ mod tests {
             duration_us,
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 16],
             is_key_frame: false,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Bgra8,
+                1920 * 4,
+                vec![0; 16],
+            )),
         }
     }
 

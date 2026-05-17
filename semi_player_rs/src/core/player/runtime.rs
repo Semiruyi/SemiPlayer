@@ -367,14 +367,24 @@ impl Default for PlayerRuntime {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
         DecodeSupplyStatus, PlayerRuntime, VideoSelectionStats, TARGET_AUDIO_QUEUE_LEN,
         TARGET_FUTURE_VIDEO_QUEUE_LEN,
     };
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
-    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
     use crate::render::core::scheduler::VideoScheduler;
+
+    fn video_surface(byte_len: usize) -> Arc<VideoSurface> {
+        Arc::new(VideoSurface::new_cpu_packed(
+            PixelFormatCategory::Bgra8,
+            1920 * 4,
+            vec![0; byte_len],
+        ))
+    }
 
     #[test]
     fn scheduler_promotes_next_frame_into_current_slot() {
@@ -386,10 +396,8 @@ mod tests {
             duration_us: Some(10_000),
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 1920 * 1080 * 4],
             is_key_frame: true,
+            surface: video_surface(1920 * 1080 * 4),
         });
 
         let stats = runtime.select_video_frame(&scheduler, 10_000, |_| {});
@@ -418,20 +426,16 @@ mod tests {
             duration_us: Some(41_000),
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 16],
             is_key_frame: false,
+            surface: video_surface(16),
         });
         runtime.push_video_frame(VideoFrame {
             pts_us: 83_000,
             duration_us: Some(41_000),
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 16],
             is_key_frame: false,
+            surface: video_surface(16),
         });
 
         let stats = runtime.select_video_frame(&scheduler, 90_000, |_| {});
@@ -471,10 +475,8 @@ mod tests {
             duration_us: Some(10_000),
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 1920 * 1080 * 4],
             is_key_frame: true,
+            surface: video_surface(1920 * 1080 * 4),
         });
         let _ = runtime.select_video_frame(&VideoScheduler::new(), 10_000, |_| {});
         runtime.mark_end_of_stream();
@@ -688,10 +690,8 @@ mod tests {
                 duration_us: Some(33_000),
                 width: 1920,
                 height: 1080,
-                pixel_format: PixelFormatCategory::Bgra8,
-                stride: 1920 * 4,
-                data: vec![0; 16],
                 is_key_frame: false,
+                surface: video_surface(16),
             });
         }
 

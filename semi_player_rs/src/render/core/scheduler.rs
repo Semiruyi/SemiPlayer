@@ -67,8 +67,10 @@ impl Default for VideoScheduler {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{VideoScheduleDecision, VideoScheduler};
-    use crate::render::core::frame::{PixelFormatCategory, VideoFrame};
+    use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
         VideoFrame {
@@ -76,10 +78,12 @@ mod tests {
             duration_us,
             width: 1920,
             height: 1080,
-            pixel_format: PixelFormatCategory::Bgra8,
-            stride: 1920 * 4,
-            data: vec![0; 1920 * 1080 * 4],
             is_key_frame: false,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Bgra8,
+                1920 * 4,
+                vec![0; 1920 * 1080 * 4],
+            )),
         }
     }
 
