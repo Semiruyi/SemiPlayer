@@ -1,7 +1,7 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::core::media::{DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::media::{DecodePolicy, DecodedOutputPoll, SharedOpenedMedia};
 use crate::core::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
 use crate::core::player::schedule::PlayerScheduleService;
@@ -71,8 +71,9 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
             DecodeWorkerPlan::Decode {
                 opened_media,
                 generation,
+                decode_policy,
             } => {
-                let polled_output = poll_decoded_output_once(&opened_media);
+                let polled_output = poll_decoded_output_once(&opened_media, decode_policy);
                 let action = unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
                     SemiPlayerHandle::with_locked_ptr_as(
@@ -117,6 +118,7 @@ fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
     DecodeWorkerPlan::Decode {
         opened_media,
         generation: player.media_generation(),
+        decode_policy: player.decode_policy(),
     }
 }
 
@@ -192,6 +194,7 @@ enum DecodeWorkerPlan {
     Decode {
         opened_media: SharedOpenedMedia,
         generation: u64,
+        decode_policy: DecodePolicy,
     },
     WaitIndefinitely,
 }

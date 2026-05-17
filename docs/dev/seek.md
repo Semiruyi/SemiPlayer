@@ -54,6 +54,12 @@ Important properties of the current path:
 
 This makes the current behavior simple and safe, but it is still closer to "reset and refill" than to an intentionally optimized player seek pipeline.
 
+The current implementation baseline now also includes:
+
+- explicit seek timing metrics
+- target-aware seek video recovery metrics
+- a first video fast path during seek recovery that skips BGRA conversion for pure pre-target pass-through frames
+
 ## 3. Design Goals
 
 The next-stage seek design should optimize for:
@@ -144,6 +150,15 @@ Before the target point:
 - avoid promoting pre-target frames into the normal visible playback path unless needed for fallback
 
 This is especially important in the current CPU path because the player still converts displayed video into BGRA.
+
+Current implementation direction:
+
+- seek enters a player-owned recovery state
+- decode polling receives a seek-recovery policy derived from that state
+- if a decoded video's display interval ends before the seek target, it is treated as decoder-advance-only work
+- those pure pre-target frames are not converted to BGRA and are not enqueued into the normal runtime video queue
+
+This is the first practical fast path because the expensive work currently happens in the FFmpeg-facing media layer, before runtime queue logic ever sees the frame.
 
 ### 6.2 Audio during recovery
 
@@ -243,6 +258,14 @@ These metrics should answer:
 - is audio recovery the problem?
 - is refill-to-stable-state the problem?
 
+The seek diagnostics should also retain recovery-shape data such as:
+
+- first decoded video PTS after seek
+- first current-video PTS after seek
+- target-video PTS when the seek first becomes video-ready
+- pre-target decoded video count
+- pre-target current-frame promotion count
+
 ### 8.3 Core-Internal vs End-to-End
 
 The first implementation stage should focus on:
@@ -282,8 +305,8 @@ Recommended order:
 2. add seek result metrics and internal stage timing metrics
 3. introduce explicit seek recovery state
 4. implement keyframe-anchored recovery as the default real-seek path
-5. trim audio to the target point during recovery
-6. avoid expensive video post-processing on pre-target frames
+5. avoid expensive video post-processing on pure pre-target frames
+6. trim audio to the target point during recovery
 7. add a lightweight buffered-seek fast path where it is clearly worthwhile
 
 ## 11. Summary

@@ -1,6 +1,6 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
-use crate::core::media::{DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::media::{DecodePolicy, DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::video_sync::VideoSyncService;
 
@@ -18,7 +18,8 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     };
 
     for _ in 0..iterations {
-        let output = match poll_decoded_output_once(&opened_media) {
+        let decode_policy = player.decode_policy();
+        let output = match poll_decoded_output_once(&opened_media, decode_policy) {
             Ok(DecodedOutputPoll::Output(output)) => output,
             Ok(DecodedOutputPoll::Pending) | Ok(DecodedOutputPoll::Finished) => break,
             Err(code) => return code,
@@ -38,9 +39,12 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
 
 pub(crate) fn poll_decoded_output_once(
     opened_media: &SharedOpenedMedia,
+    decode_policy: DecodePolicy,
 ) -> Result<DecodedOutputPoll, ResultCode> {
     opened_media
-        .with_mut(|opened_media| opened_media.poll_decoded_output(DECODE_POLL_PACKET_BUDGET))
+        .with_mut(|opened_media| {
+            opened_media.poll_decoded_output(DECODE_POLL_PACKET_BUDGET, decode_policy)
+        })
         .map_err(|_| SEMI_E_INVALID_STATE)
 }
 
@@ -62,6 +66,13 @@ pub(crate) fn apply_decoded_output(
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: true,
+            }
+        }
+        DecodedOutput::SkippedVideo(frame) => {
+            player.observe_seek_video_decoded(frame.pts_us);
+            DecodedOutputApplyResult {
+                reached_end: false,
+                should_wake_sync: false,
             }
         }
         DecodedOutput::Audio(frame) => {

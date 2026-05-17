@@ -6,7 +6,7 @@ use std::time::Instant;
 use crate::api::types::PlayerState;
 use crate::audio::core::clock::AudioClock;
 use crate::audio::core::output_controller::SharedAudioOutputController;
-use crate::core::media::SharedOpenedMedia;
+use crate::core::media::{DecodePolicy, SeekRecoveryPolicy, SharedOpenedMedia};
 use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::core::player::schedule::PlayerScheduleService;
@@ -122,6 +122,11 @@ struct SeekDiagnosticsState {
     last_completed: Option<SeekDiagnosticsSnapshot>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SeekRecoveryState {
+    target_us: Option<MediaTimeUs>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LockOwner {
     Ffi,
@@ -137,6 +142,7 @@ pub struct SemiPlayerHandle {
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
+    seek_recovery: Mutex<SeekRecoveryState>,
     media_generation: AtomicU64,
     pub(crate) speed: c_double,
     pub(crate) opened_media: Option<SharedOpenedMedia>,
@@ -158,6 +164,7 @@ impl SemiPlayerHandle {
             sync_worker: None,
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
+            seek_recovery: Mutex::new(SeekRecoveryState::default()),
             media_generation: AtomicU64::new(0),
             speed: 1.0,
             opened_media: None,
@@ -253,6 +260,7 @@ impl SemiPlayerHandle {
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
         self.video_sync.reset();
+        self.clear_seek_recovery();
     }
 
     pub fn clear_media(&mut self) {
@@ -270,6 +278,13 @@ impl SemiPlayerHandle {
 
     pub fn diagnostics_snapshot(&self) -> PlayerDiagnosticsSnapshot {
         self.diagnostics.snapshot()
+    }
+
+    pub fn decode_policy(&self) -> DecodePolicy {
+        let target_us = self.seek_recovery.lock().unwrap().target_us;
+        DecodePolicy {
+            seek_recovery: target_us.map(|target_video_us| SeekRecoveryPolicy { target_video_us }),
+        }
     }
 
     pub fn playback_phase_lock(&self) -> Arc<Mutex<()>> {
@@ -294,6 +309,14 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_requested(&self, target_us: MediaTimeUs) {
         self.diagnostics.observe_seek_requested(target_us);
+    }
+
+    pub fn begin_seek_recovery(&self, target_us: MediaTimeUs) {
+        self.seek_recovery.lock().unwrap().target_us = Some(target_us);
+    }
+
+    pub fn clear_seek_recovery(&self) {
+        self.seek_recovery.lock().unwrap().target_us = None;
     }
 
     pub fn observe_seek_lock_acquired(&self) {
@@ -335,6 +358,9 @@ impl SemiPlayerHandle {
     ) {
         self.diagnostics
             .observe_seek_current_video(current_pts_us, current_effective_end_us);
+        if self.seek_recovery_matches(current_pts_us, current_effective_end_us) {
+            self.clear_seek_recovery();
+        }
     }
 
     pub fn observe_seek_target_audio_ready(&self) {
@@ -343,6 +369,17 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_stable(&self) {
         self.diagnostics.observe_seek_stable();
+    }
+
+    fn seek_recovery_matches(
+        &self,
+        current_pts_us: MediaTimeUs,
+        current_effective_end_us: Option<MediaTimeUs>,
+    ) -> bool {
+        let target_us = self.seek_recovery.lock().unwrap().target_us;
+        target_us.is_some_and(|target_us| {
+            is_seek_target_ready(target_us, current_pts_us, current_effective_end_us)
+        })
     }
 }
 

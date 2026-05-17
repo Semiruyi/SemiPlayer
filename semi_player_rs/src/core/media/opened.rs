@@ -31,6 +31,7 @@ pub struct OpenedVideoDecoder {
     pub index: usize,
     pub decoder: ffmpeg::decoder::Video,
     scaler: Option<ScalingContext>,
+    estimated_frame_duration_us: Option<MediaTimeUs>,
 }
 
 pub struct OpenedAudioDecoder {
@@ -64,6 +65,7 @@ pub enum MediaOpenError {
 
 pub enum DecodedOutput {
     Video(VideoFrame),
+    SkippedVideo(SkippedVideoFrame),
     Audio(AudioFrame),
     EndOfStream,
 }
@@ -72,6 +74,22 @@ pub enum DecodedOutputPoll {
     Output(DecodedOutput),
     Pending,
     Finished,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DecodePolicy {
+    pub seek_recovery: Option<SeekRecoveryPolicy>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SeekRecoveryPolicy {
+    pub target_video_us: MediaTimeUs,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SkippedVideoFrame {
+    pub pts_us: MediaTimeUs,
+    pub duration_us: Option<MediaTimeUs>,
 }
 
 pub fn open_media(path: &str) -> Result<OpenedMedia, MediaOpenError> {
@@ -162,7 +180,7 @@ impl OpenedMedia {
 
     pub fn next_decoded_output(&mut self) -> Result<Option<DecodedOutput>, MediaOpenError> {
         loop {
-            match self.poll_decoded_output(usize::MAX)? {
+            match self.poll_decoded_output(usize::MAX, DecodePolicy::default())? {
                 DecodedOutputPoll::Output(output) => return Ok(Some(output)),
                 DecodedOutputPoll::Pending => continue,
                 DecodedOutputPoll::Finished => return Ok(None),
@@ -173,6 +191,7 @@ impl OpenedMedia {
     pub fn poll_decoded_output(
         &mut self,
         max_packets: usize,
+        policy: DecodePolicy,
     ) -> Result<DecodedOutputPoll, MediaOpenError> {
         if let Some(output) = self.pending_outputs.pop_front() {
             return Ok(DecodedOutputPoll::Output(output));
@@ -215,6 +234,7 @@ impl OpenedMedia {
                     video_decoder,
                     &media_packet.packet,
                     &mut self.pending_outputs,
+                    policy,
                 )?;
             } else if self
                 .audio_decoder
@@ -262,7 +282,12 @@ impl OpenedMedia {
         if !self.draining_state.video_drained {
             if let Some(video_decoder) = self.video_decoder.as_mut() {
                 self.draining_state.video_drained =
-                    collect_video_frames(video_decoder, &mut self.pending_outputs, true)?;
+                    collect_video_frames(
+                        video_decoder,
+                        &mut self.pending_outputs,
+                        true,
+                        DecodePolicy::default(),
+                    )?;
             } else {
                 self.draining_state.video_drained = true;
             }
@@ -330,6 +355,7 @@ fn open_video_decoder(
         index: stream_index,
         decoder,
         scaler: None,
+        estimated_frame_duration_us: estimate_stream_frame_duration_us(stream.avg_frame_rate()),
     }))
 }
 
@@ -362,16 +388,17 @@ fn decode_video_packet(
     decoder: &mut OpenedVideoDecoder,
     packet: &Packet,
     outputs: &mut VecDeque<DecodedOutput>,
+    policy: DecodePolicy,
 ) -> Result<(), MediaOpenError> {
     loop {
         match decoder.decoder.send_packet(packet) {
             Ok(()) => {
-                let _ = collect_video_frames(decoder, outputs, false)?;
+                let _ = collect_video_frames(decoder, outputs, false, policy)?;
                 return Ok(());
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
                 let output_count_before = outputs.len();
-                let drained = collect_video_frames(decoder, outputs, false)?;
+                let drained = collect_video_frames(decoder, outputs, false, policy)?;
                 if drained || outputs.len() == output_count_before {
                     return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
                         errno: ffmpeg::error::EAGAIN,
@@ -412,13 +439,33 @@ fn collect_video_frames(
     decoder: &mut OpenedVideoDecoder,
     outputs: &mut VecDeque<DecodedOutput>,
     draining: bool,
+    policy: DecodePolicy,
 ) -> Result<bool, MediaOpenError> {
     let mut reached_decoder_eof = false;
 
     loop {
         let mut frame = frame::Video::empty();
         match decoder.decoder.receive_frame(&mut frame) {
-            Ok(()) => outputs.push_back(DecodedOutput::Video(map_video_frame(decoder, &frame)?)),
+            Ok(()) => {
+                let time_base = decoder.decoder.packet_time_base();
+                let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
+                let duration_us = frame_duration_us(frame.packet().duration, time_base)
+                    .or(decoder.estimated_frame_duration_us);
+
+                if should_skip_video_frame_for_seek_recovery(policy, pts_us, duration_us) {
+                    outputs.push_back(DecodedOutput::SkippedVideo(SkippedVideoFrame {
+                        pts_us,
+                        duration_us,
+                    }));
+                } else {
+                    outputs.push_back(DecodedOutput::Video(map_video_frame(
+                        decoder,
+                        &frame,
+                        pts_us,
+                        duration_us,
+                    )?));
+                }
+            }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
             Err(ffmpeg::Error::Eof) => {
                 reached_decoder_eof = true;
@@ -473,10 +520,9 @@ fn send_audio_decoder_eof(decoder: &mut ffmpeg::decoder::Audio) -> Result<(), Me
 fn map_video_frame(
     decoder: &mut OpenedVideoDecoder,
     frame: &frame::Video,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
 ) -> Result<VideoFrame, MediaOpenError> {
-    let time_base = decoder.decoder.packet_time_base();
-    let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
-    let duration_us = frame_duration_us(frame.packet().duration, time_base);
     let converted = convert_video_frame_to_bgra(decoder, frame)?;
     let stride = converted.stride(0);
     let data = copy_packed_plane(&converted);
@@ -531,6 +577,36 @@ fn audio_duration_us(frame: &frame::Audio) -> Option<MediaTimeUs> {
             .saturating_mul(1_000_000)
             .saturating_div(i64::from(frame.rate())),
     )
+}
+
+fn estimate_stream_frame_duration_us(frame_rate: Rational) -> Option<MediaTimeUs> {
+    let numerator = i64::from(frame_rate.numerator());
+    let denominator = i64::from(frame_rate.denominator());
+    if numerator <= 0 || denominator <= 0 {
+        return None;
+    }
+
+    Some(
+        denominator
+            .saturating_mul(1_000_000)
+            .saturating_div(numerator),
+    )
+}
+
+fn should_skip_video_frame_for_seek_recovery(
+    policy: DecodePolicy,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
+) -> bool {
+    let Some(seek_recovery) = policy.seek_recovery else {
+        return false;
+    };
+
+    let Some(end_us) = duration_us.and_then(|duration_us| pts_us.checked_add(duration_us)) else {
+        return false;
+    };
+
+    end_us <= seek_recovery.target_video_us
 }
 
 fn map_pixel_format(pixel: format::Pixel) -> PixelFormatCategory {
@@ -603,4 +679,41 @@ fn copy_packed_plane(frame: &frame::Video) -> Vec<u8> {
     let data = frame.data(0);
 
     data[..byte_len.min(data.len())].to_vec()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        should_skip_video_frame_for_seek_recovery, DecodePolicy, SeekRecoveryPolicy,
+    };
+
+    #[test]
+    fn seek_recovery_skips_frame_that_ends_before_target() {
+        let policy = DecodePolicy {
+            seek_recovery: Some(SeekRecoveryPolicy {
+                target_video_us: 10_000,
+            }),
+        };
+
+        assert!(should_skip_video_frame_for_seek_recovery(
+            policy,
+            5_000,
+            Some(4_000),
+        ));
+    }
+
+    #[test]
+    fn seek_recovery_keeps_frame_that_covers_target() {
+        let policy = DecodePolicy {
+            seek_recovery: Some(SeekRecoveryPolicy {
+                target_video_us: 10_000,
+            }),
+        };
+
+        assert!(!should_skip_video_frame_for_seek_recovery(
+            policy,
+            5_000,
+            Some(6_000),
+        ));
+    }
 }

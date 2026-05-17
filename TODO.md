@@ -111,7 +111,7 @@ Tasks:
 
 ### P0.5 Improve seek responsiveness and seek-path cost
 
-Status: next active design/implementation track after wake-policy baseline
+Status: active, observability and first pre-target video fast path landed
 
 Tasks:
 
@@ -141,7 +141,7 @@ Tasks:
   - fast first-frame response after keyboard/progress-bar seek
   - stable A/V resettling shortly after
 - trim audio to the target point during seek recovery
-- avoid expensive video post-processing on pre-target frames during seek recovery
+- keep refining which pre-target video frames can bypass expensive post-processing during seek recovery
 
 Why this matters:
 

@@ -113,6 +113,17 @@ fn build_decoded_output_view(output: DecodedOutput) -> SemiDecodedOutput {
             sample_count: 0,
             flags: u32::from(frame.is_key_frame),
         },
+        DecodedOutput::SkippedVideo(frame) => SemiDecodedOutput {
+            kind: SemiDecodedKind::None.as_raw(),
+            pts_ms: us_to_ms(frame.pts_us),
+            duration_ms: frame.duration_us.map(us_to_ms).unwrap_or(0),
+            width: 0,
+            height: 0,
+            sample_rate: 0,
+            channels: 0,
+            sample_count: 0,
+            flags: 0,
+        },
         DecodedOutput::Audio(frame) => SemiDecodedOutput {
             kind: SemiDecodedKind::Audio.as_raw(),
             pts_ms: us_to_ms(frame.pts_us),
@@ -482,6 +493,7 @@ pub extern "C" fn semi_player_seek(
         player.audio_clock.seek(target_us);
         player.video_scheduler = Default::default();
         player.video_sync.reset();
+        player.begin_seek_recovery(target_us);
         player.observe_seek_reset_finished();
         player.notify_workers();
         player.observe_seek_api_completed();

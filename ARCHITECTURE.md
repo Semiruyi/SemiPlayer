@@ -96,6 +96,7 @@ The Rust core currently owns:
 - current frame selection
 - playback snapshots and diagnostics
 - internal sync worker wake/sleep logic
+- seek recovery state and recovery diagnostics
 
 The host currently owns:
 
@@ -226,6 +227,12 @@ The internal sync worker currently drives:
 - when stale video must be corrected immediately
 - when audio refill should happen
 
+The decode side now also contains the start of a target-aware seek-recovery path:
+
+- seek installs a recovery target in player-owned state
+- decode polling reads a recovery policy derived from that state
+- FFmpeg-facing video decode can skip expensive BGRA conversion for frames that only exist to advance the decoder before the seek target
+
 ## 11. What Is Still Transitional
 
 The current architecture is real, but not final.
@@ -234,6 +241,7 @@ Transitional parts:
 
 - decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
 - CPU BGRA copy is still the main host frame-delivery path
+- seek recovery is now explicit, but audio trim and keyframe-anchored seek policy are still incomplete
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state
 
