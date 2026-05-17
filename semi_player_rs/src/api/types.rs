@@ -198,3 +198,34 @@ pub struct SemiVideoFrameInfo {
     pub byte_len: u32,
     pub flags: u32,
 }
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
+pub enum SemiVideoSurfaceKind {
+    Unknown = 0,
+    CpuPacked = 1,
+    D3d11Texture2D = 2,
+}
+
+impl SemiVideoSurfaceKind {
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SemiVideoSurfaceDesc {
+    pub kind: u32,
+    pub pixel_format: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+    pub byte_len: u32,
+    pub flags: u32,
+    pub texture_ptr: u64,
+    pub shared_handle: u64,
+    pub array_slice: u32,
+    pub reserved0: u32,
+}

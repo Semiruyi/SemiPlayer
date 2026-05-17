@@ -180,7 +180,7 @@ Current conclusion:
 
 ### P1.1 Define render output surface abstraction
 
-Status: next implementation start point
+Status: in progress; `VideoSurface` now backs `VideoFrame`
 
 Tasks:
 
@@ -195,6 +195,8 @@ Tasks:
 
 ### P1.2 Refit the current software path onto the new surface model
 
+Status: in progress; CPU BGRA path now runs through `VideoSurface`
+
 Tasks:
 
 - keep the current software decode path working under the new `VideoSurface` model
@@ -203,6 +205,8 @@ Tasks:
 - preserve current sync, seek-recovery, and drop/present scheduling behavior while the frame type changes
 
 ### P1.3 Implement first real Windows video backend
+
+Status: started at the type/ABI layer; real decode-device integration still pending
 
 Tasks:
 

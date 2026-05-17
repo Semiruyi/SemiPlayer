@@ -21,10 +21,16 @@ impl PixelFormatCategory {
 }
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub enum VideoSurfaceStorage {
     CpuPacked {
         stride: usize,
         data: Vec<u8>,
+    },
+    D3d11Texture2D {
+        texture_ptr: u64,
+        shared_handle: Option<u64>,
+        array_slice: u32,
     },
 }
 
@@ -46,21 +52,41 @@ impl VideoSurface {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn new_d3d11_texture_2d(
+        pixel_format: PixelFormatCategory,
+        texture_ptr: u64,
+        shared_handle: Option<u64>,
+        array_slice: u32,
+    ) -> Self {
+        Self {
+            pixel_format,
+            storage: VideoSurfaceStorage::D3d11Texture2D {
+                texture_ptr,
+                shared_handle,
+                array_slice,
+            },
+        }
+    }
+
     pub fn stride(&self) -> usize {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { stride, .. } => *stride,
+            VideoSurfaceStorage::D3d11Texture2D { .. } => 0,
         }
     }
 
     pub fn byte_len(&self) -> usize {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { data, .. } => data.len(),
+            VideoSurfaceStorage::D3d11Texture2D { .. } => 0,
         }
     }
 
     pub fn cpu_packed_data(&self) -> Option<&[u8]> {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { data, .. } => Some(data.as_slice()),
+            VideoSurfaceStorage::D3d11Texture2D { .. } => None,
         }
     }
 }

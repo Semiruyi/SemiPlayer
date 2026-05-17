@@ -12,7 +12,7 @@ use crate::api::error::{
 };
 use crate::api::types::{
     PlayerState, SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
-    SemiPlaybackSnapshot, SemiVideoFrameInfo,
+    SemiPlaybackSnapshot, SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
 use crate::core::media::{
     open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
@@ -22,7 +22,7 @@ use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
 use crate::core::player::schedule::PlayerScheduleService;
 use crate::core::player::video_sync::VideoSyncService;
-use crate::render::core::frame::VideoFrame;
+use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
 use crate::util::time::{ms_to_us, us_to_ms};
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
@@ -348,6 +348,36 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
         pixel_format: frame.pixel_format().as_raw(),
         byte_len: u32::try_from(frame.byte_len()).unwrap_or(u32::MAX),
         flags: u32::from(frame.is_key_frame),
+    }
+}
+
+fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
+    let (kind, texture_ptr, shared_handle, array_slice) = match &frame.surface.storage {
+        VideoSurfaceStorage::CpuPacked { .. } => (SemiVideoSurfaceKind::CpuPacked, 0, 0, 0),
+        VideoSurfaceStorage::D3d11Texture2D {
+            texture_ptr,
+            shared_handle,
+            array_slice,
+        } => (
+            SemiVideoSurfaceKind::D3d11Texture2D,
+            *texture_ptr,
+            shared_handle.unwrap_or(0),
+            *array_slice,
+        ),
+    };
+
+    SemiVideoSurfaceDesc {
+        kind: kind.as_raw(),
+        pixel_format: frame.pixel_format().as_raw(),
+        width: frame.width,
+        height: frame.height,
+        stride: u32::try_from(frame.stride()).unwrap_or(u32::MAX),
+        byte_len: u32::try_from(frame.byte_len()).unwrap_or(u32::MAX),
+        flags: u32::from(frame.is_key_frame),
+        texture_ptr,
+        shared_handle,
+        array_slice,
+        reserved0: 0,
     }
 }
 
@@ -854,6 +884,36 @@ pub unsafe extern "C" fn semi_player_get_current_video_frame_info(
 
         unsafe {
             *out_frame_info = build_video_frame_info(frame);
+        }
+
+        SEMI_OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `player` must be a valid handle and `out_surface_desc` must be a valid, writable pointer.
+pub unsafe extern "C" fn semi_player_get_current_video_surface_desc(
+    player: *mut SemiPlayerHandle,
+    out_surface_desc: *mut SemiVideoSurfaceDesc,
+) -> c_int {
+    if out_surface_desc.is_null() {
+        return SEMI_E_INVALID_ARG;
+    }
+
+    with_player_locked(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let Some(frame) = player.runtime.current_video_frame() else {
+            return SEMI_E_INVALID_STATE;
+        };
+
+        unsafe {
+            *out_surface_desc = build_video_surface_desc(frame);
         }
 
         SEMI_OK

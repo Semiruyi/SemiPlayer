@@ -1593,6 +1593,9 @@ internal static class Native
     internal static extern int semi_player_get_current_video_frame_info(IntPtr player, out SemiVideoFrameInfo frameInfo);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_get_current_video_surface_desc(IntPtr player, out SemiVideoSurfaceDesc surfaceDesc);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_copy_current_video_frame_bgra(IntPtr player, byte[] destination, uint destinationLen);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -1747,4 +1750,20 @@ internal struct SemiVideoFrameInfo
     internal uint PixelFormat;
     internal uint ByteLen;
     internal uint Flags;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct SemiVideoSurfaceDesc
+{
+    internal uint Kind;
+    internal uint PixelFormat;
+    internal uint Width;
+    internal uint Height;
+    internal uint Stride;
+    internal uint ByteLen;
+    internal uint Flags;
+    internal ulong TexturePtr;
+    internal ulong SharedHandle;
+    internal uint ArraySlice;
+    internal uint Reserved0;
 }
