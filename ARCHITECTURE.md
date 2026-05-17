@@ -252,6 +252,20 @@ The next video-path step is to replace the "normalized BGRA bytes" assumption wi
 surface model so hardware decode can lower seek and steady-state video cost without changing the
 existing frame-timed scheduling semantics.
 
+Current incremental state of that split:
+
+- `DecodedVideoFrame` and `PresentationFrame` roles now exist in the codebase
+- runtime video state now distinguishes:
+  - decoded-video queue
+  - presentation-video queue
+  - current presentation frame
+- the current promotion path is still synchronous passthrough:
+  - decode output is queued as decoded video
+  - then immediately promoted into the presentation queue
+
+That means the architecture boundary is now visible in code, even though the first render stage is
+not yet an independently scheduled service.
+
 ## 11. What Is Still Transitional
 
 The current architecture is real, but not final.
@@ -260,6 +274,7 @@ Transitional parts:
 
 - decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
 - CPU BGRA copy is still the main host frame-delivery path
+- decoded-video to presentation-video promotion currently happens as synchronous passthrough, not yet as a real render service
 - seek recovery is now explicit and keyframe-anchored diagnostics are in place, but reset/rebuild cost and post-target recovery cost are still being reduced
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state
@@ -365,6 +380,13 @@ Where:
 - `DecoderSurface` is decoder-native storage
 - `RenderSurface` is presentation-oriented storage
 
+Current implementation note:
+
+- these roles are introduced incrementally through `DecodedVideoFrame` and `PresentationFrame`
+- they currently still share the same underlying frame storage type
+- this is intentional so scheduling and seek behavior can stay stable while the render stage is
+  carved out
+
 ### 13.3 Host adapters should consume presentation frames, not decoder internals
 
 The host adapter boundary should move toward:
@@ -431,6 +453,13 @@ The key rule is:
 
 - decoder-native surfaces are an internal playback/render concern
 - presentation-friendly frames are the handoff to host adapters
+
+Current near-term implementation plan:
+
+1. keep the new decoded/presentation queue split in runtime
+2. replace synchronous passthrough promotion with an explicit render service entry point
+3. keep the first render service implementation synchronous internally
+4. only then decide whether render needs its own worker lane
 
 ## 14. Public ABI Direction
 

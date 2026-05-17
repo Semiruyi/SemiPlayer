@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::audio::core::output::AudioOutputChunk;
-use crate::render::core::frame::PresentationFrame;
+use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
 use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
@@ -48,8 +48,9 @@ pub struct DecodeSupplyStatus {
 pub struct PlayerRuntime {
     queued_audio_frames: VecDeque<AudioFrame>,
     queued_audio_sample_offset: usize,
-    queued_video_frames: VecDeque<PresentationFrame>,
-    current_video_frame: Option<PresentationFrame>,
+    queued_decoded_video_frames: VecDeque<DecodedVideoFrame>,
+    queued_presentation_video_frames: VecDeque<PresentationFrame>,
+    current_presentation_video_frame: Option<PresentationFrame>,
     last_audio_frame: Option<AudioFrame>,
     end_of_stream: bool,
 }
@@ -59,8 +60,9 @@ impl PlayerRuntime {
         Self {
             queued_audio_frames: VecDeque::new(),
             queued_audio_sample_offset: 0,
-            queued_video_frames: VecDeque::new(),
-            current_video_frame: None,
+            queued_decoded_video_frames: VecDeque::new(),
+            queued_presentation_video_frames: VecDeque::new(),
+            current_presentation_video_frame: None,
             last_audio_frame: None,
             end_of_stream: false,
         }
@@ -69,8 +71,9 @@ impl PlayerRuntime {
     pub fn clear(&mut self) {
         self.queued_audio_frames.clear();
         self.queued_audio_sample_offset = 0;
-        self.queued_video_frames.clear();
-        self.current_video_frame = None;
+        self.queued_decoded_video_frames.clear();
+        self.queued_presentation_video_frames.clear();
+        self.current_presentation_video_frame = None;
         self.last_audio_frame = None;
         self.end_of_stream = false;
     }
@@ -80,8 +83,26 @@ impl PlayerRuntime {
         self.queued_audio_frames.push_back(frame);
     }
 
+    pub fn push_decoded_video_frame(&mut self, frame: DecodedVideoFrame) {
+        self.queued_decoded_video_frames.push_back(frame);
+    }
+
+    pub fn promote_decoded_video_frames(&mut self) -> usize {
+        let mut promoted = 0usize;
+        while let Some(frame) = self.queued_decoded_video_frames.pop_front() {
+            self.push_presentation_video_frame(frame.into_presentation_frame());
+            promoted = promoted.saturating_add(1);
+        }
+        promoted
+    }
+
+    pub fn push_presentation_video_frame(&mut self, frame: PresentationFrame) {
+        self.queued_presentation_video_frames.push_back(frame);
+    }
+
+    #[allow(dead_code)]
     pub fn push_video_frame(&mut self, frame: PresentationFrame) {
-        self.queued_video_frames.push_back(frame);
+        self.push_presentation_video_frame(frame);
     }
 
     pub fn mark_end_of_stream(&mut self) {
@@ -93,7 +114,17 @@ impl PlayerRuntime {
     }
 
     pub fn video_queue_len(&self) -> usize {
-        self.queued_video_frames.len()
+        self.queued_presentation_video_frames.len()
+    }
+
+    #[allow(dead_code)]
+    pub fn decoded_video_queue_len(&self) -> usize {
+        self.queued_decoded_video_frames.len()
+    }
+
+    #[allow(dead_code)]
+    pub fn presentation_video_queue_len(&self) -> usize {
+        self.queued_presentation_video_frames.len()
     }
 
     pub fn last_audio_frame(&self) -> Option<&AudioFrame> {
@@ -111,17 +142,26 @@ impl PlayerRuntime {
         self.end_of_stream
     }
 
-    pub fn current_video_frame(&self) -> Option<&PresentationFrame> {
-        self.current_video_frame.as_ref()
+    pub fn current_presentation_video_frame(&self) -> Option<&PresentationFrame> {
+        self.current_presentation_video_frame.as_ref()
     }
 
+    pub fn next_presentation_video_frame(&self) -> Option<&PresentationFrame> {
+        self.queued_presentation_video_frames.front()
+    }
+
+    pub fn current_video_frame(&self) -> Option<&PresentationFrame> {
+        self.current_presentation_video_frame()
+    }
+
+    #[allow(dead_code)]
     pub fn next_video_frame(&self) -> Option<&PresentationFrame> {
-        self.queued_video_frames.front()
+        self.next_presentation_video_frame()
     }
 
     pub fn video_snapshot(&self) -> RuntimeVideoSnapshot<'_> {
-        let current_frame = self.current_video_frame();
-        let next_frame = self.next_video_frame();
+        let current_frame = self.current_presentation_video_frame();
+        let next_frame = self.next_presentation_video_frame();
 
         RuntimeVideoSnapshot {
             current_frame,
@@ -138,7 +178,9 @@ impl PlayerRuntime {
     }
 
     pub fn buffered_video_frame_count(&self) -> usize {
-        self.queued_video_frames.len() + usize::from(self.current_video_frame.is_some())
+        self.queued_decoded_video_frames.len()
+            + self.queued_presentation_video_frames.len()
+            + usize::from(self.current_presentation_video_frame.is_some())
     }
 
     pub fn decode_supply_status(&self) -> DecodeSupplyStatus {
@@ -328,9 +370,9 @@ impl PlayerRuntime {
         loop {
             let decision = scheduler.decide(
                 target_time_us,
-                self.current_video_frame.as_ref(),
-                self.queued_video_frames.front(),
-                self.queued_video_frames.get(1),
+                self.current_presentation_video_frame.as_ref(),
+                self.queued_presentation_video_frames.front(),
+                self.queued_presentation_video_frames.get(1),
             );
 
             match decision {
@@ -339,13 +381,14 @@ impl PlayerRuntime {
                     return stats;
                 }
                 VideoScheduleDecision::PresentFrame => {
-                    self.current_video_frame = self.queued_video_frames.pop_front();
+                    self.current_presentation_video_frame =
+                        self.queued_presentation_video_frames.pop_front();
                     stats.presented_frames = stats.presented_frames.saturating_add(1);
                     stats.kept_current = true;
                     return stats;
                 }
                 VideoScheduleDecision::DropFrame => {
-                    if let Some(frame) = self.queued_video_frames.pop_front() {
+                    if let Some(frame) = self.queued_presentation_video_frames.pop_front() {
                         on_drop(&frame);
                     }
                     stats.dropped_frames = stats.dropped_frames.saturating_add(1);

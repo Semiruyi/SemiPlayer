@@ -224,10 +224,15 @@ Tasks:
 
 ### P1.4 Add a real player-owned video-render stage
 
+Status: started at the structural level; runtime now has decoded/presentation queue split with synchronous passthrough promotion
+
 Tasks:
 
 - introduce explicit `DecodedVideoFrame` / `DecoderSurface` concepts where needed
 - introduce explicit `PresentationFrame` / `RenderSurface` concepts where needed
+- keep runtime scheduling and sync centered on presentation frames
+- replace synchronous runtime promotion with an explicit render-service boundary
+- keep the first render-service implementation synchronous passthrough for stability
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`
@@ -248,6 +253,11 @@ Tasks:
 - make room for both:
   - CPU compatibility read path
   - GPU-native host presentation path
+
+Near-term note:
+
+- current host-visible frame metadata still comes from the presentation side of runtime
+- low-level decoder-surface diagnostics can stay available while presentation-oriented ABI grows
 
 ### P1.6 Clarify host adapter boundary
 
@@ -375,7 +385,8 @@ Do these next, in order:
 4. start the timed video-surface abstraction
 5. refit the current software path onto that abstraction
 6. split decoder-native surfaces from presentation-friendly render surfaces
-7. add the player-owned video-render stage
-8. start the first real Windows D3D11 video backend and presentation-oriented host ABI
-9. reduce seek-related coupling to the shared player lock
-10. integrate subtitle timing into the worker-owned playback/render model
+7. replace synchronous decoded-to-presentation promotion with an explicit render-service boundary
+8. keep that first render stage synchronous, then move sync diagnostics fully onto presentation semantics
+9. start the first real Windows D3D11 video backend and presentation-oriented host ABI
+10. reduce seek-related coupling to the shared player lock
+11. integrate subtitle timing into the worker-owned playback/render model

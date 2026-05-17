@@ -164,6 +164,26 @@ The current frame-selection rules already support:
 
 The effective end of the current frame prefers the next frame PTS when available.
 
+Current incremental split:
+
+```text
+decoded output
+  -> decoded-video queue
+  -> synchronous promotion
+  -> presentation-video queue
+  -> current presentation frame
+```
+
+Important current rule:
+
+- video sync and scheduling should now be thought of as operating on presentation frames
+- decode output is no longer the only video queue concept in runtime
+
+Current limitation:
+
+- promotion from decoded video to presentation video is still synchronous passthrough
+- no independent render service or render worker exists yet
+
 ## 7. Internal Sync Worker
 
 Relevant files:
@@ -519,6 +539,14 @@ This lets the player own:
 - scaling
 - future subtitle composition
 
+Current implementation status:
+
+- `DecodedVideoFrame` and `PresentationFrame` roles now exist
+- `PlayerRuntime` now contains separate decoded-video and presentation-video queues
+- decode supply currently promotes decoded frames immediately into presentation frames
+- the first render-stage boundary therefore exists structurally, but not yet as an independent
+  service
+
 without forcing each host to understand decoder-native formats.
 
 ### 11.6 Host adapter boundary
@@ -608,6 +636,13 @@ Recommended implementation order:
 6. add a presentation-oriented FFI contract
 7. build the first WPF presenter adapter on top of that contract
 8. introduce subtitle timing first, then subtitle composition in the render stage
+
+Immediate next sub-steps:
+
+1. replace runtime's synchronous promotion helper with an explicit render-service entry point
+2. keep the first render-service implementation synchronous passthrough
+3. make sync/error diagnostics explicitly presentation-frame-oriented
+4. only then add real color conversion and asynchronous render execution
 
 ## 12. Near-Term Direction
 
