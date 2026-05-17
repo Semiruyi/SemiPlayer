@@ -64,6 +64,7 @@ Already verified:
 - BGRA frame copy-out to host
 - CPAL-based audio output timing feedback
 - player-owned sync worker driving playback progression
+- seek recovery now explicitly identifies software video decode as the dominant remaining seek cost
 
 Reference:
 
@@ -101,7 +102,7 @@ The Rust core currently owns:
 The host currently owns:
 
 - UI windowing
-- presenting copied frame data
+- presenting current video output
 - input wiring
 - optional explicit pump calls for diagnostics
 - host-side presentation delay estimation
@@ -133,6 +134,11 @@ That means:
 - core sync correctness belongs to the player
 - end-to-end visible timing still depends partly on host presentation behavior
 
+The planned render boundary therefore is:
+
+- the Rust core owns timed video surfaces
+- the host owns final platform presentation of those surfaces
+
 ### 6.4 Concurrency is currently conservative
 
 The player handle currently serializes mutable work through one operation lock.
@@ -159,6 +165,15 @@ semi_player_rs/src/
   subtitle/              reserved growth area
   platform/              reserved platform-specific growth area
   util/                  shared helpers
+```
+
+Planned growth around rendering:
+
+```text
+render/
+  core/                  portable frame/surface/scheduling contracts
+  backends/
+    d3d11/               first Windows hardware video backend
 ```
 
 ## 8. Current Playback Lifecycle
@@ -233,6 +248,10 @@ The decode side now also contains the start of a target-aware seek-recovery path
 - decode polling reads a recovery policy derived from that state
 - FFmpeg-facing video decode can skip expensive BGRA conversion for frames that only exist to advance the decoder before the seek target
 
+The next video-path step is to replace the "normalized BGRA bytes" assumption with a timed
+surface model so hardware decode can lower seek and steady-state video cost without changing the
+existing frame-timed scheduling semantics.
+
 ## 11. What Is Still Transitional
 
 The current architecture is real, but not final.
@@ -264,6 +283,13 @@ Long-term rule:
 - render contracts should remain portable
 - D3D11 must be an implementation, not the definition of the render subsystem
 
+Near-term render rule:
+
+- first real output backend is Windows D3D11
+- the core should expose video surfaces, not WPF objects
+- WPF is the first host adapter, not the render definition
+- Avalonia should be able to reuse the same surface-oriented core contract later
+
 ## 13. Public ABI Direction
 
 The public ABI remains:
@@ -286,9 +312,9 @@ The next architectural steps should focus on:
 
 1. separating decode supply into a real dedicated execution path
 2. measuring worker-driven sync behavior objectively
-3. improving seek responsiveness with a real recovery-oriented seek model
-4. integrating subtitle timing into the worker-owned playback model
-5. defining real render backend/output surface boundaries
+3. improving seek responsiveness with a real recovery-oriented seek model and hardware-backed video path
+4. defining real render backend/output surface boundaries
+5. integrating subtitle timing into the worker-owned playback model
 6. reducing coarse locking where safe
 
 Reference:

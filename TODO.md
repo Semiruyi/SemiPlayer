@@ -35,11 +35,14 @@ Already done:
 - decode-to-sync wake behavior has started tightening to avoid unnecessary sync wakeups on steady audio refill
 - worker-vs-UI pump comparison tooling exists in smoke
 - FFI and worker mutations are serialized through the player handle
+- current seek diagnostics are strong enough to justify starting the video hardware-decode track
 
 Not done yet:
 
 - lock-independent decode pipeline beyond the shared player handle lock
 - real render backend / output surface abstraction
+- D3D11 hardware video decode and surface delivery
+- WPF presenter adapter for GPU-native video surfaces
 - subtitle pipeline and libass integration
 - real host adapter projects beyond the smoke app
 - finer-grained worker/locking model
@@ -177,22 +180,54 @@ Current conclusion:
 
 ### P1.1 Define render output surface abstraction
 
+Status: next implementation start point
+
 Tasks:
 
-- add portable render output concepts
+- split timed video-frame metadata from pixel/surface storage
+- define portable render surface concepts in `render/core/`
+- support at least:
+  - CPU BGRA fallback surfaces
+  - D3D11 texture surfaces
+- keep runtime scheduling based on timed frames, not a naked "latest texture"
 - define what the core hands to the host/backend
 - avoid making BGRA copy-out the only long-term model
 
-### P1.2 Implement first real Windows render backend
+### P1.2 Refit the current software path onto the new surface model
+
+Tasks:
+
+- keep the current software decode path working under the new `VideoSurface` model
+- keep `semi_player_copy_current_video_frame_bgra(...)` as a compatibility/debug path
+- limit BGRA copy-out to CPU-backed surfaces instead of treating it as the universal output path
+- preserve current sync, seek-recovery, and drop/present scheduling behavior while the frame type changes
+
+### P1.3 Implement first real Windows video backend
 
 Tasks:
 
 - establish `render/backends/d3d11/`
-- create device/resources
-- support a host-consumable output path
+- create device/resources for hardware video decode
+- configure FFmpeg hardware decode against D3D11
+- output GPU-native video surfaces
+- prefer native hardware formats such as:
+  - `NV12`
+  - `P010`
+- keep a software decode fallback for unsupported media/devices
 - keep backend details out of portable core contracts
 
-### P1.3 Clarify host adapter boundary
+### P1.4 Define the surface-oriented host ABI
+
+Tasks:
+
+- add ABI-visible video surface descriptors
+- add explicit acquire/release rules for host-visible video surfaces
+- keep host contracts surface-oriented instead of WPF-object-oriented
+- make room for both:
+  - CPU compatibility read path
+  - GPU-native host presentation path
+
+### P1.5 Clarify host adapter boundary
 
 Tasks:
 
@@ -201,6 +236,15 @@ Tasks:
   - interop layer
   - WPF adapter
   - future Avalonia adapter
+- treat WPF as the first presenter adapter, not as the render definition
+
+### P1.6 Deliver the first WPF GPU presentation path
+
+Tasks:
+
+- build the first WPF-facing adapter on top of the new surface ABI
+- present D3D11-backed video without requiring GPU readback
+- keep WPF-specific interop details out of the portable playback core
 
 ## P2 - Subtitle and Host Integration
 
@@ -212,6 +256,7 @@ Tasks:
 - visibility
 - delay / offset
 - embedded vs external subtitle source
+- keep subtitle timing independent from decoded video surfaces
 
 ### P2.2 Integrate libass
 
@@ -231,6 +276,7 @@ Tasks:
   - seek
   - speed
   - host presentation bias rules where relevant
+- keep the first subtitle path as overlay composition, not burned-in video decode output
 
 ## P3 - Quality and Portability
 
@@ -302,7 +348,9 @@ Do these next, in order:
 1. keep worker-vs-host sync measurement as a regression tool
 2. finish the current round of sync/decode wake-policy tightening
 3. improve seek responsiveness and reduce seek-path cost
-4. reduce seek-related coupling to the shared player lock
-5. define render output surface abstraction
-6. start the first real Windows render backend
-7. integrate subtitle timing into the worker-owned playback model
+4. start the timed video-surface abstraction
+5. refit the current software path onto that abstraction
+6. start the first real Windows D3D11 video backend
+7. define the surface-oriented host ABI and WPF presentation path
+8. reduce seek-related coupling to the shared player lock
+9. integrate subtitle timing into the worker-owned playback model

@@ -336,11 +336,211 @@ Main limitations:
 - subtitle timing and composition are not yet integrated into the worker-driven pipeline
 - smoke tooling still mixes diagnostic and host responsibilities more than a final host should
 
-## 11. Near-Term Direction
+## 11. Hardware Decode and Output Surface Plan
+
+The next video-path milestone is to move from CPU-copy BGRA delivery to GPU-native decoded
+surfaces on Windows, while keeping the Rust core portable enough for a later Avalonia host.
+
+Current product direction:
+
+- short term host: WPF
+- long term host direction: Avalonia
+- short term video backend target: D3D11 hardware decode
+- non-goal for the first hardware path: GPU-to-CPU readback
+
+That means the player core should not define its output as:
+
+- a WPF-specific object
+- a copied BGRA byte buffer
+- a permanently D3D11-only host contract
+
+Instead, the core should define its output as:
+
+- a video frame with timing metadata
+- carrying a backend-owned video surface
+
+### 11.1 Core design rule
+
+The player core should hand off:
+
+```text
+timed video surface
+```
+
+not:
+
+```text
+WPF image object
+```
+
+and not:
+
+```text
+BGRA copy-out as the only supported representation
+```
+
+### 11.2 Planned video frame split
+
+Today `VideoFrame` combines:
+
+- timing
+- dimensions
+- pixel format
+- CPU-side packed bytes
+
+The planned shape is to split that into:
+
+1. frame timing / scheduling metadata
+2. surface ownership / storage metadata
+
+Representative direction:
+
+```text
+VideoFrame
+  -> pts / duration / dimensions / key-frame flag
+  -> Arc<VideoSurface>
+```
+
+and:
+
+```text
+VideoSurface
+  -> kind
+  -> format
+  -> backend-owned storage
+```
+
+Planned surface kinds:
+
+- `CpuBgra`
+- `D3d11Texture2D`
+
+Planned surface formats:
+
+- `Bgra8`
+- `Nv12`
+- `P010`
+
+This preserves the existing scheduling model while removing the assumption that every decoded
+video frame must become a CPU-owned `Vec<u8>`.
+
+### 11.3 Decode-path target
+
+The Windows hardware-decode path should prefer native decoder-friendly formats such as:
+
+- `NV12`
+- `P010`
+
+The decode layer should be responsible for:
+
+- opening the D3D11 video device/context
+- configuring FFmpeg hardware decode
+- receiving hardware-backed decoded frames
+- wrapping the decoded texture as a `VideoSurface`
+
+The decode layer should not be responsible for:
+
+- creating WPF objects
+- baking in WPF presentation rules
+- forcing all hardware output back through BGRA conversion
+
+The existing software BGRA path should remain available as:
+
+- fallback
+- compatibility path
+- debug path
+
+### 11.4 Runtime and scheduler impact
+
+The current runtime and scheduling model should stay mostly intact.
+
+The important rule is:
+
+- queue and schedule timed frame objects
+- do not collapse the runtime into a single mutable "latest texture"
+
+Why:
+
+- seek recovery already depends on frame-level timing
+- drop/present/keep decisions already exist at frame granularity
+- later subtitle timing needs a stable video-time anchor
+- surface lifetime should naturally follow frame lifetime
+
+### 11.5 Host adapter boundary
+
+The Rust core should expose a surface-oriented contract over FFI.
+
+The host-specific adapters should live above that boundary:
+
+- WPF adapter
+- future Avalonia adapter
+
+This means the ABI should move toward:
+
+- surface descriptors
+- explicit acquire/release semantics for host-visible surfaces
+- host-side presenter adapters
+
+instead of only:
+
+- current-frame BGRA metadata
+- current-frame BGRA copy
+
+Short-term WPF delivery can therefore be implemented as:
+
+```text
+Rust core
+  -> D3D11 video surface
+  -> FFI surface descriptor
+  -> WPF-specific presenter adapter
+  -> final host presentation
+```
+
+without redefining the Rust core around WPF types.
+
+### 11.6 Subtitle compatibility rule
+
+Subtitles should not be burned into decoded video surfaces in the first hardware-decode design.
+
+Instead, subtitle work should remain a parallel timing/composition path:
+
+```text
+subtitle source
+  -> subtitle cues
+  -> subtitle scheduler
+  -> host overlay or future compositor
+```
+
+The short-term preferred approach is:
+
+- decode video into D3D11 surfaces
+- keep subtitle timing independent
+- let the host render subtitle overlays
+
+Reasons:
+
+- WPF can ship sooner
+- Avalonia can reuse the same subtitle timing model
+- subtitle visibility/style changes stay outside the decode path
+- later GPU composition remains possible without redesigning seek/sync semantics
+
+### 11.7 First implementation phases
+
+Recommended implementation order:
+
+1. split frame timing from surface storage
+2. preserve the existing software BGRA path under the new surface model
+3. add D3D11 surface types and resource ownership
+4. add a surface-oriented FFI contract
+5. build the first WPF presenter adapter on top of that contract
+6. introduce subtitle timing and overlay work on a parallel path
+
+## 12. Near-Term Direction
 
 The most likely next architecture steps are:
 
 1. reduce coupling between decode worker and the serialized player lock
 2. tighten notification flow between decode enqueue and sync wake-up
 3. add worker-vs-host diagnostic modes for objective sync measurement
-4. introduce real render backend and subtitle composition path
+4. introduce the output-surface abstraction and Windows D3D11 decode path
+5. add subtitle timing and host overlay composition boundaries
