@@ -1,14 +1,17 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::fmt;
+use std::ptr;
 use std::sync::{Arc, Mutex};
 
 use ffmpeg_next as ffmpeg;
+use ffmpeg_next::ffi;
 use ffmpeg_next::software::scaling::{context::Context as ScalingContext, Flags as ScalingFlags};
 use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
+use crate::render::backends::d3d11::D3d11TextureSurfaceDesc;
 use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 use crate::util::time::MediaTimeUs;
 
@@ -36,6 +39,9 @@ pub struct OpenedVideoDecoder {
     pub decoder: ffmpeg::decoder::Video,
     scaler: Option<ScalingContext>,
     estimated_frame_duration_us: Option<MediaTimeUs>,
+    backend: VideoDecodeBackend,
+    #[allow(dead_code)]
+    hardware_context: Option<VideoHardwareContext>,
 }
 
 pub struct OpenedAudioDecoder {
@@ -53,6 +59,17 @@ struct DecoderDrainingState {
     video_drained: bool,
     audio_drained: bool,
     end_of_stream_emitted: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VideoDecodeBackend {
+    SoftwareBgra,
+    D3d11va,
+}
+
+struct VideoHardwareContext {
+    hw_device_ctx: *mut ffi::AVBufferRef,
+    hw_pix_fmt: ffi::AVPixelFormat,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -649,17 +666,76 @@ fn open_video_decoder(
         .stream(stream_index)
         .ok_or(ffmpeg::Error::StreamNotFound)
         .map_err(MediaOpenError::VideoDecoder)?;
+    let codec_id = stream.parameters().id();
+    let codec = ffmpeg::decoder::find(codec_id)
+        .ok_or(ffmpeg::Error::DecoderNotFound)
+        .map_err(MediaOpenError::VideoDecoder)?;
+
+    if let Some(decoder) = try_open_d3d11va_video_decoder(stream_index, &stream, codec)? {
+        return Ok(Some(decoder));
+    }
+
+    open_software_video_decoder(stream_index, &stream, codec).map(Some)
+}
+
+fn open_software_video_decoder(
+    stream_index: usize,
+    stream: &ffmpeg::Stream<'_>,
+    codec: ffmpeg::Codec,
+) -> Result<OpenedVideoDecoder, MediaOpenError> {
     let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
         .map_err(MediaOpenError::VideoDecoder)?;
     let mut decoder = context.decoder();
     decoder.set_packet_time_base(stream.time_base());
-    let decoder = decoder.video().map_err(MediaOpenError::VideoDecoder)?;
+    let decoder = decoder
+        .open_as(codec)
+        .map_err(MediaOpenError::VideoDecoder)?
+        .video()
+        .map_err(MediaOpenError::VideoDecoder)?;
+
+    Ok(OpenedVideoDecoder {
+        index: stream_index,
+        decoder,
+        scaler: None,
+        estimated_frame_duration_us: estimate_stream_frame_duration_us(stream.avg_frame_rate()),
+        backend: VideoDecodeBackend::SoftwareBgra,
+        hardware_context: None,
+    })
+}
+
+fn try_open_d3d11va_video_decoder(
+    stream_index: usize,
+    stream: &ffmpeg::Stream<'_>,
+    codec: ffmpeg::Codec,
+) -> Result<Option<OpenedVideoDecoder>, MediaOpenError> {
+    let Some(hw_pix_fmt) = find_d3d11va_hw_pixel_format(&codec) else {
+        return Ok(None);
+    };
+
+    let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
+        .map_err(MediaOpenError::VideoDecoder)?;
+    let mut decoder = context.decoder();
+    decoder.set_packet_time_base(stream.time_base());
+
+    let Some(hardware_context) = prepare_d3d11va_context(&mut decoder, hw_pix_fmt) else {
+        return Ok(None);
+    };
+
+    let decoder = match decoder.open_as(codec) {
+        Ok(opened) => match opened.video() {
+            Ok(video) => video,
+            Err(_) => return Ok(None),
+        },
+        Err(_) => return Ok(None),
+    };
 
     Ok(Some(OpenedVideoDecoder {
         index: stream_index,
         decoder,
         scaler: None,
         estimated_frame_duration_us: estimate_stream_frame_duration_us(stream.avg_frame_rate()),
+        backend: VideoDecodeBackend::D3d11va,
+        hardware_context: Some(hardware_context),
     }))
 }
 
@@ -856,6 +932,10 @@ fn map_video_frame(
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
 ) -> Result<VideoFrame, MediaOpenError> {
+    if let Some(mapped) = map_d3d11_video_frame(decoder, frame, pts_us, duration_us) {
+        return Ok(mapped);
+    }
+
     let converted = convert_video_frame_to_bgra(decoder, frame)?;
     let stride = converted.stride(0);
     let data = copy_packed_plane(&converted);
@@ -871,6 +951,49 @@ fn map_video_frame(
             stride,
             data,
         )),
+    })
+}
+
+fn map_d3d11_video_frame(
+    decoder: &OpenedVideoDecoder,
+    frame: &frame::Video,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
+) -> Option<VideoFrame> {
+    if decoder.backend != VideoDecodeBackend::D3d11va {
+        return None;
+    }
+
+    if !matches!(frame.format(), format::Pixel::D3D11VA_VLD | format::Pixel::D3D11) {
+        return None;
+    }
+
+    let av_frame = unsafe { frame.as_ptr() };
+    if av_frame.is_null() {
+        return None;
+    }
+
+    let texture_ptr = unsafe { (*av_frame).data[0] as usize as u64 };
+    if texture_ptr == 0 {
+        return None;
+    }
+
+    let array_slice = unsafe { (*av_frame).data[1] as usize as u32 };
+    let pixel_format = d3d11_hw_sw_format(av_frame).unwrap_or(PixelFormatCategory::Nv12);
+    let desc = D3d11TextureSurfaceDesc {
+        texture_ptr,
+        shared_handle: None,
+        array_slice,
+        pixel_format,
+    };
+
+    Some(VideoFrame {
+        pts_us,
+        duration_us,
+        width: frame.width(),
+        height: frame.height(),
+        is_key_frame: frame.is_key(),
+        surface: Arc::new(desc.into_surface()),
     })
 }
 
@@ -1090,5 +1213,145 @@ mod tests {
             5_000,
             Some(6_000),
         ));
+    }
+}
+
+fn find_d3d11va_hw_pixel_format(codec: &ffmpeg::Codec) -> Option<ffi::AVPixelFormat> {
+    let codec_ptr = unsafe { codec.as_ptr() };
+    if codec_ptr.is_null() {
+        return None;
+    }
+
+    let mut index = 0;
+    loop {
+        let config = unsafe { ffi::avcodec_get_hw_config(codec_ptr, index) };
+        if config.is_null() {
+            return None;
+        }
+
+        let supports_d3d11va = unsafe {
+            (*config).device_type == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA
+                && ((*config).methods
+                    & ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32)
+                    != 0
+                && matches!(
+                    (*config).pix_fmt,
+                    ffi::AVPixelFormat::AV_PIX_FMT_D3D11VA_VLD
+                        | ffi::AVPixelFormat::AV_PIX_FMT_D3D11
+                )
+        };
+        if supports_d3d11va {
+            return Some(unsafe { (*config).pix_fmt });
+        }
+
+        index += 1;
+    }
+}
+
+fn prepare_d3d11va_context(
+    decoder: &mut ffmpeg::codec::decoder::Decoder,
+    hw_pix_fmt: ffi::AVPixelFormat,
+) -> Option<VideoHardwareContext> {
+    let mut hw_device_ctx = ptr::null_mut();
+    let create_result = unsafe {
+        ffi::av_hwdevice_ctx_create(
+            &mut hw_device_ctx,
+            ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+            ptr::null(),
+            ptr::null_mut(),
+            0,
+        )
+    };
+    if create_result < 0 || hw_device_ctx.is_null() {
+        return None;
+    }
+
+    let avctx = unsafe { decoder.as_mut_ptr() };
+    let hardware_context = VideoHardwareContext {
+        hw_device_ctx,
+        hw_pix_fmt,
+    };
+    let hardware_context_ptr =
+        (&hardware_context as *const VideoHardwareContext).cast_mut().cast::<std::ffi::c_void>();
+
+    let avctx_hw_device_ref = unsafe { ffi::av_buffer_ref(hw_device_ctx) };
+    if avctx_hw_device_ref.is_null() {
+        let mut owned_ref = hw_device_ctx;
+        unsafe {
+            ffi::av_buffer_unref(&mut owned_ref);
+        }
+        return None;
+    }
+
+    unsafe {
+        (*avctx).opaque = hardware_context_ptr;
+        (*avctx).get_format = Some(select_d3d11va_pixel_format);
+        (*avctx).hw_device_ctx = avctx_hw_device_ref;
+    }
+
+    Some(hardware_context)
+}
+
+unsafe extern "C" fn select_d3d11va_pixel_format(
+    avctx: *mut ffi::AVCodecContext,
+    fmt: *const ffi::AVPixelFormat,
+) -> ffi::AVPixelFormat {
+    if avctx.is_null() || fmt.is_null() {
+        return ffi::AVPixelFormat::AV_PIX_FMT_NONE;
+    }
+
+    let hardware_context = unsafe {
+        ((*avctx).opaque as *const VideoHardwareContext)
+            .as_ref()
+    };
+    let Some(hardware_context) = hardware_context else {
+        return unsafe { ffi::avcodec_default_get_format(avctx, fmt) };
+    };
+
+    let mut current = fmt;
+    loop {
+        let candidate = unsafe { *current };
+        if candidate == ffi::AVPixelFormat::AV_PIX_FMT_NONE {
+            break;
+        }
+        if candidate == hardware_context.hw_pix_fmt {
+            return candidate;
+        }
+        current = unsafe { current.add(1) };
+    }
+
+    unsafe { ffi::avcodec_default_get_format(avctx, fmt) }
+}
+
+fn d3d11_hw_sw_format(av_frame: *const ffi::AVFrame) -> Option<PixelFormatCategory> {
+    if av_frame.is_null() {
+        return None;
+    }
+
+    let hw_frames_ctx = unsafe { (*av_frame).hw_frames_ctx };
+    if hw_frames_ctx.is_null() {
+        return None;
+    }
+
+    let frames_ctx = unsafe { (*hw_frames_ctx).data as *const ffi::AVHWFramesContext };
+    if frames_ctx.is_null() {
+        return None;
+    }
+
+    match unsafe { (*frames_ctx).sw_format } {
+        ffi::AVPixelFormat::AV_PIX_FMT_NV12 => Some(PixelFormatCategory::Nv12),
+        _ => None,
+    }
+}
+
+impl Drop for VideoHardwareContext {
+    fn drop(&mut self) {
+        if self.hw_device_ctx.is_null() {
+            return;
+        }
+
+        unsafe {
+            ffi::av_buffer_unref(&mut self.hw_device_ctx);
+        }
     }
 }

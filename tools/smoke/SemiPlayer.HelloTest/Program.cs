@@ -665,17 +665,21 @@ internal sealed class PlayerSmokeWindow : Window
         }
 
         EnsureOk(Native.semi_player_get_current_video_frame_info(_player, out SemiVideoFrameInfo frameInfo), "semi_player_get_current_video_frame_info");
+        EnsureOk(Native.semi_player_get_current_video_surface_desc(_player, out SemiVideoSurfaceDesc surfaceDesc), "semi_player_get_current_video_surface_desc");
+
+        bool cpuReadableSurface = surfaceDesc.Kind == (uint)SemiVideoSurfaceKind.CpuPacked;
 
         bool shouldCopyFrame =
-            forceCopy ||
+            cpuReadableSurface &&
+            (forceCopy ||
             _bitmap is null ||
             frameInfo.PtsMs != _lastPresentedPtsMs ||
             _bitmap.PixelWidth != frameInfo.Width ||
-            _bitmap.PixelHeight != frameInfo.Height;
+            _bitmap.PixelHeight != frameInfo.Height);
 
         string copyDecision = shouldCopyFrame
             ? (forceCopy ? "force" : frameInfo.PtsMs != _lastPresentedPtsMs ? "new-pts" : "resize")
-            : "same-pts";
+            : cpuReadableSurface ? "same-pts" : "gpu-surface";
 
         if (shouldCopyFrame)
         {
@@ -706,7 +710,7 @@ internal sealed class PlayerSmokeWindow : Window
 
         ApplyAdaptivePumpInterval(snapshot);
 
-        _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo);
+        _statusText.Text = BuildStatusText(snapshot, audioOutput, frameInfo, surfaceDesc);
     }
 
     private void ApplyAdaptivePumpInterval(SemiPlaybackSnapshot snapshot)
@@ -757,7 +761,8 @@ internal sealed class PlayerSmokeWindow : Window
     private string BuildStatusText(
         SemiPlaybackSnapshot snapshot,
         SemiAudioOutputSnapshot audioOutput,
-        SemiVideoFrameInfo? frameInfo)
+        SemiVideoFrameInfo? frameInfo,
+        SemiVideoSurfaceDesc? surfaceDesc = null)
     {
         string state = _isPlaying ? "Playing" : "Paused";
         string sourcePart = BuildSourcePart();
@@ -777,6 +782,11 @@ internal sealed class PlayerSmokeWindow : Window
         string videoLine =
             $"Video  Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
             $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
+        string surfaceLine =
+            surfaceDesc is SemiVideoSurfaceDesc desc
+                ? $"Surface  {FormatSurfaceKind(desc.Kind)}  PixFmt {desc.PixelFormat}  " +
+                  $"Stride {desc.Stride}  Bytes {desc.ByteLen}  Tex 0x{desc.TexturePtr:X}"
+                : "Surface  n/a";
 
         string audioLine1 =
             $"AudioOut  {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
@@ -842,6 +852,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"{syncLine1}{Environment.NewLine}" +
             $"{syncLine2}{Environment.NewLine}" +
             $"{videoLine}{Environment.NewLine}" +
+            $"{surfaceLine}{Environment.NewLine}" +
             $"{audioLine1}{Environment.NewLine}" +
             $"{audioLine2}{Environment.NewLine}" +
             $"{seekLine1}{Environment.NewLine}" +
@@ -893,6 +904,13 @@ internal sealed class PlayerSmokeWindow : Window
         4 => "Data",
         5 => "Att",
         _ => "?",
+    };
+
+    private static string FormatSurfaceKind(uint kind) => kind switch
+    {
+        (uint)SemiVideoSurfaceKind.CpuPacked => "CpuPacked",
+        (uint)SemiVideoSurfaceKind.D3d11Texture2D => "D3D11",
+        _ => "Unknown",
     };
 
     private string BuildSourcePart()
@@ -1766,4 +1784,11 @@ internal struct SemiVideoSurfaceDesc
     internal ulong SharedHandle;
     internal uint ArraySlice;
     internal uint Reserved0;
+}
+
+internal enum SemiVideoSurfaceKind : uint
+{
+    Unknown = 0,
+    CpuPacked = 1,
+    D3d11Texture2D = 2,
 }
