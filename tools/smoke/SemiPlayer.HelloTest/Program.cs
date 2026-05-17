@@ -403,6 +403,7 @@ internal sealed class PlayerSmokeWindow : Window
     private int _pumpSweepIndex = -1;
     private bool _useAdaptivePump = true;
     private bool _drivePumpFromUi;
+    private bool _showSeekDebug;
 
     public PlayerSmokeWindow(string mediaPath, SmokeOptions options)
     {
@@ -760,85 +761,103 @@ internal sealed class PlayerSmokeWindow : Window
     {
         string state = _isPlaying ? "Playing" : "Paused";
         string sourcePart = BuildSourcePart();
-        string audioOutputPart =
-            $"Out {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
-            $"MixBuf {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames}  " +
-            $"DevPending {audioOutput.PendingDeviceFrames}  Started {audioOutput.Started}";
-        string audioBufferPart =
-            $"AudioRefillAt {snapshot.NextAudioRefillDeadlineMs} ms  " +
+        string overviewLine1 =
+            $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms";
+        string overviewLine2 =
+            $"Pos  A {snapshot.AudioPositionMs} ms  V {snapshot.CurrentVideoPtsMs} ms  " +
+            $"Q  A {snapshot.AudioQueueLen}  V {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}";
+
+        string syncLine1 =
+            $"Sync  Core A-V {snapshot.CoreAVDeltaMs} ms  Err {snapshot.CoreSyncErrorMs} ms  " +
+            $"Host {snapshot.HostPresentationOffsetMs} ms  End2End {snapshot.ExpectedEndToEndAVDeltaMs} ms";
+        string syncLine2 =
+            $"SyncStats  Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
+            $"Abs {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
+            $"Max+ {_diagnostics.CoreSyncErrorMaxPositiveMs} ms  Max- {_diagnostics.CoreSyncErrorMaxNegativeMs} ms";
+        string videoLine =
+            $"Video  Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
+            $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
+
+        string audioLine1 =
+            $"AudioOut  {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
+            $"Mix {audioOutput.BufferedFrames}/{audioOutput.TargetBufferFrames}  " +
+            $"Pending {audioOutput.PendingDeviceFrames}  Started {audioOutput.Started}";
+        string audioLine2 =
+            $"AudioSched  RefillAt {snapshot.NextAudioRefillDeadlineMs} ms  " +
             $"PumpAt {snapshot.NextPumpDeadlineMs} ms  Wait {snapshot.SuggestedPumpWaitMs} ms";
-        string seekPart =
-            $"Seek#{snapshot.SeekEventCount} {(snapshot.SeekActive != 0 ? "active" : "done")}  " +
+
+        string seekLine1 =
+            $"Seek  #{snapshot.SeekEventCount} {(snapshot.SeekActive != 0 ? "active" : "done")}  " +
             $"Target {snapshot.LastSeekTargetMs} ms  Api {FormatSeekMetricUs(snapshot.SeekApiDurationUs)}  " +
             $"Lock {FormatSeekMetricUs(snapshot.SeekLockWaitUs)}  Ffmpeg {FormatSeekMetricUs(snapshot.SeekFfmpegSeekUs)}  Reset {FormatSeekMetricUs(snapshot.SeekResetUs)}";
-        string seekRecoveryPart =
-            $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstVideoPtsMs)}  " +
+        string seekLine2 =
+            $"SeekVideo  VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstVideoPtsMs)}  " +
             $"VDec>=T {FormatSeekMetricUs(snapshot.SeekFirstPostTargetVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstPostTargetVideoPtsMs)}  " +
-            $"AT@VDec>=T {FormatSeekPtsMs(snapshot.SeekAudioPositionAtFirstPostTargetVideoDecodedMs)}  " +
-            $"ADecRaw {FormatSeekMetricUs(snapshot.SeekFirstAudioDecoderOutputUs)}  " +
-            $"APlay {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
+            $"VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekTargetVideoPtsMs)}  " +
             $"Cur {FormatSeekMetricUs(snapshot.SeekFirstCurrentVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstCurrentVideoPtsMs)}";
-        string seekTargetPart =
-            $"Seek VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekTargetVideoPtsMs)}  " +
+        string seekLine3 =
+            $"SeekAudio  ADecRaw {FormatSeekMetricUs(snapshot.SeekFirstAudioDecoderOutputUs)}  " +
+            $"APlay {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
             $"AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
-            $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}  " +
+            $"AudioStartedBeforeCur {snapshot.SeekAudioOutputStartedBeforeCurrent}";
+        string seekLine4 =
+            $"SeekStable  Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}  " +
+            $"DropBeforeCur {snapshot.SeekPostTargetVideoDroppedBeforeCurrentCount}  " +
             $"PreTarget Dec {snapshot.SeekPreTargetVideoDecodedCount}  Cur {snapshot.SeekPreTargetCurrentVideoCount}";
-        string seekSyncPart =
-            $"Seek DropBeforeCur {snapshot.SeekPostTargetVideoDroppedBeforeCurrentCount}  " +
-            $"AudioStartedBeforeCur {snapshot.SeekAudioOutputStartedBeforeCurrent}  " +
-            $"AudioStart {FormatSeekMetricUs(snapshot.SeekAudioOutputStartUs)}  " +
+        string seekLine5 =
+            $"SeekDebug  AudioStart {FormatSeekMetricUs(snapshot.SeekAudioOutputStartUs)}  " +
+            $"AT@VDec>=T {FormatSeekPtsMs(snapshot.SeekAudioPositionAtFirstPostTargetVideoDecodedMs)}  " +
             $"AT@Cur {FormatSeekPtsMs(snapshot.SeekAudioPositionAtFirstCurrentVideoMs)}  " +
             $"AAdv(VDec>=T->Cur) {FormatSeekPtsMs(snapshot.SeekAudioAdvancedBetweenPostTargetDecodeAndCurrentMs)}";
-        string seekAnchorPart =
-            $"Seek FirstVideoPkt {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketPtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketDtsMs)}  " +
+        string seekLine6 =
+            $"SeekDebug  FirstPkt {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketPtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketDtsMs)}  " +
             $"Key {(snapshot.SeekFirstVideoPacketIsKey != 0 ? 1 : 0)}  " +
             $"S{snapshot.SeekFirstVideoPacketStreamIndex}/{FormatStreamKind(snapshot.SeekFirstVideoPacketStreamKind)}  " +
             $"dT {FormatSignedMs(snapshot.SeekFirstVideoPacketPtsMs >= 0 ? snapshot.SeekFirstVideoPacketPtsMs - snapshot.LastSeekTargetMs : -1)}  " +
             $"Pkts V{snapshot.SeekVideoPacketsRead} A{snapshot.SeekAudioPacketsRead}";
-        string seekExpectedPart =
-            $"Seek ExpectKF {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframePtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframeDtsMs)}  " +
+        string seekLine7 =
+            $"SeekDebug  ExpectKF {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframePtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekExpectedLeftKeyframeDtsMs)}  " +
             $"Err {FormatSignedMs(snapshot.SeekExpectedLeftKeyframePtsMs >= 0 && snapshot.SeekFirstVideoPacketPtsMs >= 0 ? snapshot.SeekFirstVideoPacketPtsMs - snapshot.SeekExpectedLeftKeyframePtsMs : -1)}";
-        string coreSyncPart =
-            $"CoreSync Mean {_diagnostics.CoreSyncErrorMeanMs:F1} ms  " +
-            $"AbsMean {_diagnostics.CoreSyncErrorAbsMeanMs:F1} ms  " +
-            $"Max+ {_diagnostics.CoreSyncErrorMaxPositiveMs} ms  Max- {_diagnostics.CoreSyncErrorMaxNegativeMs} ms";
-        string playbackPart =
-            $"UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
-            $"Advances {_diagnostics.FrameAdvancesPerSecond:F1}/s  " +
-            $"Pump {_diagnostics.PumpsPerSecond:F1}/s @{_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
-            $"Driver {(_drivePumpFromUi ? "UI" : "Worker")}  " +
-            $"Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}";
-        string timelinePart =
-            $"Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
-            $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
-        string avPart =
-            $"Core A-V {snapshot.CoreAVDeltaMs} ms  CoreSyncErr {snapshot.CoreSyncErrorMs} ms  " +
-            $"HostOffset {snapshot.HostPresentationOffsetMs} ms  " +
-            $"Expected End-to-end A-V {snapshot.ExpectedEndToEndAVDeltaMs} ms";
-        string anomalyPart =
-            $"Anomalies {_anomalyLogger.CurrentSummary}  " +
+
+        string perfLine =
+            $"Perf  UI {_diagnostics.UiTicksPerSecond:F1}/s  Copies {_diagnostics.FrameCopiesPerSecond:F1}/s  " +
+            $"Adv {_diagnostics.FrameAdvancesPerSecond:F1}/s  Pump {_diagnostics.PumpsPerSecond:F1}/s  " +
+            $"Tick {_tickTimer.Interval.TotalMilliseconds:F1} ms x {_tickPumpIterations}  " +
+            $"Driver {(_drivePumpFromUi ? "UI" : "Worker")}  Mode {(_useAdaptivePump ? "Adaptive" : "Fixed")}";
+        string anomalyLine =
+            $"Health  Anomalies {_anomalyLogger.CurrentSummary}  " +
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}  " +
             $"AudioDiscardEvents {snapshot.StaleAudioDiscardEventCount}";
+        string controlsLine =
+            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  " +
+            $"A AdaptivePump  P UiPump  D SeekDebug({(_showSeekDebug ? "On" : "Off")})";
 
-        return
-            $"{Path.GetFileName(_mediaPath)}  |  {state}  |  Duration {_durationMs} ms{Environment.NewLine}" +
-            $"AudioPos {snapshot.AudioPositionMs} ms  VideoPos {snapshot.CurrentVideoPtsMs} ms  " +
-            $"AudioQ {snapshot.AudioQueueLen}  VideoQ {snapshot.VideoQueueLen}  EOS {snapshot.EndOfStream}{Environment.NewLine}" +
+        string statusText =
+            $"{overviewLine1}{Environment.NewLine}" +
+            $"{overviewLine2}{Environment.NewLine}" +
             $"{sourcePart}{Environment.NewLine}" +
-            $"{avPart}{Environment.NewLine}" +
-            $"{coreSyncPart}{Environment.NewLine}" +
-            $"{timelinePart}{Environment.NewLine}" +
-            $"{audioOutputPart}{Environment.NewLine}" +
-            $"{audioBufferPart}{Environment.NewLine}" +
-            $"{seekPart}{Environment.NewLine}" +
-            $"{seekRecoveryPart}{Environment.NewLine}" +
-            $"{seekTargetPart}{Environment.NewLine}" +
-            $"{seekSyncPart}{Environment.NewLine}" +
-            $"{seekAnchorPart}{Environment.NewLine}" +
-            $"{seekExpectedPart}{Environment.NewLine}" +
-            $"{playbackPart}{Environment.NewLine}" +
-            $"{anomalyPart}{Environment.NewLine}" +
-            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  A AdaptivePump  P UiPump";
+            $"{syncLine1}{Environment.NewLine}" +
+            $"{syncLine2}{Environment.NewLine}" +
+            $"{videoLine}{Environment.NewLine}" +
+            $"{audioLine1}{Environment.NewLine}" +
+            $"{audioLine2}{Environment.NewLine}" +
+            $"{seekLine1}{Environment.NewLine}" +
+            $"{seekLine2}{Environment.NewLine}" +
+            $"{seekLine3}{Environment.NewLine}" +
+            $"{seekLine4}{Environment.NewLine}" +
+            $"{perfLine}{Environment.NewLine}" +
+            $"{anomalyLine}{Environment.NewLine}";
+
+        if (_showSeekDebug)
+        {
+            statusText +=
+                $"{seekLine5}{Environment.NewLine}" +
+                $"{seekLine6}{Environment.NewLine}" +
+                $"{seekLine7}{Environment.NewLine}";
+        }
+
+        statusText += controlsLine;
+        return statusText;
 
     }
 
@@ -922,6 +941,10 @@ internal sealed class PlayerSmokeWindow : Window
                     ToggleUiPumpDriver();
                     e.Handled = true;
                     break;
+                case Key.D:
+                    ToggleSeekDebug();
+                    e.Handled = true;
+                    break;
                 case Key.OemPlus:
                 case Key.Add:
                     AdjustTickPumpIterations(8);
@@ -968,6 +991,12 @@ internal sealed class PlayerSmokeWindow : Window
     {
         _drivePumpFromUi = !_drivePumpFromUi;
         _diagnostics.Reset();
+        RefreshVideoFrame(forceCopy: false);
+    }
+
+    private void ToggleSeekDebug()
+    {
+        _showSeekDebug = !_showSeekDebug;
         RefreshVideoFrame(forceCopy: false);
     }
 
