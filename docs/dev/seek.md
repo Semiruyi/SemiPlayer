@@ -170,6 +170,12 @@ Before the target point:
 
 This matters because the project is building a real player, not just a frame-stepper. Audio restart quality is part of the seek feel.
 
+Current implementation direction:
+
+- audio frames fully before the seek target should not enter normal post-seek playback
+- the first audio frame that overlaps the seek target should be trimmed at a sample boundary before entering the runtime queue
+- this is currently implemented as a runtime-apply trim step, which is enough to correct audible restart position before deeper seek-pipeline work lands
+
 ## 7. State and Concurrency Rules
 
 Seek already depends on:

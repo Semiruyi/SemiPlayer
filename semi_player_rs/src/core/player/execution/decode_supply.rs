@@ -76,8 +76,14 @@ pub(crate) fn apply_decoded_output(
             }
         }
         DecodedOutput::Audio(frame) => {
-            player.runtime.push_audio_frame(frame);
             player.observe_seek_first_audio_decoded();
+            let Some(frame) = trim_audio_for_seek_recovery(player, frame) else {
+                return DecodedOutputApplyResult {
+                    reached_end: false,
+                    should_wake_sync: false,
+                };
+            };
+            player.runtime.push_audio_frame(frame);
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: should_wake_sync_for_audio_enqueue(player),
@@ -98,6 +104,18 @@ fn should_wake_sync_for_audio_enqueue(player: &SemiPlayerHandle) -> bool {
         && player
             .audio_output
             .with_ref(|audio_output| !audio_output.snapshot().started)
+}
+
+fn trim_audio_for_seek_recovery(
+    player: &SemiPlayerHandle,
+    frame: crate::audio::core::frame::AudioFrame,
+) -> Option<crate::audio::core::frame::AudioFrame> {
+    let Some(target_us) = player.decode_policy().seek_recovery.map(|policy| policy.target_video_us)
+    else {
+        return Some(frame);
+    };
+
+    frame.trim_to_start_us(target_us)
 }
 
 #[cfg(test)]

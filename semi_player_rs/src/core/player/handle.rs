@@ -341,6 +341,7 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_aborted(&self) {
         self.diagnostics.observe_seek_aborted();
+        self.clear_seek_recovery();
     }
 
     pub fn observe_seek_video_decoded(&self, frame_pts_us: MediaTimeUs) {
@@ -358,9 +359,6 @@ impl SemiPlayerHandle {
     ) {
         self.diagnostics
             .observe_seek_current_video(current_pts_us, current_effective_end_us);
-        if self.seek_recovery_matches(current_pts_us, current_effective_end_us) {
-            self.clear_seek_recovery();
-        }
     }
 
     pub fn observe_seek_target_audio_ready(&self) {
@@ -369,17 +367,7 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_stable(&self) {
         self.diagnostics.observe_seek_stable();
-    }
-
-    fn seek_recovery_matches(
-        &self,
-        current_pts_us: MediaTimeUs,
-        current_effective_end_us: Option<MediaTimeUs>,
-    ) -> bool {
-        let target_us = self.seek_recovery.lock().unwrap().target_us;
-        target_us.is_some_and(|target_us| {
-            is_seek_target_ready(target_us, current_pts_us, current_effective_end_us)
-        })
+        self.clear_seek_recovery();
     }
 }
 
