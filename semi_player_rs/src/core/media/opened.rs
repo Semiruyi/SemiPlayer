@@ -65,6 +65,10 @@ pub struct SeekDemuxDiagnosticsSnapshot {
     pub first_video_packet_stream_kind: StreamKind,
     pub video_packets_read: u64,
     pub audio_packets_read: u64,
+    pub video_frames_output: u64,
+    pub video_frames_skipped: u64,
+    pub audio_frames_output: u64,
+    pub audio_frames_skipped: u64,
     pub expected_left_keyframe_pts_us: MediaTimeUs,
     pub expected_left_keyframe_dts_us: MediaTimeUs,
 }
@@ -80,6 +84,10 @@ struct SeekDemuxDiagnostics {
     first_video_packet_stream_kind: StreamKind,
     video_packets_read: u64,
     audio_packets_read: u64,
+    video_frames_output: u64,
+    video_frames_skipped: u64,
+    audio_frames_output: u64,
+    audio_frames_skipped: u64,
     expected_left_keyframe_pts_us: Option<MediaTimeUs>,
     expected_left_keyframe_dts_us: Option<MediaTimeUs>,
     last_completed: SeekDemuxDiagnosticsSnapshot,
@@ -334,6 +342,7 @@ impl OpenedMedia {
                     video_decoder,
                     &media_packet.packet,
                     &mut self.pending_outputs,
+                    &mut self.seek_diagnostics,
                     policy,
                 )?;
             } else if self
@@ -346,6 +355,7 @@ impl OpenedMedia {
                     audio_decoder,
                     &media_packet.packet,
                     &mut self.pending_outputs,
+                    &mut self.seek_diagnostics,
                     policy,
                 )?;
             }
@@ -385,6 +395,7 @@ impl OpenedMedia {
                     collect_video_frames(
                         video_decoder,
                         &mut self.pending_outputs,
+                        &mut self.seek_diagnostics,
                         true,
                         policy,
                     )?;
@@ -396,7 +407,13 @@ impl OpenedMedia {
         if !self.draining_state.audio_drained {
             if let Some(audio_decoder) = self.audio_decoder.as_mut() {
                 self.draining_state.audio_drained =
-                    collect_audio_frames(audio_decoder, &mut self.pending_outputs, true, policy)?;
+                    collect_audio_frames(
+                        audio_decoder,
+                        &mut self.pending_outputs,
+                        &mut self.seek_diagnostics,
+                        true,
+                        policy,
+                    )?;
             } else {
                 self.draining_state.audio_drained = true;
             }
@@ -421,6 +438,10 @@ impl SeekDemuxDiagnostics {
         self.first_video_packet_stream_kind = StreamKind::Unknown;
         self.video_packets_read = 0;
         self.audio_packets_read = 0;
+        self.video_frames_output = 0;
+        self.video_frames_skipped = 0;
+        self.audio_frames_output = 0;
+        self.audio_frames_skipped = 0;
         self.expected_left_keyframe_pts_us = None;
         self.expected_left_keyframe_dts_us = None;
         self.last_completed = SeekDemuxDiagnosticsSnapshot::default();
@@ -465,6 +486,30 @@ impl SeekDemuxDiagnostics {
         }
     }
 
+    fn observe_video_frame(&mut self, skipped: bool) {
+        if !self.active {
+            return;
+        }
+
+        if skipped {
+            self.video_frames_skipped = self.video_frames_skipped.saturating_add(1);
+        } else {
+            self.video_frames_output = self.video_frames_output.saturating_add(1);
+        }
+    }
+
+    fn observe_audio_frame(&mut self, skipped: bool) {
+        if !self.active {
+            return;
+        }
+
+        if skipped {
+            self.audio_frames_skipped = self.audio_frames_skipped.saturating_add(1);
+        } else {
+            self.audio_frames_output = self.audio_frames_output.saturating_add(1);
+        }
+    }
+
     fn finish(&mut self) {
         if !self.active {
             return;
@@ -482,6 +527,10 @@ impl SeekDemuxDiagnostics {
         let first_stream_index = self.first_video_packet_stream_index.unwrap_or(-1);
         let video_packets_read = self.video_packets_read;
         let audio_packets_read = self.audio_packets_read;
+        let video_frames_output = self.video_frames_output;
+        let video_frames_skipped = self.video_frames_skipped;
+        let audio_frames_output = self.audio_frames_output;
+        let audio_frames_skipped = self.audio_frames_skipped;
         let expected_keyframe_pts = self.expected_left_keyframe_pts_us.unwrap_or(-1);
         let expected_keyframe_dts = self.expected_left_keyframe_dts_us.unwrap_or(-1);
 
@@ -495,6 +544,10 @@ impl SeekDemuxDiagnostics {
                 first_video_packet_stream_kind: self.first_video_packet_stream_kind,
                 video_packets_read,
                 audio_packets_read,
+                video_frames_output,
+                video_frames_skipped,
+                audio_frames_output,
+                audio_frames_skipped,
                 expected_left_keyframe_pts_us: expected_keyframe_pts,
                 expected_left_keyframe_dts_us: expected_keyframe_dts,
             }
@@ -639,17 +692,19 @@ fn decode_video_packet(
     decoder: &mut OpenedVideoDecoder,
     packet: &Packet,
     outputs: &mut VecDeque<DecodedOutput>,
+    seek_diagnostics: &mut SeekDemuxDiagnostics,
     policy: DecodePolicy,
 ) -> Result<(), MediaOpenError> {
     loop {
         match decoder.decoder.send_packet(packet) {
             Ok(()) => {
-                let _ = collect_video_frames(decoder, outputs, false, policy)?;
+                let _ = collect_video_frames(decoder, outputs, seek_diagnostics, false, policy)?;
                 return Ok(());
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
                 let output_count_before = outputs.len();
-                let drained = collect_video_frames(decoder, outputs, false, policy)?;
+                let drained =
+                    collect_video_frames(decoder, outputs, seek_diagnostics, false, policy)?;
                 if drained || outputs.len() == output_count_before {
                     return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
                         errno: ffmpeg::error::EAGAIN,
@@ -665,17 +720,19 @@ fn decode_audio_packet(
     decoder: &mut OpenedAudioDecoder,
     packet: &Packet,
     outputs: &mut VecDeque<DecodedOutput>,
+    seek_diagnostics: &mut SeekDemuxDiagnostics,
     policy: DecodePolicy,
 ) -> Result<(), MediaOpenError> {
     loop {
         match decoder.decoder.send_packet(packet) {
             Ok(()) => {
-                let _ = collect_audio_frames(decoder, outputs, false, policy)?;
+                let _ = collect_audio_frames(decoder, outputs, seek_diagnostics, false, policy)?;
                 return Ok(());
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => {
                 let output_count_before = outputs.len();
-                let drained = collect_audio_frames(decoder, outputs, false, policy)?;
+                let drained =
+                    collect_audio_frames(decoder, outputs, seek_diagnostics, false, policy)?;
                 if drained || outputs.len() == output_count_before {
                     return Err(MediaOpenError::SendPacket(ffmpeg::Error::Other {
                         errno: ffmpeg::error::EAGAIN,
@@ -690,6 +747,7 @@ fn decode_audio_packet(
 fn collect_video_frames(
     decoder: &mut OpenedVideoDecoder,
     outputs: &mut VecDeque<DecodedOutput>,
+    seek_diagnostics: &mut SeekDemuxDiagnostics,
     draining: bool,
     policy: DecodePolicy,
 ) -> Result<bool, MediaOpenError> {
@@ -709,6 +767,7 @@ fn collect_video_frames(
                         pts_us,
                         duration_us,
                     }));
+                    seek_diagnostics.observe_video_frame(true);
                 } else {
                     outputs.push_back(DecodedOutput::Video(map_video_frame(
                         decoder,
@@ -716,6 +775,7 @@ fn collect_video_frames(
                         pts_us,
                         duration_us,
                     )?));
+                    seek_diagnostics.observe_video_frame(false);
                 }
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
@@ -733,6 +793,7 @@ fn collect_video_frames(
 fn collect_audio_frames(
     decoder: &mut OpenedAudioDecoder,
     outputs: &mut VecDeque<DecodedOutput>,
+    seek_diagnostics: &mut SeekDemuxDiagnostics,
     draining: bool,
     policy: DecodePolicy,
 ) -> Result<bool, MediaOpenError> {
@@ -751,6 +812,7 @@ fn collect_audio_frames(
                         pts_us,
                         duration_us,
                     }));
+                    seek_diagnostics.observe_audio_frame(true);
                     continue;
                 }
 
@@ -760,6 +822,7 @@ fn collect_audio_frames(
                     pts_us,
                     duration_us,
                 )?));
+                seek_diagnostics.observe_audio_frame(false);
             }
             Err(ffmpeg::Error::Other { errno }) if errno == ffmpeg::error::EAGAIN => break,
             Err(ffmpeg::Error::Eof) => {
@@ -882,6 +945,7 @@ fn should_skip_video_frame_for_seek_recovery(
 
     end_us <= seek_recovery.target_video_us
 }
+
 
 fn should_skip_audio_frame_for_seek_recovery(
     policy: DecodePolicy,

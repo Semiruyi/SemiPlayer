@@ -308,6 +308,10 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_first_video_packet_stream_kind: stream_kind_to_u32(seek_demux.first_video_packet_stream_kind),
         seek_video_packets_read: seek_demux.video_packets_read,
         seek_audio_packets_read: seek_demux.audio_packets_read,
+        seek_video_frames_output: seek_demux.video_frames_output,
+        seek_video_frames_skipped: seek_demux.video_frames_skipped,
+        seek_audio_frames_output: seek_demux.audio_frames_output,
+        seek_audio_frames_skipped: seek_demux.audio_frames_skipped,
         seek_expected_left_keyframe_pts_ms: diagnostic_us_to_ms(
             seek_demux.expected_left_keyframe_pts_us,
         ),

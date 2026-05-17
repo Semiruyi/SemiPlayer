@@ -60,13 +60,18 @@ The current implementation baseline now also includes:
 - target-aware seek video recovery metrics
 - a first video fast path during seek recovery that skips BGRA conversion for pure pre-target pass-through frames
 - anchor diagnostics that compare the actual FFmpeg recovery point against the expected nearest-left video keyframe
+- direct recovery work accounting for:
+  - video vs audio decode-side cost
+  - packet read cost
+  - poll-loop cost and call counts
 
 Current diagnostic findings:
 
 - FFmpeg seek placement is currently good enough for the main local-playback path; observed actual anchor packets match the expected nearest-left main-video keyframe in tested samples
 - pure pre-target video frames already avoid the most expensive CPU playback work because they skip BGRA conversion, frame copy, runtime video queue insertion, and sync dirties
-- pre-target audio is still much heavier than pre-target video because audio frames are currently resampled and copied into normalized `AudioFrame` objects before seek recovery decides whether they will be discarded or trimmed
-- the next optimization stage should therefore focus less on "did FFmpeg pick the right keyframe?" and more on "how expensive is recovery from the correct anchor?"
+- pre-target audio trimming was moved early enough that audio recovery no longer appears to be a meaningful seek bottleneck in current smoke measurements
+- direct seek-cost measurements now show that the dominant steady seek cost is forward video recovery from the correct left keyframe, not audio recovery, not reset, and not demux packet read
+- the next optimization stage should therefore focus less on "did FFmpeg pick the right keyframe?" and more on "how expensive is forward video recovery from the correct anchor?"
 
 ## 3. Design Goals
 
@@ -171,8 +176,10 @@ This is the first practical fast path because the expensive work currently happe
 Current assessment:
 
 - the video side is already close to the intended recovery shape
-- remaining pre-target video cost is now mostly packet read, packet feed, and codec decode itself
-- video may still have smaller framework costs such as `SkippedVideo` bookkeeping, but it no longer appears to be the main "recovery did playback work too early" problem
+- remaining pre-target video cost is now mostly codec forward recovery itself
+- packet read cost is small in current measurements
+- the dominant measured cost sits in the FFmpeg video decode feed path during recovery
+- video may still have smaller framework costs such as frame mapping/copy and `SkippedVideo` bookkeeping, but they are not the first-order bottleneck
 
 ### 6.2 Audio during recovery
 
@@ -192,10 +199,9 @@ Current implementation direction:
 
 Current assessment:
 
-- the audio side is not yet shaped like the video side
-- seek recovery currently decides too late whether a decoded audio frame has any post-target playback value
-- fully pre-target audio still pays for resample, normalized sample copy, `AudioFrame` allocation, and then discard
-- the highest-value recovery optimization on the audio side is to move target gating earlier so that obviously pre-target audio can be discarded before full playback-grade conversion work is done
+- the audio side no longer appears to be the limiting path for playing seek
+- current smoke diagnostics show audio decode-side cost is tiny compared with video decode-side cost during the same seek
+- audio restart and gating are still correctness-sensitive, but audio-specific seek optimization is no longer the primary performance track
 
 ## 7. State and Concurrency Rules
 

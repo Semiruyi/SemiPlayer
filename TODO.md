@@ -111,7 +111,7 @@ Tasks:
 
 ### P0.5 Improve seek responsiveness and seek-path cost
 
-Status: active, anchor observability and first recovery-path reductions landed
+Status: software seek-path triage mostly complete; next major step is video hardware decode
 
 Tasks:
 
@@ -148,14 +148,30 @@ Tasks:
   - audio backend clear
   - audio restart timing
   - first post-target current-video timing
-- decide, from measurement, whether reset granularity or post-target video promotion is the next highest-value seek optimization
-- defer hardware decode as a seek optimization until the remaining recovery/reset bottlenecks are clearly measured
+- keep the current measured conclusion explicit:
+  - FFmpeg anchor placement is correct on tested local samples
+  - reset is not a meaningful seek bottleneck
+  - audio recovery is not a meaningful seek bottleneck
+  - demux/read-packet cost is not a meaningful seek bottleneck
+  - the dominant seek cost is forward video recovery from the left keyframe
+- keep software-side seek follow-ups narrowly scoped:
+  - review whether recovery-time video frame mapping/copy can be reduced further
+  - trim seek diagnostics down to long-term useful fields once hardware-decode work starts
+- start the next major seek-performance track:
+  - design and integrate video hardware decode for the playing-seek path
+  - preserve the current keyframe-anchored recovery semantics while swapping the heavy video decode backend
+- defer continuity-seek / buffered-seek complexity unless hardware decode still leaves playing seek unsatisfactory
 
 Why this matters:
 
 - seek responsiveness is part of the core player feel
 - poor seek behavior will be much more visible to users than many backend details
 - seek touches decode, runtime reset, audio output, and sync wake policy together, so it is worth treating as a first-class performance track
+
+Current conclusion:
+
+- the remaining dominant seek cost is video soft-decode recovery itself
+- future seek wins are therefore more likely to come from the video decode backend than from more seek-specific control-flow complexity
 
 ## P1 - Real Output and Backend Boundaries
 

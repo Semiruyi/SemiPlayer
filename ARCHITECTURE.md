@@ -201,7 +201,7 @@ This is already a meaningful step beyond the original host-pump prototype.
 
 Still true, though:
 
-- decode supply is not yet a fully separate worker
+- decode supply now has its own worker, but decode-result commit still shares the conservative serialized player mutation boundary
 - audio output does not yet own a separate player-side controller thread
 - render backend work is not yet split into its own backend-specific execution model
 
