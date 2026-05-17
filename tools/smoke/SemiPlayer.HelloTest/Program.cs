@@ -773,15 +773,22 @@ internal sealed class PlayerSmokeWindow : Window
             $"Lock {FormatSeekMetricUs(snapshot.SeekLockWaitUs)}  Ffmpeg {FormatSeekMetricUs(snapshot.SeekFfmpegSeekUs)}  Reset {FormatSeekMetricUs(snapshot.SeekResetUs)}";
         string seekRecoveryPart =
             $"Seek VDec {FormatSeekMetricUs(snapshot.SeekFirstVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstVideoPtsMs)}  " +
+            $"VDec>=T {FormatSeekMetricUs(snapshot.SeekFirstPostTargetVideoDecodedUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstPostTargetVideoPtsMs)}  " +
+            $"AT@VDec>=T {FormatSeekPtsMs(snapshot.SeekAudioPositionAtFirstPostTargetVideoDecodedMs)}  " +
             $"ADecRaw {FormatSeekMetricUs(snapshot.SeekFirstAudioDecoderOutputUs)}  " +
             $"APlay {FormatSeekMetricUs(snapshot.SeekFirstAudioDecodedUs)}  " +
-            $"Cur {FormatSeekMetricUs(snapshot.SeekFirstCurrentVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstCurrentVideoPtsMs)}  " +
-            $"dT {FormatSignedMs(snapshot.SeekCurrentVideoMinusTargetMs)}";
+            $"Cur {FormatSeekMetricUs(snapshot.SeekFirstCurrentVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekFirstCurrentVideoPtsMs)}";
         string seekTargetPart =
             $"Seek VReady {FormatSeekMetricUs(snapshot.SeekTargetVideoReadyUs)} @ {FormatSeekPtsMs(snapshot.SeekTargetVideoPtsMs)}  " +
             $"AReady {FormatSeekMetricUs(snapshot.SeekTargetAudioReadyUs)}  " +
             $"Stable {FormatSeekMetricUs(snapshot.SeekStableUs)}  " +
             $"PreTarget Dec {snapshot.SeekPreTargetVideoDecodedCount}  Cur {snapshot.SeekPreTargetCurrentVideoCount}";
+        string seekSyncPart =
+            $"Seek DropBeforeCur {snapshot.SeekPostTargetVideoDroppedBeforeCurrentCount}  " +
+            $"AudioStartedBeforeCur {snapshot.SeekAudioOutputStartedBeforeCurrent}  " +
+            $"AudioStart {FormatSeekMetricUs(snapshot.SeekAudioOutputStartUs)}  " +
+            $"AT@Cur {FormatSeekPtsMs(snapshot.SeekAudioPositionAtFirstCurrentVideoMs)}  " +
+            $"AAdv(VDec>=T->Cur) {FormatSeekPtsMs(snapshot.SeekAudioAdvancedBetweenPostTargetDecodeAndCurrentMs)}";
         string seekAnchorPart =
             $"Seek FirstVideoPkt {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketPtsMs)} / DTS {FormatSeekPtsMs(snapshot.SeekFirstVideoPacketDtsMs)}  " +
             $"Key {(snapshot.SeekFirstVideoPacketIsKey != 0 ? 1 : 0)}  " +
@@ -826,6 +833,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"{seekPart}{Environment.NewLine}" +
             $"{seekRecoveryPart}{Environment.NewLine}" +
             $"{seekTargetPart}{Environment.NewLine}" +
+            $"{seekSyncPart}{Environment.NewLine}" +
             $"{seekAnchorPart}{Environment.NewLine}" +
             $"{seekExpectedPart}{Environment.NewLine}" +
             $"{playbackPart}{Environment.NewLine}" +
@@ -1638,11 +1646,18 @@ internal struct SemiPlaybackSnapshot
     internal long SeekResetUs;
     internal long SeekFirstVideoDecodedUs;
     internal long SeekFirstVideoPtsMs;
+    internal long SeekFirstPostTargetVideoDecodedUs;
+    internal long SeekFirstPostTargetVideoPtsMs;
+    internal long SeekAudioPositionAtFirstPostTargetVideoDecodedMs;
     internal long SeekFirstAudioDecoderOutputUs;
     internal long SeekFirstAudioDecodedUs;
     internal long SeekFirstCurrentVideoReadyUs;
     internal long SeekFirstCurrentVideoPtsMs;
-    internal long SeekCurrentVideoMinusTargetMs;
+    internal long SeekAudioPositionAtFirstCurrentVideoMs;
+    internal long SeekAudioAdvancedBetweenPostTargetDecodeAndCurrentMs;
+    internal ulong SeekPostTargetVideoDroppedBeforeCurrentCount;
+    internal uint SeekAudioOutputStartedBeforeCurrent;
+    internal long SeekAudioOutputStartUs;
     internal long SeekTargetVideoReadyUs;
     internal long SeekTargetVideoPtsMs;
     internal long SeekTargetAudioReadyUs;

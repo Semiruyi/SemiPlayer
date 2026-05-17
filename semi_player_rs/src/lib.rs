@@ -275,15 +275,31 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_reset_us: diagnostics.seek_reset_us,
         seek_first_video_decoded_us: diagnostics.seek_first_video_decoded_us,
         seek_first_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_first_video_pts_us),
+        seek_first_post_target_video_decoded_us: diagnostics.seek_first_post_target_video_decoded_us,
+        seek_first_post_target_video_pts_ms: diagnostic_us_to_ms(
+            diagnostics.seek_first_post_target_video_pts_us,
+        ),
+        seek_audio_position_at_first_post_target_video_decoded_ms: diagnostic_us_to_ms(
+            diagnostics.seek_audio_position_at_first_post_target_video_decoded_us,
+        ),
         seek_first_audio_decoder_output_us: diagnostics.seek_first_audio_decoder_output_us,
         seek_first_audio_decoded_us: diagnostics.seek_first_audio_decoded_us,
         seek_first_current_video_ready_us: diagnostics.seek_first_current_video_ready_us,
         seek_first_current_video_pts_ms: diagnostic_us_to_ms(
             diagnostics.seek_first_current_video_pts_us,
         ),
-        seek_current_video_minus_target_ms: diagnostic_us_to_ms(
-            diagnostics.seek_current_video_minus_target_us,
+        seek_audio_position_at_first_current_video_ms: diagnostic_us_to_ms(
+            diagnostics.seek_audio_position_at_first_current_video_us,
         ),
+        seek_audio_advanced_between_post_target_decode_and_current_ms: diagnostic_us_to_ms(
+            diagnostics.seek_audio_advanced_between_post_target_decode_and_current_us,
+        ),
+        seek_post_target_video_dropped_before_current_count: diagnostics
+            .seek_post_target_video_dropped_before_current_count,
+        seek_audio_output_started_before_current: u32::from(
+            diagnostics.seek_audio_output_started_before_current,
+        ),
+        seek_audio_output_start_us: diagnostics.seek_audio_output_start_us,
         seek_target_video_ready_us: diagnostics.seek_target_video_ready_us,
         seek_target_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_target_video_pts_us),
         seek_target_audio_ready_us: diagnostics.seek_target_audio_ready_us,
@@ -534,6 +550,9 @@ pub extern "C" fn semi_player_seek(
             .audio_output
             .with_mut(|audio_output| audio_output.clear_buffer());
         player.audio_clock.seek(target_us);
+        if player.state() == PlayerState::Playing {
+            player.audio_clock.pause();
+        }
         player.video_scheduler = Default::default();
         player.video_sync.reset();
         player.begin_seek_recovery(target_us);

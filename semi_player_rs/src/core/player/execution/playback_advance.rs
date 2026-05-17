@@ -1,5 +1,4 @@
 use crate::api::types::PlayerState;
-use crate::audio::core::clock::DevicePlaybackTiming;
 use crate::audio::core::output::AudioOutputChunk;
 use crate::audio::core::output_controller::SharedAudioOutputController;
 use crate::core::player::handle::SemiPlayerHandle;
@@ -24,7 +23,6 @@ pub(crate) struct PlaybackAdvancePlan {
 pub(crate) struct PlaybackAdvanceResult {
     audio_chunks: Vec<AudioOutputChunk>,
     audio_chunks_submitted: bool,
-    device_timing: Option<DevicePlaybackTiming>,
 }
 
 pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAdvancePlan {
@@ -69,10 +67,8 @@ pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAd
 }
 
 pub(crate) fn execute_playback_plan(plan: &PlaybackAdvancePlan) -> PlaybackAdvanceResult {
-    plan.audio_output.with_mut(|audio_output| {
-        audio_output.ensure_backend_format(plan.audio_format);
-        audio_output.sync_started_state(plan.state);
-    });
+    plan.audio_output
+        .with_mut(|audio_output| audio_output.ensure_backend_format(plan.audio_format));
 
     let configured_format = plan
         .audio_output
@@ -90,14 +86,9 @@ pub(crate) fn execute_playback_plan(plan: &PlaybackAdvancePlan) -> PlaybackAdvan
         }
     });
 
-    let device_timing = plan
-        .audio_output
-        .with_ref(|audio_output| audio_output.playback_timing());
-
     PlaybackAdvanceResult {
         audio_chunks: plan.audio_chunks.clone(),
         audio_chunks_submitted,
-        device_timing,
     }
 }
 
@@ -112,16 +103,64 @@ pub(crate) fn finish_playback_advance(
             .runtime
             .restore_audio_chunks_front(result.audio_chunks);
     }
-    player.audio_clock.update_from_device(result.device_timing);
-    let playback_time_us = player.audio_clock.presentation_time_us();
+    let playback_time_us = player.current_playback_time_us();
     let post_sync_discard = player
         .runtime
         .discard_consumed_audio_frames(playback_time_us);
     player.observe_stale_audio_discard(post_sync_discard);
     let sync_snapshot = VideoSyncService::tick(player, playback_time_us);
+
+    let started_before_sync = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.snapshot().started);
+    let mut should_update_clock_from_device = false;
+
+    if player.is_gating_audio_for_seek_recovery() {
+        if player.runtime.current_video_frame().is_some()
+            && sync_snapshot.core_sync_error_us == 0
+        {
+            player
+                .audio_output
+                .with_mut(|audio_output| audio_output.sync_started_state(plan.state));
+
+            let device_timing = player
+                .audio_output
+                .with_ref(|audio_output| audio_output.playback_timing());
+            if device_timing.is_some() {
+                player.audio_clock.play();
+                player.audio_clock.update_from_device(device_timing);
+                let _ = player.release_audio_gate_for_seek_recovery();
+            }
+        }
+    } else {
+        player
+            .audio_output
+            .with_mut(|audio_output| audio_output.sync_started_state(plan.state));
+        should_update_clock_from_device = true;
+    }
+
+    let started_after_sync = player
+        .audio_output
+        .with_ref(|audio_output| audio_output.snapshot().started);
+    if !started_before_sync && started_after_sync {
+        player.observe_seek_audio_output_started();
+    }
+
+    if should_update_clock_from_device {
+        let device_timing = player
+            .audio_output
+            .with_ref(|audio_output| audio_output.playback_timing());
+        player.audio_clock.update_from_device(device_timing);
+    }
+
+    let playback_time_us = player.current_playback_time_us();
     let audio_snapshot = player.audio_output.with_ref(|audio_output| audio_output.snapshot());
     if let Some(current_pts_us) = player.runtime.current_video_frame().map(|frame| frame.pts_us) {
-        player.observe_seek_current_video(current_pts_us, sync_snapshot.current_video_effective_end_us);
+        player.observe_seek_current_video(
+            current_pts_us,
+            sync_snapshot.current_video_effective_end_us,
+            playback_time_us,
+        );
     }
     if audio_snapshot.started && audio_snapshot.audible_frames_total > 0 {
         player.observe_seek_target_audio_ready();

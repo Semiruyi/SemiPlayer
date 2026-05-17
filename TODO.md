@@ -111,16 +111,16 @@ Tasks:
 
 ### P0.5 Improve seek responsiveness and seek-path cost
 
-Status: active, observability and first pre-target video fast path landed
+Status: active, anchor observability and first recovery-path reductions landed
 
 Tasks:
 
-- add seek result metrics:
+- keep seek result metrics healthy:
   - API seek duration
   - first video frame latency
   - first audible audio latency
   - stable post-seek settle time
-- add internal seek stage timing metrics:
+- keep internal seek stage timing metrics healthy:
   - lock wait
   - FFmpeg seek
   - immediate reset
@@ -131,17 +131,25 @@ Tasks:
   - stable settle
 - separate seek correctness from seek speed so regressions are visible
 - start with core-internal observability before adding end-to-end host timing
-- document the current seek path and the target seek-recovery model explicitly
-- adopt a performance-first keyframe-anchored seek strategy for local playback
-- add a dedicated seek-recovery path instead of treating seek as a plain full reset + refill
+- maintain the documented seek path and target seek-recovery model explicitly
+- keep the performance-first keyframe-anchored seek strategy as the default local-playback baseline
+- keep seek recovery as a dedicated path instead of treating seek as a plain full reset + refill
 - reduce work done while holding the shared player handle during seek
 - review which state must be cleared immediately vs lazily rebuilt after seek
 - avoid unnecessary wake storms or duplicate refill work right after seek
 - define a practical short-term seek target for local files:
   - fast first-frame response after keyboard/progress-bar seek
   - stable A/V resettling shortly after
-- trim audio to the target point during seek recovery
+- keep the expected-left-keyframe diagnostics path healthy so actual-vs-expected anchor regressions stay visible
 - keep refining which pre-target video frames can bypass expensive post-processing during seek recovery
+- continue reducing pre-target audio work before full playback-grade conversion
+- add explicit reset/rebuild work-accounting metrics:
+  - runtime clear
+  - audio backend clear
+  - audio restart timing
+  - first post-target current-video timing
+- decide, from measurement, whether reset granularity or post-target video promotion is the next highest-value seek optimization
+- defer hardware decode as a seek optimization until the remaining recovery/reset bottlenecks are clearly measured
 
 Why this matters:
 

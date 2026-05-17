@@ -193,9 +193,15 @@ impl VideoSyncService {
     pub fn sync(player: &mut SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         let target_video_time_us =
             add_media_time_us(playback_time_us, player.host_presentation_offset_us);
-        let selection = player
-            .runtime
-            .select_video_frame(&player.video_scheduler, target_video_time_us);
+        let mut dropped_pts = Vec::new();
+        let selection = player.runtime.select_video_frame(
+            &player.video_scheduler,
+            target_video_time_us,
+            |frame| dropped_pts.push(frame.pts_us),
+        );
+        for pts_us in dropped_pts {
+            player.observe_seek_video_dropped(pts_us);
+        }
         let snapshot = Self::evaluate(player, playback_time_us);
         player.video_sync.observe_sync(snapshot, selection);
         snapshot
@@ -283,7 +289,7 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         let _ = player
             .runtime
-            .select_video_frame(&player.video_scheduler, 0);
+            .select_video_frame(&player.video_scheduler, 0, |_| {});
 
         let snapshot = VideoSyncService::evaluate(&player, 48_000);
 
@@ -297,7 +303,7 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         let _ = player
             .runtime
-            .select_video_frame(&player.video_scheduler, 0);
+            .select_video_frame(&player.video_scheduler, 0, |_| {});
 
         let snapshot = VideoSyncService::evaluate(&player, 10_000);
 
@@ -312,7 +318,7 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         let _ = player
             .runtime
-            .select_video_frame(&player.video_scheduler, 0);
+            .select_video_frame(&player.video_scheduler, 0, |_| {});
 
         let snapshot_before_boundary = VideoSyncService::evaluate(&player, 40_000);
         let snapshot_after_boundary = VideoSyncService::evaluate(&player, 41_000);

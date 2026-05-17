@@ -241,7 +241,7 @@ Transitional parts:
 
 - decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
 - CPU BGRA copy is still the main host frame-delivery path
-- seek recovery is now explicit, but audio trim and keyframe-anchored seek policy are still incomplete
+- seek recovery is now explicit and keyframe-anchored diagnostics are in place, but reset/rebuild cost and post-target recovery cost are still being reduced
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state
 

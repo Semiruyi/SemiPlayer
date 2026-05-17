@@ -88,7 +88,7 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         let _ = player
             .runtime
-            .select_video_frame(&player.video_scheduler, 0);
+            .select_video_frame(&player.video_scheduler, 0, |_| {});
         let _ = crate::core::player::video_sync::VideoSyncService::tick(&mut player, 0);
 
         let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();

@@ -84,6 +84,7 @@ impl PlayerScheduleService {
 struct ScheduleContext<'a> {
     state: PlayerState,
     playback_time_us: MediaTimeUs,
+    gating_audio_for_seek_recovery: bool,
     decode_supply: DecodeSupplyStatus,
     video_sync_dirty: bool,
     runtime_video: RuntimeVideoSnapshot<'a>,
@@ -93,11 +94,12 @@ struct ScheduleContext<'a> {
 
 impl<'a> ScheduleContext<'a> {
     fn capture(player: &'a SemiPlayerHandle) -> Self {
-        let playback_time_us = player.audio_clock.presentation_time_us();
+        let playback_time_us = player.current_playback_time_us();
 
         Self {
             state: player.state(),
             playback_time_us,
+            gating_audio_for_seek_recovery: player.is_gating_audio_for_seek_recovery(),
             decode_supply: player.runtime.decode_supply_status(),
             video_sync_dirty: player.video_sync.is_dirty(),
             runtime_video: player.runtime.video_snapshot(),
@@ -126,6 +128,10 @@ fn compute_video_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeU
 }
 
 fn compute_audio_refill_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeUs> {
+    if context.gating_audio_for_seek_recovery {
+        return None;
+    }
+
     let snapshot = context.audio_output;
     let format = snapshot.configured_format?;
 
@@ -230,7 +236,7 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         let _ = player
             .runtime
-            .select_video_frame(&player.video_scheduler, 0);
+            .select_video_frame(&player.video_scheduler, 0, |_| {});
 
         let hint = PlayerScheduleService::evaluate(&player);
 

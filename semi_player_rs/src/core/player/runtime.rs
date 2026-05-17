@@ -327,6 +327,7 @@ impl PlayerRuntime {
         &mut self,
         scheduler: &VideoScheduler,
         target_time_us: MediaTimeUs,
+        mut on_drop: impl FnMut(&VideoFrame),
     ) -> VideoSelectionStats {
         let mut stats = VideoSelectionStats::default();
 
@@ -350,7 +351,9 @@ impl PlayerRuntime {
                     return stats;
                 }
                 VideoScheduleDecision::DropFrame => {
-                    let _ = self.queued_video_frames.pop_front();
+                    if let Some(frame) = self.queued_video_frames.pop_front() {
+                        on_drop(&frame);
+                    }
                     stats.dropped_frames = stats.dropped_frames.saturating_add(1);
                     continue;
                 }
@@ -396,7 +399,7 @@ mod tests {
             is_key_frame: true,
         });
 
-        let stats = runtime.select_video_frame(&scheduler, 10_000);
+        let stats = runtime.select_video_frame(&scheduler, 10_000, |_| {});
         let current = runtime.current_video_frame().expect("current frame");
 
         assert_eq!(
@@ -438,7 +441,7 @@ mod tests {
             is_key_frame: false,
         });
 
-        let stats = runtime.select_video_frame(&scheduler, 90_000);
+        let stats = runtime.select_video_frame(&scheduler, 90_000, |_| {});
 
         assert_eq!(
             stats,
@@ -480,7 +483,7 @@ mod tests {
             data: vec![0; 1920 * 1080 * 4],
             is_key_frame: true,
         });
-        let _ = runtime.select_video_frame(&VideoScheduler::new(), 10_000);
+        let _ = runtime.select_video_frame(&VideoScheduler::new(), 10_000, |_| {});
         runtime.mark_end_of_stream();
 
         runtime.clear();
