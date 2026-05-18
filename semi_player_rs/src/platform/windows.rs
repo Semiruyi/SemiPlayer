@@ -66,9 +66,9 @@ impl D3d11SharedDevice {
                 None,
                 D3D_DRIVER_TYPE_HARDWARE,
                 HMODULE::default(),
-                D3D11_CREATE_DEVICE_SINGLETHREADED | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
                 Some(&feature_levels),
-                0, // SDK version
+                7, // D3D11_SDK_VERSION
                 Some(&mut device),
                 None,
                 Some(&mut device_context),

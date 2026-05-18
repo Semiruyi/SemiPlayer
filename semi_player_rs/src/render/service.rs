@@ -19,6 +19,22 @@ impl RenderService {
         Self::default()
     }
 
+    #[cfg(windows)]
+    pub fn with_d3d11_device(
+        device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+        device_context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    ) -> Self {
+        use crate::render::backends::d3d11::D3d11RendererConfig;
+        Self {
+            pipeline: VideoRenderPipeline::new(),
+            d3d11_renderer: D3d11Renderer::with_device(
+                D3d11RendererConfig::default(),
+                device,
+                device_context,
+            ),
+        }
+    }
+
     pub fn render_frames(
         &mut self,
         request: VideoRenderRequest,

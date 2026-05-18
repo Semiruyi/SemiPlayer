@@ -204,6 +204,20 @@ pub struct SemiPlayerHandle {
 
 impl SemiPlayerHandle {
     pub fn new() -> Self {
+        #[cfg(windows)]
+        let d3d11_device = crate::platform::windows::D3d11SharedDevice::new().ok();
+
+        #[cfg(windows)]
+        let render = match &d3d11_device {
+            Some(d3d11) => RenderService::with_d3d11_device(
+                d3d11.device().clone(),
+                d3d11.device_context().clone(),
+            ),
+            None => RenderService::new(),
+        };
+        #[cfg(not(windows))]
+        let render = RenderService::new();
+
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
@@ -221,11 +235,11 @@ impl SemiPlayerHandle {
             audio_clock: AudioClock::new(),
             audio_output: SharedAudioOutputController::default(),
             video_scheduler: VideoScheduler::new(),
-            render: RenderService::new(),
+            render,
             runtime: PlayerRuntime::new(),
             video_sync: VideoSyncState::default(),
             #[cfg(windows)]
-            d3d11_device: crate::platform::windows::D3d11SharedDevice::new().ok(),
+            d3d11_device,
         }
     }
 

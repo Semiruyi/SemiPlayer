@@ -275,7 +275,11 @@ impl VideoRenderPipeline {
             plan.target.presentation_pixel_format,
         ) {
             (VideoSurfaceKind::CpuPacked, PixelFormatCategory::Bgra8) => {
-                cpu_bgra::try_render(frame)
+                if frame.surface_kind() == VideoSurfaceKind::D3d11Texture2D {
+                    d3d11_presenter::try_render(frame, d3d11_renderer)
+                } else {
+                    cpu_bgra::try_render(frame)
+                }
             }
             (VideoSurfaceKind::D3d11Texture2D, PixelFormatCategory::Bgra8) => {
                 d3d11_presenter::try_render(frame, d3d11_renderer)

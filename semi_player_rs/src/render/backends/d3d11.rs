@@ -2,7 +2,19 @@ use crate::render::core::frame::{
     DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoColorInfo, VideoFrame,
     VideoSurface,
 };
+use std::mem::ManuallyDrop;
+use std::ptr;
 use std::sync::Arc;
+#[cfg(windows)]
+use windows::Win32::Graphics::Direct3D11::{
+    D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING, ID3D11Device, ID3D11DeviceContext, ID3D11Resource,
+    ID3D11Texture2D,
+};
+#[cfg(windows)]
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+#[cfg(windows)]
+use windows::core::Interface;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,10 +165,14 @@ pub fn plan_bgra_texture_render(
     })
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Debug, Default, Eq, PartialEq)]
 pub struct D3d11Renderer {
     config: D3d11RendererConfig,
     state: D3d11RendererState,
+    #[cfg(windows)]
+    device: Option<ID3D11Device>,
+    #[cfg(windows)]
+    device_context: Option<ID3D11DeviceContext>,
 }
 
 impl D3d11Renderer {
@@ -168,6 +184,24 @@ impl D3d11Renderer {
         Self {
             config,
             state: D3d11RendererState::default(),
+            #[cfg(windows)]
+            device: None,
+            #[cfg(windows)]
+            device_context: None,
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn with_device(
+        config: D3d11RendererConfig,
+        device: ID3D11Device,
+        device_context: ID3D11DeviceContext,
+    ) -> Self {
+        Self {
+            config,
+            state: D3d11RendererState::default(),
+            device: Some(device),
+            device_context: Some(device_context),
         }
     }
 
@@ -215,10 +249,125 @@ impl D3d11Renderer {
                 is_key_frame: frame.is_key_frame,
                 surface: Arc::new(plan.output.into_surface()),
             }),
-            D3d11RenderPlanKind::Nv12ToBgraTexture | D3d11RenderPlanKind::Yuv420pToBgraTexture => {
+            D3d11RenderPlanKind::Nv12ToBgraTexture => {
+                #[cfg(windows)]
+                {
+                    self.readback_nv12_to_cpu_bgra(frame, &plan.input)
+                }
+                #[cfg(not(windows))]
+                {
+                    let _ = (frame, plan);
+                    Err(D3d11RenderError::BackendUnavailable)
+                }
+            }
+            D3d11RenderPlanKind::Yuv420pToBgraTexture => {
                 Err(D3d11RenderError::BackendUnavailable)
             }
         }
+    }
+
+    #[cfg(windows)]
+    fn readback_nv12_to_cpu_bgra(
+        &self,
+        frame: &DecodedVideoFrame,
+        request: &D3d11BgraRenderRequest,
+    ) -> Result<PresentationFrame, D3d11RenderError> {
+        let Some(device) = &self.device else {
+            return Err(D3d11RenderError::BackendUnavailable);
+        };
+        let Some(device_context) = &self.device_context else {
+            return Err(D3d11RenderError::BackendUnavailable);
+        };
+
+        let width = frame.width;
+        let height = frame.height;
+
+        // Create staging texture
+        let staging_desc = D3D11_TEXTURE2D_DESC {
+            Width: width,
+            Height: height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT(103), // DXGI_FORMAT_NV12
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+
+        let mut staging: Option<ID3D11Texture2D> = None;
+        unsafe {
+            device
+                .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+                .map_err(|_| D3d11RenderError::BackendUnavailable)?;
+        }
+        let staging = staging.ok_or(D3d11RenderError::BackendUnavailable)?;
+
+        // Wrap source texture pointer without taking ownership
+        let source_texture: ID3D11Texture2D = unsafe {
+            Interface::from_raw(request.texture_ptr as *mut _)
+        };
+        let source = ManuallyDrop::new(source_texture);
+
+        // Copy from decode texture to staging
+        unsafe {
+            let src_resource: ID3D11Resource = source.cast().map_err(|_| D3d11RenderError::BackendUnavailable)?;
+            let dst_resource: ID3D11Resource = staging.cast().map_err(|_| D3d11RenderError::BackendUnavailable)?;
+            device_context.CopySubresourceRegion(
+                &dst_resource,
+                0,
+                0, 0, 0,
+                &src_resource,
+                request.array_slice,
+                None,
+            );
+        }
+
+        // Map staging to read NV12 planes
+        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe {
+            let staging_resource: ID3D11Resource = staging.cast().map_err(|_| D3d11RenderError::BackendUnavailable)?;
+            device_context
+                .Map(&staging_resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(|_| D3d11RenderError::BackendUnavailable)?;
+        }
+
+        let y_pitch = mapped.RowPitch as i32;
+        let uv_pitch = mapped.RowPitch as i32;
+        let y_ptr = mapped.pData as *const u8;
+        let uv_ptr = unsafe { mapped.pData.add((height as usize) * (mapped.RowPitch as usize)) as *const u8 };
+
+        let bgra_data = nv12_to_bgra_via_swscale(
+            y_ptr,
+            uv_ptr,
+            y_pitch,
+            uv_pitch,
+            width,
+            height,
+        );
+
+        unsafe {
+            let staging_resource: ID3D11Resource = staging.cast().map_err(|_| D3d11RenderError::BackendUnavailable)?;
+            device_context.Unmap(&staging_resource, 0);
+        }
+
+        let Some(bgra_data) = bgra_data else {
+            return Err(D3d11RenderError::BackendUnavailable);
+        };
+
+        Ok(VideoFrame {
+            pts_us: frame.pts_us,
+            duration_us: frame.duration_us,
+            width,
+            height,
+            is_key_frame: frame.is_key_frame,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Bgra8,
+                width as usize * 4,
+                bgra_data,
+            )),
+        })
     }
 
     #[allow(dead_code)]
@@ -230,6 +379,58 @@ impl D3d11Renderer {
             output_pool_hint: self.config.output_pool_hint,
         }
     }
+}
+
+#[cfg(windows)]
+fn nv12_to_bgra_via_swscale(
+    y_ptr: *const u8,
+    uv_ptr: *const u8,
+    y_pitch: i32,
+    uv_pitch: i32,
+    width: u32,
+    height: u32,
+) -> Option<Vec<u8>> {
+    use ffmpeg_next::ffi;
+
+    let sws_ctx = unsafe {
+        ffi::sws_getContext(
+            width as i32,
+            height as i32,
+            ffi::AVPixelFormat::AV_PIX_FMT_NV12,
+            width as i32,
+            height as i32,
+            ffi::AVPixelFormat::AV_PIX_FMT_BGRA,
+            ffi::SWS_BILINEAR as i32,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+        )
+    };
+    if sws_ctx.is_null() {
+        return None;
+    }
+
+    let stride = width as usize * 4;
+    let mut dst = vec![0u8; stride * height as usize];
+    let src_data = [y_ptr, uv_ptr];
+    let src_stride = [y_pitch, uv_pitch];
+    let dst_data = [dst.as_mut_ptr()];
+    let dst_stride = [stride as i32];
+
+    unsafe {
+        ffi::sws_scale(
+            sws_ctx,
+            src_data.as_ptr(),
+            src_stride.as_ptr(),
+            0,
+            height as i32,
+            dst_data.as_ptr(),
+            dst_stride.as_ptr(),
+        );
+        ffi::sws_freeContext(sws_ctx);
+    }
+
+    Some(dst)
 }
 
 // Transitional compatibility helper for the current pipeline call site.
