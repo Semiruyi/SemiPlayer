@@ -30,6 +30,10 @@ pub struct PlayerDiagnosticsSnapshot {
     pub stale_audio_discard_last_frame_count: u64,
     pub stale_audio_discard_last_lag_us: MediaTimeUs,
     pub stale_audio_discard_max_lag_us: MediaTimeUs,
+    pub render_frames_total: u64,
+    pub render_passthrough_frames_total: u64,
+    pub render_passthrough_with_subtitle_intent_frames_total: u64,
+    pub render_requires_transform_frames_total: u64,
     pub seek_event_count: u64,
     pub seek_active: bool,
     pub last_seek_target_us: MediaTimeUs,
@@ -80,6 +84,10 @@ struct PlayerDiagnostics {
     stale_audio_discard_last_frame_count: AtomicU64,
     stale_audio_discard_last_lag_us: AtomicI64,
     stale_audio_discard_max_lag_us: AtomicI64,
+    render_frames_total: AtomicU64,
+    render_passthrough_frames_total: AtomicU64,
+    render_passthrough_with_subtitle_intent_frames_total: AtomicU64,
+    render_requires_transform_frames_total: AtomicU64,
     seek: Mutex<SeekDiagnosticsState>,
 }
 
@@ -355,6 +363,21 @@ impl SemiPlayerHandle {
         self.diagnostics.observe_stale_audio_discard(discard);
     }
 
+    pub fn observe_render_stats(
+        &self,
+        rendered_frames: usize,
+        passthrough_frames: usize,
+        passthrough_with_subtitle_intent_frames: usize,
+        requires_transform_frames: usize,
+    ) {
+        self.diagnostics.observe_render_stats(
+            rendered_frames,
+            passthrough_frames,
+            passthrough_with_subtitle_intent_frames,
+            requires_transform_frames,
+        );
+    }
+
     pub fn observe_seek_requested(&self, target_us: MediaTimeUs) {
         self.diagnostics.observe_seek_requested(target_us);
     }
@@ -503,6 +526,31 @@ impl PlayerDiagnostics {
         self.stale_audio_discard_last_lag_us
             .store(discard.max_lag_us, Ordering::Relaxed);
         update_atomic_max(&self.stale_audio_discard_max_lag_us, discard.max_lag_us);
+    }
+
+    fn observe_render_stats(
+        &self,
+        rendered_frames: usize,
+        passthrough_frames: usize,
+        passthrough_with_subtitle_intent_frames: usize,
+        requires_transform_frames: usize,
+    ) {
+        self.render_frames_total.fetch_add(
+            u64::try_from(rendered_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.render_passthrough_frames_total.fetch_add(
+            u64::try_from(passthrough_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.render_passthrough_with_subtitle_intent_frames_total.fetch_add(
+            u64::try_from(passthrough_with_subtitle_intent_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.render_requires_transform_frames_total.fetch_add(
+            u64::try_from(requires_transform_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
     }
 
     fn observe_seek_requested(&self, target_us: MediaTimeUs) {
@@ -713,6 +761,16 @@ impl PlayerDiagnostics {
                 .load(Ordering::Relaxed),
             stale_audio_discard_max_lag_us: self
                 .stale_audio_discard_max_lag_us
+                .load(Ordering::Relaxed),
+            render_frames_total: self.render_frames_total.load(Ordering::Relaxed),
+            render_passthrough_frames_total: self
+                .render_passthrough_frames_total
+                .load(Ordering::Relaxed),
+            render_passthrough_with_subtitle_intent_frames_total: self
+                .render_passthrough_with_subtitle_intent_frames_total
+                .load(Ordering::Relaxed),
+            render_requires_transform_frames_total: self
+                .render_requires_transform_frames_total
                 .load(Ordering::Relaxed),
             seek_event_count: seek_snapshot.seek_event_count,
             seek_active: seek_snapshot.seek_active,

@@ -266,6 +266,8 @@ Current incremental state of that split:
   - render supply now passes an explicit render request into that pipeline
   - that request carries both pixel-format and presentation-surface preferences
   - higher-level presentation target profiles can now map host intent onto those preferences
+  - render-core planning can now tell whether the request is true passthrough or already needs a
+    real transform step
   - the current render-core pipeline still returns the same surface unchanged
 
 That means the architecture boundary is now visible in code, even though the first render stage is

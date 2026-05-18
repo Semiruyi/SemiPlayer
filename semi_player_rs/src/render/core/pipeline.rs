@@ -85,6 +85,20 @@ impl VideoRenderRequest {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VideoRenderPipeline;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct VideoRenderStats {
+    pub rendered_frames: usize,
+    pub passthrough_frames: usize,
+    pub passthrough_with_subtitle_intent_frames: usize,
+    pub requires_transform_frames: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct VideoRenderBatch {
+    pub frames: Vec<PresentationFrame>,
+    pub stats: VideoRenderStats,
+}
+
 impl VideoRenderPipeline {
     pub fn new() -> Self {
         Self
@@ -95,21 +109,77 @@ impl VideoRenderPipeline {
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
-        let resolved_request = self.resolve_request(request, &frame);
-        let _target_pixel_format = resolved_request.presentation_pixel_format;
-        let _target_surface_kind = resolved_request.presentation_surface_kind;
-        frame
+        let plan = self.plan_render(request, &frame);
+
+        match plan.path {
+            VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => frame,
+            VideoRenderPath::RequiresTransform => {
+                // The first render-pipeline implementation only supports passthrough.
+                // Keep frame delivery stable for now while surfacing the required target
+                // through explicit planning/tests.
+                let _target_pixel_format = plan.target.presentation_pixel_format;
+                let _target_surface_kind = plan.target.presentation_surface_kind;
+                frame
+            }
+        }
     }
 
     pub fn render_frames(
         &self,
         request: VideoRenderRequest,
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
-    ) -> Vec<PresentationFrame> {
-        frames
-            .into_iter()
-            .map(|frame| self.render_frame(request, frame))
-            .collect()
+    ) -> VideoRenderBatch {
+        let mut batch = VideoRenderBatch::default();
+
+        for frame in frames {
+            let plan = self.plan_render(request, &frame);
+            match plan.path {
+                VideoRenderPath::Passthrough => {
+                    batch.stats.passthrough_frames =
+                        batch.stats.passthrough_frames.saturating_add(1);
+                }
+                VideoRenderPath::PassthroughWithSubtitleIntent => {
+                    batch.stats.passthrough_with_subtitle_intent_frames = batch
+                        .stats
+                        .passthrough_with_subtitle_intent_frames
+                        .saturating_add(1);
+                }
+                VideoRenderPath::RequiresTransform => {
+                    batch.stats.requires_transform_frames = batch
+                        .stats
+                        .requires_transform_frames
+                        .saturating_add(1);
+                }
+            }
+
+            batch.frames.push(self.render_frame(request, frame));
+            batch.stats.rendered_frames = batch.stats.rendered_frames.saturating_add(1);
+        }
+
+        batch
+    }
+
+    fn plan_render(
+        &self,
+        request: VideoRenderRequest,
+        frame: &DecodedVideoFrame,
+    ) -> VideoRenderPlan {
+        let target = self.resolve_request(request, frame);
+        let input = ResolvedVideoRenderRequest {
+            presentation_pixel_format: frame.pixel_format(),
+            presentation_surface_kind: frame.surface_kind(),
+        };
+        let path = if target == input {
+            if request.subtitles_visible {
+                VideoRenderPath::PassthroughWithSubtitleIntent
+            } else {
+                VideoRenderPath::Passthrough
+            }
+        } else {
+            VideoRenderPath::RequiresTransform
+        };
+
+        VideoRenderPlan { target, path }
     }
 
     fn resolve_request(
@@ -163,6 +233,19 @@ impl VideoRenderPipeline {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum VideoRenderPath {
+    Passthrough,
+    PassthroughWithSubtitleIntent,
+    RequiresTransform,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VideoRenderPlan {
+    target: ResolvedVideoRenderRequest,
+    path: VideoRenderPath,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ResolvedVideoRenderRequest {
     presentation_pixel_format: PixelFormatCategory,
     presentation_surface_kind: VideoSurfaceKind,
@@ -194,7 +277,8 @@ mod tests {
 
     use super::{
         PresentationPixelFormatPreference, PresentationSurfaceKindPreference,
-        PresentationTargetProfile, VideoRenderPipeline, VideoRenderRequest,
+        PresentationTargetProfile, VideoRenderPath, VideoRenderPipeline, VideoRenderRequest,
+        VideoRenderStats,
     };
     use crate::render::core::frame::{
         PixelFormatCategory, VideoFrame, VideoSurface, VideoSurfaceKind,
@@ -228,6 +312,18 @@ mod tests {
         assert_eq!(output.height, input.height);
         assert_eq!(output.pixel_format(), input.pixel_format());
         assert_eq!(output.byte_len(), input.byte_len());
+    }
+
+    #[test]
+    fn passthrough_request_plans_passthrough_path() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(10_000);
+
+        let plan = pipeline.plan_render(VideoRenderRequest::passthrough(true), &input);
+
+        assert_eq!(plan.path, VideoRenderPath::PassthroughWithSubtitleIntent);
+        assert_eq!(plan.target.presentation_pixel_format, input.pixel_format());
+        assert_eq!(plan.target.presentation_surface_kind, input.surface_kind());
     }
 
     #[test]
@@ -283,6 +379,19 @@ mod tests {
     }
 
     #[test]
+    fn cpu_bgra_compatibility_stays_passthrough_for_cpu_bgra_input() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(123_000);
+
+        let plan = pipeline.plan_render(
+            VideoRenderRequest::cpu_bgra_compatibility(true),
+            &input,
+        );
+
+        assert_eq!(plan.path, VideoRenderPath::PassthroughWithSubtitleIntent);
+    }
+
+    #[test]
     fn d3d11_presenter_profile_resolves_to_d3d11_bgra_targets() {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
@@ -297,6 +406,19 @@ mod tests {
             resolved.presentation_surface_kind,
             VideoSurfaceKind::D3d11Texture2D
         );
+    }
+
+    #[test]
+    fn d3d11_presenter_profile_marks_transform_requirement_for_cpu_input() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(123_000);
+
+        let plan = pipeline.plan_render(
+            VideoRenderRequest::d3d11_bgra_presenter(false),
+            &input,
+        );
+
+        assert_eq!(plan.path, VideoRenderPath::RequiresTransform);
     }
 
     #[test]
@@ -316,5 +438,27 @@ mod tests {
 
         assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
         assert_eq!(resolved.presentation_surface_kind, VideoSurfaceKind::CpuPacked);
+    }
+
+    #[test]
+    fn render_batch_reports_transform_requirements() {
+        let pipeline = VideoRenderPipeline::new();
+        let frames = vec![decoded_frame(0), decoded_frame(33_000)];
+
+        let batch = pipeline.render_frames(
+            VideoRenderRequest::d3d11_bgra_presenter(false),
+            frames,
+        );
+
+        assert_eq!(batch.frames.len(), 2);
+        assert_eq!(
+            batch.stats,
+            VideoRenderStats {
+                rendered_frames: 2,
+                passthrough_frames: 0,
+                passthrough_with_subtitle_intent_frames: 0,
+                requires_transform_frames: 2,
+            }
+        );
     }
 }

@@ -553,6 +553,10 @@ Current implementation status:
 - that render request now also carries presentation-surface-kind preference
 - render requests can now be constructed from higher-level presentation target profiles such as
   CPU-BGRA compatibility or D3D11-presenter intent
+- render-core planning now distinguishes passthrough-safe requests from requests that already
+  require a real transform implementation
+- playback diagnostics can now expose how many rendered frames were passthrough versus still
+  requiring a real transform path
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 

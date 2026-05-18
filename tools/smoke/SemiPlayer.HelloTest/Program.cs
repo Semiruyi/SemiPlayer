@@ -1721,6 +1721,10 @@ internal struct SemiPlaybackSnapshot
     internal ulong StaleAudioDiscardLastFrameCount;
     internal long StaleAudioDiscardLastLagUs;
     internal long StaleAudioDiscardMaxLagUs;
+    internal ulong RenderFramesTotal;
+    internal ulong RenderPassthroughFramesTotal;
+    internal ulong RenderPassthroughWithSubtitleIntentFramesTotal;
+    internal ulong RenderRequiresTransformFramesTotal;
     internal ulong SeekEventCount;
     internal uint SeekActive;
     internal long LastSeekTargetMs;

@@ -284,6 +284,12 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         stale_audio_discard_last_frame_count: diagnostics.stale_audio_discard_last_frame_count,
         stale_audio_discard_last_lag_us: diagnostics.stale_audio_discard_last_lag_us,
         stale_audio_discard_max_lag_us: diagnostics.stale_audio_discard_max_lag_us,
+        render_frames_total: diagnostics.render_frames_total,
+        render_passthrough_frames_total: diagnostics.render_passthrough_frames_total,
+        render_passthrough_with_subtitle_intent_frames_total: diagnostics
+            .render_passthrough_with_subtitle_intent_frames_total,
+        render_requires_transform_frames_total: diagnostics
+            .render_requires_transform_frames_total,
         seek_event_count: diagnostics.seek_event_count,
         seek_active: u32::from(diagnostics.seek_active),
         last_seek_target_ms: us_to_ms(diagnostics.last_seek_target_us),

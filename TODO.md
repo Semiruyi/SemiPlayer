@@ -238,6 +238,8 @@ Tasks:
 - route render-context inputs such as output preference and subtitle visibility through the pipeline
 - route presentation-surface policy through the pipeline instead of leaving it implicit in callers
 - define stable presentation target profiles for current host paths before real conversion lands
+- make transform-required requests explicit so real conversion work can land branch by branch
+- keep render-stage passthrough-vs-transform demand visible in diagnostics while implementation catches up
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`
