@@ -185,7 +185,10 @@ mod tests {
         player.runtime.push_video_frame(video_frame(33_000));
         player.runtime.push_video_frame(video_frame(66_000));
 
-        assert!(player.runtime.decode_supply_status().has_sufficient_buffer);
+        assert!(player
+            .runtime
+            .decode_supply_status()
+            .has_sufficient_presentation_buffer);
     }
 
     #[test]

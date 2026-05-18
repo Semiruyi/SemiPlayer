@@ -37,9 +37,14 @@ pub struct VideoSelectionStats {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct DecodeSupplyStatus {
     pub audio_queue_len: usize,
+    pub decoded_video_queue_len: usize,
+    pub presentation_video_queue_len: usize,
+    pub ready_video_frame_count: usize,
     pub buffered_video_frame_count: usize,
     pub target_audio_queue_len: usize,
     pub target_total_video_frames: usize,
+    pub has_sufficient_presentation_buffer: bool,
+    pub has_sufficient_total_video_buffer: bool,
     pub end_of_stream: bool,
     pub has_sufficient_buffer: bool,
     pub needs_decode_supply: bool,
@@ -178,22 +183,39 @@ impl PlayerRuntime {
             + usize::from(self.current_presentation_video_frame.is_some())
     }
 
+    pub fn ready_video_frame_count(&self) -> usize {
+        self.queued_presentation_video_frames.len()
+            + usize::from(self.current_presentation_video_frame.is_some())
+    }
+
     pub fn decode_supply_status(&self) -> DecodeSupplyStatus {
         let target_total_video_frames = TARGET_FUTURE_VIDEO_QUEUE_LEN + 1;
         let audio_queue_len = self.audio_queue_len();
+        let decoded_video_queue_len = self.queued_decoded_video_frames.len();
+        let presentation_video_queue_len = self.queued_presentation_video_frames.len();
+        let ready_video_frame_count = self.ready_video_frame_count();
         let buffered_video_frame_count = self.buffered_video_frame_count();
-        let has_sufficient_buffer = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN
-            && buffered_video_frame_count >= target_total_video_frames;
+        let has_sufficient_presentation_buffer = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN
+            && ready_video_frame_count >= target_total_video_frames;
+        let has_sufficient_total_video_buffer =
+            buffered_video_frame_count >= target_total_video_frames;
         let end_of_stream = self.has_reached_end_of_stream();
 
         DecodeSupplyStatus {
             audio_queue_len,
+            decoded_video_queue_len,
+            presentation_video_queue_len,
+            ready_video_frame_count,
             buffered_video_frame_count,
             target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
             target_total_video_frames,
+            has_sufficient_presentation_buffer,
+            has_sufficient_total_video_buffer,
             end_of_stream,
-            has_sufficient_buffer,
-            needs_decode_supply: !end_of_stream && !has_sufficient_buffer,
+            has_sufficient_buffer: has_sufficient_presentation_buffer,
+            needs_decode_supply: !end_of_stream
+                && (audio_queue_len < TARGET_AUDIO_QUEUE_LEN
+                    || !has_sufficient_total_video_buffer),
         }
     }
 
@@ -698,9 +720,14 @@ mod tests {
             empty,
             DecodeSupplyStatus {
                 audio_queue_len: 0,
+                decoded_video_queue_len: 0,
+                presentation_video_queue_len: 0,
+                ready_video_frame_count: 0,
                 buffered_video_frame_count: 0,
                 target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
                 target_total_video_frames: TARGET_FUTURE_VIDEO_QUEUE_LEN + 1,
+                has_sufficient_presentation_buffer: false,
+                has_sufficient_total_video_buffer: false,
                 end_of_stream: false,
                 has_sufficient_buffer: false,
                 needs_decode_supply: true,
@@ -735,6 +762,53 @@ mod tests {
 
         let filled = runtime.decode_supply_status();
         assert!(filled.has_sufficient_buffer);
+        assert!(filled.has_sufficient_presentation_buffer);
+        assert!(filled.has_sufficient_total_video_buffer);
         assert!(!filled.needs_decode_supply);
+    }
+
+    #[test]
+    fn decoded_backlog_counts_for_decode_supply_but_not_presentation_readiness() {
+        let mut runtime = PlayerRuntime::new();
+
+        for index in 0..TARGET_AUDIO_QUEUE_LEN {
+            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(10_000);
+            runtime.push_audio_frame(AudioFrame {
+                pts_us,
+                duration_us: Some(10_000),
+                sample_rate: 48_000,
+                channels: 2,
+                sample_count: 480,
+                sample_format: AudioSampleFormatCategory::F32,
+                is_planar: false,
+                data: vec![0.0; 480 * 2],
+            });
+        }
+
+        for index in 0..=TARGET_FUTURE_VIDEO_QUEUE_LEN {
+            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(33_000);
+            runtime.push_decoded_video_frame(VideoFrame {
+                pts_us,
+                duration_us: Some(33_000),
+                width: 1920,
+                height: 1080,
+                is_key_frame: false,
+                surface: video_surface(16),
+            });
+        }
+
+        let status = runtime.decode_supply_status();
+
+        assert_eq!(status.decoded_video_queue_len, TARGET_FUTURE_VIDEO_QUEUE_LEN + 1);
+        assert_eq!(status.presentation_video_queue_len, 0);
+        assert_eq!(status.ready_video_frame_count, 0);
+        assert_eq!(
+            status.buffered_video_frame_count,
+            TARGET_FUTURE_VIDEO_QUEUE_LEN + 1
+        );
+        assert!(!status.has_sufficient_presentation_buffer);
+        assert!(status.has_sufficient_total_video_buffer);
+        assert!(!status.has_sufficient_buffer);
+        assert!(!status.needs_decode_supply);
     }
 }

@@ -179,10 +179,12 @@ Important current rule:
 - video sync and scheduling should now be thought of as operating on presentation frames
 - decode output is no longer the only video queue concept in runtime
 - decoded-video to presentation-video flow now goes through an explicit render-supply step
+- playback readiness should be judged from presentation-ready frames, not just total decoded backlog
 
 Current limitation:
 
 - the first render-supply implementation is still synchronous passthrough
+- render-core now has a pipeline entry point, but it still returns the decoded frame unchanged
 - no independent render worker exists yet
 
 ## 7. Internal Sync Worker
@@ -545,6 +547,7 @@ Current implementation status:
 - `DecodedVideoFrame` and `PresentationFrame` roles now exist
 - `PlayerRuntime` now contains separate decoded-video and presentation-video queues
 - `execution/render_supply.rs` now owns the decoded-to-presentation handoff entry point
+- `render/core/pipeline.rs` now owns the render-core frame transformation entry point
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 

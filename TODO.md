@@ -232,7 +232,9 @@ Tasks:
 - introduce explicit `PresentationFrame` / `RenderSurface` concepts where needed
 - keep runtime scheduling and sync centered on presentation frames
 - keep the first render-service implementation synchronous passthrough for stability
+- keep decode-buffer accounting distinct from presentation-ready buffer accounting
 - move frame transformation responsibility into render supply instead of runtime queue helpers
+- move actual frame transformation ownership into `render/core/` pipeline code
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`

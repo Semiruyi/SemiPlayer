@@ -262,7 +262,8 @@ Current incremental state of that split:
 - decode output now flows through an explicit render-service entry point
 - the first render-service implementation is still synchronous passthrough:
   - decode output is queued as decoded video
-  - render supply immediately promotes it into the presentation queue
+  - render supply forwards frames through a render-core pipeline entry point
+  - the current render-core pipeline still returns the same surface unchanged
 
 That means the architecture boundary is now visible in code, even though the first render stage is
 not yet an independently scheduled service or worker lane.

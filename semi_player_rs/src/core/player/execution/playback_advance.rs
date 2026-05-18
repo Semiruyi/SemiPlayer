@@ -175,7 +175,7 @@ pub(crate) fn finish_playback_advance(
             PlayerState::Playing => {
                 if audio_snapshot.started
                     && audio_snapshot.audible_frames_total > 0
-                    && decode_status.has_sufficient_buffer
+                    && decode_status.has_sufficient_presentation_buffer
                     && sync_snapshot.core_sync_error_us == 0
                 {
                     player.observe_seek_stable();

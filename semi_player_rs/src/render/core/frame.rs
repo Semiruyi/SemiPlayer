@@ -111,10 +111,6 @@ pub type DecodedVideoFrame = VideoFrame;
 pub type PresentationFrame = VideoFrame;
 
 impl VideoFrame {
-    pub fn into_presentation_frame(self) -> PresentationFrame {
-        self
-    }
-
     pub fn pixel_format(&self) -> PixelFormatCategory {
         self.surface.pixel_format
     }
