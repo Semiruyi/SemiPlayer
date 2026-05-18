@@ -30,6 +30,7 @@ docs/
 | [dev/internal-video-sync.md](dev/internal-video-sync.md) | Planned player-owned internal video sync system that reduces timing dependence on external `pump` calls |
 | [dev/ffmpeg-usage.md](dev/ffmpeg-usage.md) | How the project calls FFmpeg: init, demux, decode, seek, and format mapping |
 | [dev/abi.md](dev/abi.md) | C ABI reference for host integration: handle lifecycle, state queries, and frame copy |
+| [dev/d3d11-libplacebo-render.md](dev/d3d11-libplacebo-render.md) | Planned Windows hardware render path from FFmpeg D3D11 NV12 decode surfaces to D3D11 BGRA presentation surfaces |
 
 ### Architecture Decision Records
 
