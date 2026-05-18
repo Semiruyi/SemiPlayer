@@ -54,17 +54,14 @@ impl NormalizedAudioResampler {
         input_channels: u16,
     ) -> Result<(), MediaOpenError> {
         let output_layout = ChannelLayout::default(i32::from(input_channels));
-        let needs_rebuild = self
-            .context
-            .as_ref()
-            .is_none_or(|context| {
-                context.input().format != input_format
-                    || context.input().channel_layout != input_layout
-                    || context.input().rate != input_rate
-                    || context.output().format != format::Sample::F32(format::sample::Type::Packed)
-                    || context.output().channel_layout != output_layout
-                    || context.output().rate != input_rate
-            });
+        let needs_rebuild = self.context.as_ref().is_none_or(|context| {
+            context.input().format != input_format
+                || context.input().channel_layout != input_layout
+                || context.input().rate != input_rate
+                || context.output().format != format::Sample::F32(format::sample::Type::Packed)
+                || context.output().channel_layout != output_layout
+                || context.output().rate != input_rate
+        });
 
         if needs_rebuild {
             self.context = Some(

@@ -135,7 +135,11 @@ impl PlayerRuntime {
         self.queued_audio_frames
             .front()
             .map(crate::audio::core::frame::AudioFrame::format)
-            .or_else(|| self.last_audio_frame.as_ref().map(crate::audio::core::frame::AudioFrame::format))
+            .or_else(|| {
+                self.last_audio_frame
+                    .as_ref()
+                    .map(crate::audio::core::frame::AudioFrame::format)
+            })
     }
 
     pub fn has_reached_end_of_stream(&self) -> bool {
@@ -214,8 +218,7 @@ impl PlayerRuntime {
             end_of_stream,
             has_sufficient_buffer: has_sufficient_presentation_buffer,
             needs_decode_supply: !end_of_stream
-                && (audio_queue_len < TARGET_AUDIO_QUEUE_LEN
-                    || !has_sufficient_total_video_buffer),
+                && (audio_queue_len < TARGET_AUDIO_QUEUE_LEN || !has_sufficient_total_video_buffer),
         }
     }
 
@@ -735,7 +738,9 @@ mod tests {
         );
 
         for index in 0..TARGET_AUDIO_QUEUE_LEN {
-            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(10_000);
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(10_000);
             runtime.push_audio_frame(AudioFrame {
                 pts_us,
                 duration_us: Some(10_000),
@@ -749,7 +754,9 @@ mod tests {
         }
 
         for index in 0..=TARGET_FUTURE_VIDEO_QUEUE_LEN {
-            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(33_000);
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(33_000);
             runtime.push_video_frame(VideoFrame {
                 pts_us,
                 duration_us: Some(33_000),
@@ -772,7 +779,9 @@ mod tests {
         let mut runtime = PlayerRuntime::new();
 
         for index in 0..TARGET_AUDIO_QUEUE_LEN {
-            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(10_000);
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(10_000);
             runtime.push_audio_frame(AudioFrame {
                 pts_us,
                 duration_us: Some(10_000),
@@ -786,7 +795,9 @@ mod tests {
         }
 
         for index in 0..=TARGET_FUTURE_VIDEO_QUEUE_LEN {
-            let pts_us = i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(33_000);
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(33_000);
             runtime.push_decoded_video_frame(VideoFrame {
                 pts_us,
                 duration_us: Some(33_000),
@@ -799,7 +810,10 @@ mod tests {
 
         let status = runtime.decode_supply_status();
 
-        assert_eq!(status.decoded_video_queue_len, TARGET_FUTURE_VIDEO_QUEUE_LEN + 1);
+        assert_eq!(
+            status.decoded_video_queue_len,
+            TARGET_FUTURE_VIDEO_QUEUE_LEN + 1
+        );
         assert_eq!(status.presentation_video_queue_len, 0);
         assert_eq!(status.ready_video_frame_count, 0);
         assert_eq!(

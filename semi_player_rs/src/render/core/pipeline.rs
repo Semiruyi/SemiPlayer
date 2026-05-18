@@ -1,6 +1,9 @@
+use crate::render::backends::d3d11;
 use crate::render::core::frame::{
-    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoSurfaceKind,
+    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame, VideoSurface,
+    VideoSurfaceKind, VideoSurfaceStorage,
 };
+use std::sync::Arc;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,24 +124,14 @@ impl VideoRenderPipeline {
         Self
     }
 
+    #[allow(dead_code)]
     pub fn render_frame(
         &self,
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
         let plan = self.plan_render(request, &frame);
-
-        match plan.path {
-            VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => frame,
-            VideoRenderPath::RequiresTransform => {
-                // Temporary execution path for unmet render targets.
-                // Keep playback alive by forwarding the original frame while diagnostics
-                // record that this frame still owes a real transform implementation.
-                let _target_pixel_format = plan.target.presentation_pixel_format;
-                let _target_surface_kind = plan.target.presentation_surface_kind;
-                frame
-            }
-        }
+        self.execute_render_plan(&plan, frame).0
     }
 
     pub fn render_frames(
@@ -162,18 +155,17 @@ impl VideoRenderPipeline {
                         .saturating_add(1);
                 }
                 VideoRenderPath::RequiresTransform => {
-                    batch.stats.requires_transform_frames = batch
-                        .stats
-                        .requires_transform_frames
-                        .saturating_add(1);
-                    batch.stats.fallback_passthrough_frames = batch
-                        .stats
-                        .fallback_passthrough_frames
-                        .saturating_add(1);
+                    batch.stats.requires_transform_frames =
+                        batch.stats.requires_transform_frames.saturating_add(1);
                 }
             }
 
-            batch.frames.push(self.render_frame(request, frame));
+            let (rendered_frame, fell_back) = self.execute_render_plan(&plan, frame);
+            if fell_back {
+                batch.stats.fallback_passthrough_frames =
+                    batch.stats.fallback_passthrough_frames.saturating_add(1);
+            }
+            batch.frames.push(rendered_frame);
             batch.stats.rendered_frames = batch.stats.rendered_frames.saturating_add(1);
         }
 
@@ -209,7 +201,9 @@ impl VideoRenderPipeline {
         frame: &DecodedVideoFrame,
     ) -> ResolvedVideoRenderRequest {
         let profile_pixel_format = match request.target_profile {
-            PresentationTargetProfile::Passthrough => PresentationPixelFormatPreference::PreserveInput,
+            PresentationTargetProfile::Passthrough => {
+                PresentationPixelFormatPreference::PreserveInput
+            }
             PresentationTargetProfile::CpuBgraCompatibility => {
                 PresentationPixelFormatPreference::Bgra8
             }
@@ -228,14 +222,10 @@ impl VideoRenderPipeline {
                 PresentationSurfaceKindPreference::D3d11Texture2D
             }
         };
-        let pixel_format_preference = merge_pixel_format_preference(
-            profile_pixel_format,
-            request.presentation_pixel_format,
-        );
-        let surface_kind_preference = merge_surface_kind_preference(
-            profile_surface_kind,
-            request.presentation_surface_kind,
-        );
+        let pixel_format_preference =
+            merge_pixel_format_preference(profile_pixel_format, request.presentation_pixel_format);
+        let surface_kind_preference =
+            merge_surface_kind_preference(profile_surface_kind, request.presentation_surface_kind);
 
         ResolvedVideoRenderRequest {
             presentation_pixel_format: match pixel_format_preference {
@@ -247,6 +237,92 @@ impl VideoRenderPipeline {
                 PresentationSurfaceKindPreference::CpuPacked => VideoSurfaceKind::CpuPacked,
                 PresentationSurfaceKindPreference::D3d11Texture2D => {
                     VideoSurfaceKind::D3d11Texture2D
+                }
+            },
+        }
+    }
+
+    fn try_render_transform(
+        &self,
+        plan: &VideoRenderPlan,
+        frame: DecodedVideoFrame,
+    ) -> Result<PresentationFrame, DecodedVideoFrame> {
+        match (
+            plan.target.presentation_surface_kind,
+            plan.target.presentation_pixel_format,
+        ) {
+            (VideoSurfaceKind::CpuPacked, PixelFormatCategory::Bgra8) => {
+                self.try_render_cpu_bgra_compatibility(frame)
+            }
+            (VideoSurfaceKind::D3d11Texture2D, PixelFormatCategory::Bgra8) => {
+                self.try_render_d3d11_bgra_presenter(frame)
+            }
+            _ => Err(frame),
+        }
+    }
+
+    fn try_render_cpu_bgra_compatibility(
+        &self,
+        frame: DecodedVideoFrame,
+    ) -> Result<PresentationFrame, DecodedVideoFrame> {
+        let VideoSurfaceStorage::CpuPacked { stride, data } = &frame.surface.storage else {
+            return Err(frame);
+        };
+
+        let transformed_data = match frame.pixel_format() {
+            PixelFormatCategory::Rgba8 => Some(convert_rgba8_to_bgra8(data)),
+            PixelFormatCategory::Gray8 => Some(convert_gray8_to_bgra8(
+                data,
+                frame.width as usize,
+                frame.height as usize,
+                *stride,
+            )),
+            _ => None,
+        };
+
+        let Some(transformed_data) = transformed_data else {
+            return Err(frame);
+        };
+
+        Ok(VideoFrame {
+            pts_us: frame.pts_us,
+            duration_us: frame.duration_us,
+            width: frame.width,
+            height: frame.height,
+            is_key_frame: frame.is_key_frame,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Bgra8,
+                frame.width as usize * 4,
+                transformed_data,
+            )),
+        })
+    }
+
+    fn try_render_d3d11_bgra_presenter(
+        &self,
+        frame: DecodedVideoFrame,
+    ) -> Result<PresentationFrame, DecodedVideoFrame> {
+        match d3d11::try_render_to_bgra_texture(&frame) {
+            Ok(rendered_frame) => Ok(rendered_frame),
+            Err(_) => Err(frame),
+        }
+    }
+
+    fn execute_render_plan(
+        &self,
+        plan: &VideoRenderPlan,
+        frame: DecodedVideoFrame,
+    ) -> (PresentationFrame, bool) {
+        match plan.path {
+            VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => {
+                (frame, false)
+            }
+            VideoRenderPath::RequiresTransform => match self.try_render_transform(plan, frame) {
+                Ok(transformed_frame) => (transformed_frame, false),
+                Err(frame) => {
+                    let _target_pixel_format = plan.target.presentation_pixel_format;
+                    let _target_surface_kind = plan.target.presentation_surface_kind;
+                    (frame, true)
                 }
             },
         }
@@ -292,6 +368,35 @@ fn merge_surface_kind_preference(
     }
 }
 
+fn convert_rgba8_to_bgra8(data: &[u8]) -> Vec<u8> {
+    let mut output = data.to_vec();
+    for pixel in output.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    output
+}
+
+fn convert_gray8_to_bgra8(data: &[u8], width: usize, height: usize, stride: usize) -> Vec<u8> {
+    let mut output = vec![0u8; width.saturating_mul(height).saturating_mul(4)];
+
+    for y in 0..height {
+        let src_row_start = y.saturating_mul(stride);
+        let src_row_end = src_row_start.saturating_add(width);
+        let dst_row_start = y.saturating_mul(width).saturating_mul(4);
+        let src_row = &data[src_row_start..src_row_end];
+
+        for (x, gray) in src_row.iter().copied().enumerate() {
+            let dst_index = dst_row_start + x * 4;
+            output[dst_index] = gray;
+            output[dst_index + 1] = gray;
+            output[dst_index + 2] = gray;
+            output[dst_index + 3] = 255;
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -316,6 +421,21 @@ mod tests {
                 PixelFormatCategory::Bgra8,
                 1920 * 4,
                 vec![0; 16],
+            )),
+        }
+    }
+
+    fn rgba_frame(pts_us: i64) -> VideoFrame {
+        VideoFrame {
+            pts_us,
+            duration_us: Some(33_000),
+            width: 2,
+            height: 1,
+            is_key_frame: false,
+            surface: Arc::new(VideoSurface::new_cpu_packed(
+                PixelFormatCategory::Rgba8,
+                8,
+                vec![1, 2, 3, 4, 10, 20, 30, 40],
             )),
         }
     }
@@ -390,13 +510,17 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
 
-        let resolved = pipeline.resolve_request(
-            VideoRenderRequest::cpu_bgra_compatibility(true),
-            &input,
-        );
+        let resolved =
+            pipeline.resolve_request(VideoRenderRequest::cpu_bgra_compatibility(true), &input);
 
-        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
-        assert_eq!(resolved.presentation_surface_kind, VideoSurfaceKind::CpuPacked);
+        assert_eq!(
+            resolved.presentation_pixel_format,
+            PixelFormatCategory::Bgra8
+        );
+        assert_eq!(
+            resolved.presentation_surface_kind,
+            VideoSurfaceKind::CpuPacked
+        );
     }
 
     #[test]
@@ -404,12 +528,25 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
 
-        let plan = pipeline.plan_render(
-            VideoRenderRequest::cpu_bgra_compatibility(true),
-            &input,
-        );
+        let plan = pipeline.plan_render(VideoRenderRequest::cpu_bgra_compatibility(true), &input);
 
         assert_eq!(plan.path, VideoRenderPath::PassthroughWithSubtitleIntent);
+    }
+
+    #[test]
+    fn cpu_bgra_compatibility_transforms_rgba_cpu_input_to_bgra() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = rgba_frame(123_000);
+
+        let output =
+            pipeline.render_frame(VideoRenderRequest::cpu_bgra_compatibility(false), input);
+
+        assert_eq!(output.pixel_format(), PixelFormatCategory::Bgra8);
+        assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
+        assert_eq!(
+            output.cpu_packed_data(),
+            Some([3, 2, 1, 4, 30, 20, 10, 40].as_slice())
+        );
     }
 
     #[test]
@@ -417,12 +554,13 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
 
-        let resolved = pipeline.resolve_request(
-            VideoRenderRequest::d3d11_bgra_presenter(false),
-            &input,
-        );
+        let resolved =
+            pipeline.resolve_request(VideoRenderRequest::d3d11_bgra_presenter(false), &input);
 
-        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
+        assert_eq!(
+            resolved.presentation_pixel_format,
+            PixelFormatCategory::Bgra8
+        );
         assert_eq!(
             resolved.presentation_surface_kind,
             VideoSurfaceKind::D3d11Texture2D
@@ -434,10 +572,7 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
 
-        let plan = pipeline.plan_render(
-            VideoRenderRequest::d3d11_bgra_presenter(false),
-            &input,
-        );
+        let plan = pipeline.plan_render(VideoRenderRequest::d3d11_bgra_presenter(false), &input);
 
         assert_eq!(plan.path, VideoRenderPath::RequiresTransform);
     }
@@ -457,8 +592,14 @@ mod tests {
             &input,
         );
 
-        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
-        assert_eq!(resolved.presentation_surface_kind, VideoSurfaceKind::CpuPacked);
+        assert_eq!(
+            resolved.presentation_pixel_format,
+            PixelFormatCategory::Bgra8
+        );
+        assert_eq!(
+            resolved.presentation_surface_kind,
+            VideoSurfaceKind::CpuPacked
+        );
     }
 
     #[test]
@@ -466,10 +607,7 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let frames = vec![decoded_frame(0), decoded_frame(33_000)];
 
-        let batch = pipeline.render_frames(
-            VideoRenderRequest::d3d11_bgra_presenter(false),
-            frames,
-        );
+        let batch = pipeline.render_frames(VideoRenderRequest::d3d11_bgra_presenter(false), frames);
 
         assert_eq!(batch.frames.len(), 2);
         assert_eq!(
@@ -480,6 +618,28 @@ mod tests {
                 passthrough_with_subtitle_intent_frames: 0,
                 requires_transform_frames: 2,
                 fallback_passthrough_frames: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn render_batch_does_not_count_supported_cpu_transform_as_fallback() {
+        let pipeline = VideoRenderPipeline::new();
+        let frames = vec![rgba_frame(0)];
+
+        let batch =
+            pipeline.render_frames(VideoRenderRequest::cpu_bgra_compatibility(false), frames);
+
+        assert_eq!(batch.frames.len(), 1);
+        assert_eq!(batch.frames[0].pixel_format(), PixelFormatCategory::Bgra8);
+        assert_eq!(
+            batch.stats,
+            VideoRenderStats {
+                rendered_frames: 1,
+                passthrough_frames: 0,
+                passthrough_with_subtitle_intent_frames: 0,
+                requires_transform_frames: 1,
+                fallback_passthrough_frames: 0,
             }
         );
     }

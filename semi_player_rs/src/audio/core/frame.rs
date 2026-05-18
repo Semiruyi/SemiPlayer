@@ -38,10 +38,10 @@ impl AudioFrame {
             return Some(self.clone());
         }
 
-        let end_time_us = self
-            .end_time_us()
-            .or_else(|| normalized_duration_us(self.sample_rate, self.sample_count)
-                .map(|duration_us| self.pts_us.saturating_add(duration_us)))?;
+        let end_time_us = self.end_time_us().or_else(|| {
+            normalized_duration_us(self.sample_rate, self.sample_count)
+                .map(|duration_us| self.pts_us.saturating_add(duration_us))
+        })?;
         if end_time_us <= target_us {
             return None;
         }
@@ -52,8 +52,8 @@ impl AudioFrame {
         }
 
         let delta_us = target_us.saturating_sub(self.pts_us);
-        let frames_to_drop = ceil_frames_for_duration_us(delta_us, self.sample_rate)
-            .min(self.sample_count);
+        let frames_to_drop =
+            ceil_frames_for_duration_us(delta_us, self.sample_rate).min(self.sample_count);
         if frames_to_drop == 0 {
             return Some(self.clone());
         }
@@ -63,7 +63,9 @@ impl AudioFrame {
             return None;
         }
 
-        let start_sample = frames_to_drop.saturating_mul(channel_count).min(self.data.len());
+        let start_sample = frames_to_drop
+            .saturating_mul(channel_count)
+            .min(self.data.len());
         let dropped_us = duration_for_frames(frames_to_drop, self.sample_rate).unwrap_or(0);
 
         Some(Self {
@@ -124,7 +126,9 @@ mod tests {
     use super::{AudioFrame, AudioSampleFormatCategory};
 
     fn frame(pts_us: i64, samples: usize) -> AudioFrame {
-        let duration_us = i64::try_from(samples).unwrap_or(i64::MAX).saturating_mul(1_000);
+        let duration_us = i64::try_from(samples)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(1_000);
         AudioFrame {
             pts_us,
             duration_us: Some(duration_us),

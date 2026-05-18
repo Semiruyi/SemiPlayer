@@ -112,8 +112,8 @@ impl AudioClock {
         };
 
         #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let advanced_us = (now.duration_since(anchor_instant).as_micros() as f64 * state.speed)
-            as MediaTimeUs;
+        let advanced_us =
+            (now.duration_since(anchor_instant).as_micros() as f64 * state.speed) as MediaTimeUs;
         add_media_time_us(state.anchor_media_time_us, advanced_us)
     }
 

@@ -563,6 +563,12 @@ Current implementation status:
   redefining render-supply logic
 - transform-required frames are now tracked separately from temporary fallback-passthrough
   execution so true passthrough and stopgap execution are no longer conflated
+- the D3D11-BGRA presenter path now has an explicit backend call site even though the backend still
+  reports unavailable work instead of completing the transform
+- the D3D11 backend now has explicit request / target / plan / renderer skeleton types so the first
+  real GPU execution path can land behind a stable internal contract
+- D3D11 BGRA texture input can now complete a true backend passthrough path while NV12/YUV render
+  work still reports backend-unavailable instead of pretending to succeed
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 

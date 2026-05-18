@@ -125,7 +125,10 @@ fn trim_audio_for_seek_recovery(
     player: &SemiPlayerHandle,
     frame: crate::audio::core::frame::AudioFrame,
 ) -> Option<crate::audio::core::frame::AudioFrame> {
-    let Some(target_us) = player.decode_policy().seek_recovery.map(|policy| policy.target_video_us)
+    let Some(target_us) = player
+        .decode_policy()
+        .seek_recovery
+        .map(|policy| policy.target_video_us)
     else {
         return Some(frame);
     };
@@ -141,8 +144,8 @@ mod tests {
     use crate::api::types::PlayerState;
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
-    use crate::core::player::handle::SemiPlayerHandle;
     use crate::core::media::DecodedOutput;
+    use crate::core::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn audio_frame(pts_us: i64) -> AudioFrame {
@@ -185,10 +188,12 @@ mod tests {
         player.runtime.push_video_frame(video_frame(33_000));
         player.runtime.push_video_frame(video_frame(66_000));
 
-        assert!(player
-            .runtime
-            .decode_supply_status()
-            .has_sufficient_presentation_buffer);
+        assert!(
+            player
+                .runtime
+                .decode_supply_status()
+                .has_sufficient_presentation_buffer
+        );
     }
 
     #[test]

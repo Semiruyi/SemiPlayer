@@ -88,7 +88,9 @@ mod tests {
     fn synchronous_render_supply_promotes_all_decoded_frames() {
         let mut player = SemiPlayerHandle::new();
         player.runtime.push_decoded_video_frame(decoded_frame(0));
-        player.runtime.push_decoded_video_frame(decoded_frame(33_000));
+        player
+            .runtime
+            .push_decoded_video_frame(decoded_frame(33_000));
 
         let result = render_supply(&mut player);
 
@@ -134,10 +136,7 @@ mod tests {
 
         let request = default_render_request(&player);
 
-        assert_eq!(
-            request,
-            VideoRenderRequest::cpu_bgra_compatibility(true)
-        );
+        assert_eq!(request, VideoRenderRequest::cpu_bgra_compatibility(true));
     }
 
     #[test]
@@ -149,10 +148,7 @@ mod tests {
 
         let request = default_render_request(&player);
 
-        assert_eq!(
-            request,
-            VideoRenderRequest::d3d11_bgra_presenter(true)
-        );
+        assert_eq!(request, VideoRenderRequest::d3d11_bgra_presenter(true));
     }
 
     #[test]

@@ -13,8 +13,7 @@ use crate::api::error::{
 use crate::api::types::{
     PlayerState, SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
     SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
-    SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc,
-    SemiVideoSurfaceKind,
+    SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
 use crate::core::media::{
     open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
@@ -206,9 +205,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .current_pts_us
         .map_or(0, |pts_us| playback_position_ms - us_to_ms(pts_us));
     let next_video_pts_ms = runtime_video.next_pts_us.map_or(0, us_to_ms);
-    let current_to_next_video_delta_ms = runtime_video
-        .current_to_next_delta_us
-        .map_or(0, us_to_ms);
+    let current_to_next_video_delta_ms = runtime_video.current_to_next_delta_us.map_or(0, us_to_ms);
     let (current_video_surface_kind, current_video_surface_pixel_format) = runtime_video
         .current_frame
         .as_ref()
@@ -233,8 +230,10 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         video_decode_backend: map_video_decode_backend(video_decode.backend).as_raw(),
         video_hardware_requested: u32::from(video_decode.hardware_requested),
         video_hardware_active: u32::from(video_decode.hardware_active),
-        video_decode_fallback_reason: map_video_decode_fallback_reason(video_decode.fallback_reason)
-            .as_raw(),
+        video_decode_fallback_reason: map_video_decode_fallback_reason(
+            video_decode.fallback_reason,
+        )
+        .as_raw(),
         current_video_surface_kind,
         current_video_surface_pixel_format,
         current_video_effective_end_ms: sync_snapshot
@@ -242,11 +241,8 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
             .map_or(0, us_to_ms),
         next_video_pts_ms,
         current_to_next_video_delta_ms,
-        next_video_wake_deadline_ms: sync_snapshot
-            .next_wake_deadline_us
-            .map_or(0, us_to_ms),
-        last_audio_pts_ms: last_audio_frame
-            .map_or(0, |frame| us_to_ms(frame.pts_us)),
+        next_video_wake_deadline_ms: sync_snapshot.next_wake_deadline_us.map_or(0, us_to_ms),
+        last_audio_pts_ms: last_audio_frame.map_or(0, |frame| us_to_ms(frame.pts_us)),
         host_presentation_offset_ms,
         core_av_delta_ms,
         core_sync_error_ms,
@@ -269,9 +265,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         next_audio_refill_deadline_ms: schedule_hint
             .next_audio_refill_deadline_us
             .map_or(0, us_to_ms),
-        next_pump_deadline_ms: schedule_hint
-            .next_pump_deadline_us
-            .map_or(0, us_to_ms),
+        next_pump_deadline_ms: schedule_hint.next_pump_deadline_us.map_or(0, us_to_ms),
         ffi_lock_wait_last_us: diagnostics.ffi_lock_wait_last_us,
         ffi_lock_wait_max_us: diagnostics.ffi_lock_wait_max_us,
         sync_worker_lock_wait_last_us: diagnostics.sync_worker_lock_wait_last_us,
@@ -289,8 +283,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         render_passthrough_frames_total: diagnostics.render_passthrough_frames_total,
         render_passthrough_with_subtitle_intent_frames_total: diagnostics
             .render_passthrough_with_subtitle_intent_frames_total,
-        render_requires_transform_frames_total: diagnostics
-            .render_requires_transform_frames_total,
+        render_requires_transform_frames_total: diagnostics.render_requires_transform_frames_total,
         render_fallback_passthrough_frames_total: diagnostics
             .render_fallback_passthrough_frames_total,
         seek_event_count: diagnostics.seek_event_count,
@@ -302,7 +295,8 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_reset_us: diagnostics.seek_reset_us,
         seek_first_video_decoded_us: diagnostics.seek_first_video_decoded_us,
         seek_first_video_pts_ms: diagnostic_us_to_ms(diagnostics.seek_first_video_pts_us),
-        seek_first_post_target_video_decoded_us: diagnostics.seek_first_post_target_video_decoded_us,
+        seek_first_post_target_video_decoded_us: diagnostics
+            .seek_first_post_target_video_decoded_us,
         seek_first_post_target_video_pts_ms: diagnostic_us_to_ms(
             diagnostics.seek_first_post_target_video_pts_us,
         ),
@@ -338,7 +332,9 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         seek_first_video_packet_is_key: u32::from(seek_demux.first_video_packet_is_key),
         seek_first_video_packet_pos: seek_demux.first_video_packet_pos,
         seek_first_video_packet_stream_index: seek_demux.first_video_packet_stream_index,
-        seek_first_video_packet_stream_kind: stream_kind_to_u32(seek_demux.first_video_packet_stream_kind),
+        seek_first_video_packet_stream_kind: stream_kind_to_u32(
+            seek_demux.first_video_packet_stream_kind,
+        ),
         seek_video_packets_read: seek_demux.video_packets_read,
         seek_audio_packets_read: seek_demux.audio_packets_read,
         seek_video_frames_output: seek_demux.video_frames_output,
@@ -467,10 +463,8 @@ fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnap
         submitted_frames_total: snapshot.submitted_frames_total,
         started: u32::from(snapshot.started),
         has_device_timing: u32::from(device_timing.is_some()),
-        base_pts_ms: device_timing
-            .map_or(0, |timing| us_to_ms(timing.base_pts_us)),
-        device_played_frames: device_timing
-            .map_or(0, |timing| timing.played_frames),
+        base_pts_ms: device_timing.map_or(0, |timing| us_to_ms(timing.base_pts_us)),
+        device_played_frames: device_timing.map_or(0, |timing| timing.played_frames),
     }
 }
 
@@ -533,9 +527,7 @@ pub extern "C" fn semi_player_open(
             return SEMI_E_MEDIA_OPEN_FAILED
         }
         Err(
-            MediaOpenError::Probe(
-                MediaProbeError::FfmpegInit(_) | MediaProbeError::Decoder(_),
-            )
+            MediaOpenError::Probe(MediaProbeError::FfmpegInit(_) | MediaProbeError::Decoder(_))
             | MediaOpenError::Seek(_),
         ) => {
             return SEMI_E_MEDIA_PROBE_FAILED;
@@ -815,7 +807,9 @@ pub unsafe extern "C" fn semi_player_get_duration_ms(
         *out_duration_ms = player
             .opened_media
             .as_ref()
-            .and_then(|opened_media| opened_media.with_ref(|opened_media| opened_media.duration_us()))
+            .and_then(|opened_media| {
+                opened_media.with_ref(|opened_media| opened_media.duration_us())
+            })
             .map_or(0, us_to_ms);
     }) {
         Ok(()) => SEMI_OK,

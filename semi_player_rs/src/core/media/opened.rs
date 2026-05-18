@@ -274,9 +274,12 @@ impl OpenedMedia {
 
     pub fn seek(&mut self, position_us: MediaTimeUs) -> Result<(), MediaOpenError> {
         self.seek_diagnostics.begin();
-        self.seek_diagnostics.observe_expected_left_keyframe(
-            probe_expected_left_keyframe_pts(&self.path, self.info.best_video_stream_index, position_us),
-        );
+        self.seek_diagnostics
+            .observe_expected_left_keyframe(probe_expected_left_keyframe_pts(
+                &self.path,
+                self.info.best_video_stream_index,
+                position_us,
+            ));
         let position = position_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
         if let Err(error) = self.input.seek(position, ..) {
             self.seek_diagnostics.finish();
@@ -324,7 +327,9 @@ impl OpenedMedia {
                     &packet,
                     self.info.best_video_stream_index,
                     self.info.best_audio_stream_index,
-                    self.input.stream(stream_index).map(|stream| stream.time_base()),
+                    self.input
+                        .stream(stream_index)
+                        .map(|stream| stream.time_base()),
                 );
                 Ok(Some(MediaPacket {
                     stream_index,
@@ -440,14 +445,13 @@ impl OpenedMedia {
     fn collect_drained_outputs(&mut self, policy: DecodePolicy) -> Result<(), MediaOpenError> {
         if !self.draining_state.video_drained {
             if let Some(video_decoder) = self.video_decoder.as_mut() {
-                self.draining_state.video_drained =
-                    collect_video_frames(
-                        video_decoder,
-                        &mut self.pending_outputs,
-                        &mut self.seek_diagnostics,
-                        true,
-                        policy,
-                    )?;
+                self.draining_state.video_drained = collect_video_frames(
+                    video_decoder,
+                    &mut self.pending_outputs,
+                    &mut self.seek_diagnostics,
+                    true,
+                    policy,
+                )?;
             } else {
                 self.draining_state.video_drained = true;
             }
@@ -455,14 +459,13 @@ impl OpenedMedia {
 
         if !self.draining_state.audio_drained {
             if let Some(audio_decoder) = self.audio_decoder.as_mut() {
-                self.draining_state.audio_drained =
-                    collect_audio_frames(
-                        audio_decoder,
-                        &mut self.pending_outputs,
-                        &mut self.seek_diagnostics,
-                        true,
-                        policy,
-                    )?;
+                self.draining_state.audio_drained = collect_audio_frames(
+                    audio_decoder,
+                    &mut self.pending_outputs,
+                    &mut self.seek_diagnostics,
+                    true,
+                    policy,
+                )?;
             } else {
                 self.draining_state.audio_drained = true;
             }
@@ -511,10 +514,8 @@ impl SeekDemuxDiagnostics {
         if Some(stream_index) == best_video_stream_index {
             self.video_packets_read = self.video_packets_read.saturating_add(1);
             if self.first_video_packet_pts_us.is_none() {
-                self.first_video_packet_pts_us =
-                    Some(packet_timestamp_us(packet.pts(), time_base));
-                self.first_video_packet_dts_us =
-                    Some(packet_timestamp_us(packet.dts(), time_base));
+                self.first_video_packet_pts_us = Some(packet_timestamp_us(packet.pts(), time_base));
+                self.first_video_packet_dts_us = Some(packet_timestamp_us(packet.dts(), time_base));
                 self.first_video_packet_is_key = packet.is_key();
                 self.first_video_packet_pos = i64::try_from(packet.position()).ok();
                 self.first_video_packet_stream_index = i64::try_from(stream_index).ok();
@@ -880,7 +881,8 @@ fn collect_video_frames(
         match decoder.decoder.receive_frame(&mut frame) {
             Ok(()) => {
                 let time_base = decoder.decoder.packet_time_base();
-                let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
+                let pts_us =
+                    frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
                 let duration_us = frame_duration_us(frame.packet().duration, time_base)
                     .or(decoder.estimated_frame_duration_us);
 
@@ -926,7 +928,8 @@ fn collect_audio_frames(
         match decoder.decoder.receive_frame(&mut frame) {
             Ok(()) => {
                 let time_base = decoder.decoder.packet_time_base();
-                let pts_us = frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
+                let pts_us =
+                    frame_timestamp_us(frame.pts().or_else(|| frame.timestamp()), time_base);
                 let duration_us = audio_duration_us(&frame);
 
                 if should_skip_audio_frame_for_seek_recovery(policy, pts_us, duration_us) {
@@ -1010,7 +1013,10 @@ fn map_d3d11_video_frame(
         return None;
     }
 
-    if !matches!(frame.format(), format::Pixel::D3D11VA_VLD | format::Pixel::D3D11) {
+    if !matches!(
+        frame.format(),
+        format::Pixel::D3D11VA_VLD | format::Pixel::D3D11
+    ) {
         return None;
     }
 
@@ -1066,8 +1072,7 @@ impl OpenedVideoDecoder {
 }
 
 fn frame_timestamp_us(timestamp: Option<i64>, time_base: Rational) -> MediaTimeUs {
-    timestamp
-        .map_or(0, |value| value.rescale(time_base, (1, 1_000_000)))
+    timestamp.map_or(0, |value| value.rescale(time_base, (1, 1_000_000)))
 }
 
 fn packet_timestamp_us(timestamp: Option<i64>, time_base: Option<Rational>) -> MediaTimeUs {
@@ -1128,7 +1133,6 @@ fn should_skip_video_frame_for_seek_recovery(
     end_us <= seek_recovery.target_video_us
 }
 
-
 fn should_skip_audio_frame_for_seek_recovery(
     policy: DecodePolicy,
     pts_us: MediaTimeUs,
@@ -1166,17 +1170,14 @@ fn ensure_video_scaler(
     decoder: &mut OpenedVideoDecoder,
     input: &frame::Video,
 ) -> Result<(), MediaOpenError> {
-    let needs_rebuild = decoder
-        .scaler
-        .as_ref()
-        .is_none_or(|scaler| {
-            scaler.input().format != input.format()
-                || scaler.input().width != input.width()
-                || scaler.input().height != input.height()
-                || scaler.output().format != format::Pixel::BGRA
-                || scaler.output().width != input.width()
-                || scaler.output().height != input.height()
-        });
+    let needs_rebuild = decoder.scaler.as_ref().is_none_or(|scaler| {
+        scaler.input().format != input.format()
+            || scaler.input().width != input.width()
+            || scaler.input().height != input.height()
+            || scaler.output().format != format::Pixel::BGRA
+            || scaler.output().width != input.width()
+            || scaler.output().height != input.height()
+    });
 
     if needs_rebuild {
         decoder.scaler = Some(
@@ -1288,9 +1289,7 @@ fn find_d3d11va_hw_pixel_format(codec: &ffmpeg::Codec) -> Option<ffi::AVPixelFor
 
         let supports_d3d11va = unsafe {
             (*config).device_type == ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA
-                && ((*config).methods
-                    & ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32)
-                    != 0
+                && ((*config).methods & ffi::AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX as i32) != 0
                 && matches!(
                     (*config).pix_fmt,
                     ffi::AVPixelFormat::AV_PIX_FMT_D3D11VA_VLD
@@ -1357,10 +1356,7 @@ unsafe extern "C" fn select_d3d11va_pixel_format(
         return ffi::AVPixelFormat::AV_PIX_FMT_NONE;
     }
 
-    let hardware_context = unsafe {
-        ((*avctx).opaque as *const VideoHardwareContext)
-            .as_ref()
-    };
+    let hardware_context = unsafe { ((*avctx).opaque as *const VideoHardwareContext).as_ref() };
     let Some(hardware_context) = hardware_context else {
         return unsafe { ffi::avcodec_default_get_format(avctx, fmt) };
     };

@@ -472,8 +472,11 @@ impl SemiPlayerHandle {
         current_effective_end_us: Option<MediaTimeUs>,
         playback_time_us: MediaTimeUs,
     ) {
-        self.diagnostics
-            .observe_seek_current_video(current_pts_us, current_effective_end_us, playback_time_us);
+        self.diagnostics.observe_seek_current_video(
+            current_pts_us,
+            current_effective_end_us,
+            playback_time_us,
+        );
     }
 
     pub fn observe_seek_video_dropped(&self, frame_pts_us: MediaTimeUs) {
@@ -560,10 +563,11 @@ impl PlayerDiagnostics {
             u64::try_from(passthrough_frames).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
-        self.render_passthrough_with_subtitle_intent_frames_total.fetch_add(
-            u64::try_from(passthrough_with_subtitle_intent_frames).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        self.render_passthrough_with_subtitle_intent_frames_total
+            .fetch_add(
+                u64::try_from(passthrough_with_subtitle_intent_frames).unwrap_or(u64::MAX),
+                Ordering::Relaxed,
+            );
         self.render_requires_transform_frames_total.fetch_add(
             u64::try_from(requires_transform_frames).unwrap_or(u64::MAX),
             Ordering::Relaxed,
@@ -637,7 +641,8 @@ impl PlayerDiagnostics {
             {
                 seek.seek_first_post_target_video_decoded_us = Some(seek.elapsed_us());
                 seek.seek_first_post_target_video_pts_us = Some(frame_pts_us);
-                seek.seek_audio_position_at_first_post_target_video_decoded_us = Some(playback_time_us);
+                seek.seek_audio_position_at_first_post_target_video_decoded_us =
+                    Some(playback_time_us);
             }
             if frame_pts_us < seek.target_us {
                 seek.seek_pre_target_video_decoded_count =
@@ -807,8 +812,7 @@ impl PlayerDiagnostics {
             seek_first_video_pts_us: seek_snapshot.seek_first_video_pts_us,
             seek_first_post_target_video_decoded_us: seek_snapshot
                 .seek_first_post_target_video_decoded_us,
-            seek_first_post_target_video_pts_us: seek_snapshot
-                .seek_first_post_target_video_pts_us,
+            seek_first_post_target_video_pts_us: seek_snapshot.seek_first_post_target_video_pts_us,
             seek_audio_position_at_first_post_target_video_decoded_us: seek_snapshot
                 .seek_audio_position_at_first_post_target_video_decoded_us,
             seek_first_audio_decoder_output_us: seek_snapshot.seek_first_audio_decoder_output_us,
@@ -829,8 +833,7 @@ impl PlayerDiagnostics {
             seek_target_audio_ready_us: seek_snapshot.seek_target_audio_ready_us,
             seek_stable_us: seek_snapshot.seek_stable_us,
             seek_pre_target_video_decoded_count: seek_snapshot.seek_pre_target_video_decoded_count,
-            seek_pre_target_current_video_count: seek_snapshot
-                .seek_pre_target_current_video_count,
+            seek_pre_target_current_video_count: seek_snapshot.seek_pre_target_current_video_count,
             seek_first_video_packet_pts_us: -1,
             seek_first_video_packet_dts_us: -1,
             seek_first_video_packet_is_key: false,
@@ -912,8 +915,7 @@ impl SeekObservation {
                 .unwrap_or(-1),
             seek_post_target_video_dropped_before_current_count: self
                 .seek_post_target_video_dropped_before_current_count,
-            seek_audio_output_started_before_current: self
-                .seek_audio_output_started_before_current,
+            seek_audio_output_started_before_current: self.seek_audio_output_started_before_current,
             seek_audio_output_start_us: self.seek_audio_output_start_us.unwrap_or(-1),
             seek_target_video_ready_us: self.seek_target_video_ready_us.unwrap_or(-1),
             seek_target_video_pts_us: self.seek_target_video_pts_us.unwrap_or(-1),

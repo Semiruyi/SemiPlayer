@@ -221,6 +221,11 @@ Tasks:
   - `P010`
 - keep a software decode fallback for unsupported media/devices
 - keep backend details out of portable core contracts
+- keep the current D3D11 render backend skeleton growing around explicit:
+  - input request extraction
+  - output target description
+  - render-plan selection
+  - renderer/context ownership
 
 ### P1.4 Add a real player-owned video-render stage
 
@@ -245,6 +250,7 @@ Tasks:
 - keep presentation target selection player-owned so hosts can switch contracts explicitly
 - keep smoke able to switch presentation profiles for render-path diagnostics
 - distinguish true passthrough from temporary fallback-passthrough in render diagnostics
+- keep the D3D11 presenter branch on an explicit backend execution path while real GPU work lands
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`

@@ -40,7 +40,8 @@ pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAd
         }
 
         let request_frame_count =
-            crate::audio::core::output_controller::AudioOutputController::next_request_frame_count();
+            crate::audio::core::output_controller::AudioOutputController::next_request_frame_count(
+            );
         if request_frame_count == 0 {
             return (0, 0);
         }
@@ -118,16 +119,14 @@ pub(crate) fn finish_playback_advance(
     let mut should_update_clock_from_device = false;
 
     if player.is_gating_audio_for_seek_recovery() {
-        if player.runtime.current_video_frame().is_some()
-            && sync_snapshot.core_sync_error_us == 0
-        {
+        if player.runtime.current_video_frame().is_some() && sync_snapshot.core_sync_error_us == 0 {
             player
                 .audio_output
                 .with_mut(|audio_output| audio_output.sync_started_state(plan.state));
 
-            let device_timing = player
-                .audio_output
-                .with_ref(crate::audio::core::output_controller::AudioOutputController::playback_timing);
+            let device_timing = player.audio_output.with_ref(
+                crate::audio::core::output_controller::AudioOutputController::playback_timing,
+            );
             if device_timing.is_some() {
                 player.audio_clock.play();
                 player.audio_clock.update_from_device(device_timing);
@@ -149,9 +148,9 @@ pub(crate) fn finish_playback_advance(
     }
 
     if should_update_clock_from_device {
-        let device_timing = player
-            .audio_output
-            .with_ref(crate::audio::core::output_controller::AudioOutputController::playback_timing);
+        let device_timing = player.audio_output.with_ref(
+            crate::audio::core::output_controller::AudioOutputController::playback_timing,
+        );
         player.audio_clock.update_from_device(device_timing);
     }
 
@@ -159,7 +158,11 @@ pub(crate) fn finish_playback_advance(
     let audio_snapshot = player
         .audio_output
         .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
-    if let Some(current_pts_us) = player.runtime.current_video_frame().map(|frame| frame.pts_us) {
+    if let Some(current_pts_us) = player
+        .runtime
+        .current_video_frame()
+        .map(|frame| frame.pts_us)
+    {
         player.observe_seek_current_video(
             current_pts_us,
             sync_snapshot.current_video_effective_end_us,

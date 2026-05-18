@@ -167,9 +167,9 @@ impl MediaInfo {
     pub fn video_stream_count(&self) -> u32 {
         u32::try_from(
             self.streams
-            .iter()
-            .filter(|stream| stream.kind == StreamKind::Video)
-            .count(),
+                .iter()
+                .filter(|stream| stream.kind == StreamKind::Video)
+                .count(),
         )
         .unwrap_or(u32::MAX)
     }
@@ -177,9 +177,9 @@ impl MediaInfo {
     pub fn audio_stream_count(&self) -> u32 {
         u32::try_from(
             self.streams
-            .iter()
-            .filter(|stream| stream.kind == StreamKind::Audio)
-            .count(),
+                .iter()
+                .filter(|stream| stream.kind == StreamKind::Audio)
+                .count(),
         )
         .unwrap_or(u32::MAX)
     }
@@ -187,9 +187,9 @@ impl MediaInfo {
     pub fn subtitle_stream_count(&self) -> u32 {
         u32::try_from(
             self.streams
-            .iter()
-            .filter(|stream| stream.kind == StreamKind::Subtitle)
-            .count(),
+                .iter()
+                .filter(|stream| stream.kind == StreamKind::Subtitle)
+                .count(),
         )
         .unwrap_or(u32::MAX)
     }

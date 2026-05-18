@@ -47,11 +47,7 @@ pub struct VideoSurface {
 }
 
 impl VideoSurface {
-    pub fn new_cpu_packed(
-        pixel_format: PixelFormatCategory,
-        stride: usize,
-        data: Vec<u8>,
-    ) -> Self {
+    pub fn new_cpu_packed(pixel_format: PixelFormatCategory, stride: usize, data: Vec<u8>) -> Self {
         Self {
             pixel_format,
             storage: VideoSurfaceStorage::CpuPacked { stride, data },
