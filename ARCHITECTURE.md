@@ -414,6 +414,7 @@ That means:
 
 - the player should own render as a subsystem
 - render should own pipeline selection and long-lived render state
+- render should own orchestration of multi-step frame rendering
 - pipelines should express transformation strategy
 - backends such as D3D11 should provide platform execution details
 
@@ -426,6 +427,15 @@ Why:
   renderer
 - `libplacebo` context, texture pools, and render resources fit render-instance ownership better
   than global ownership
+
+The player/sync layer should still decide which playback time is current.
+The render service should decide how that time becomes a final presentation frame, including future:
+
+- video render
+- subtitle render
+- composition
+- overlays / OSD
+- other multi-step render work
 
 Reference:
 
@@ -471,6 +481,12 @@ The near-term implementation can still phase this in conservatively:
 2. render to presentation-friendly RGB surfaces
 3. later add subtitle composition into the same render stage
 
+Preferred orchestration rule:
+
+- player/sync chooses the playback time to render
+- render service orchestrates subtitle render alongside video render
+- a composition step combines the results into the final presentation frame
+
 ### 13.5 Current recommended internal split
 
 The preferred internal direction is:
@@ -486,6 +502,7 @@ render/service/
   player-owned render subsystem entry point
   pipeline selection
   render-context ownership
+  multi-step render orchestration
 
 render/pipelines/
   transformation policy

@@ -54,6 +54,13 @@ More concretely:
 - render pipelines own transformation policy
 - render backends own platform execution details
 
+This also means the render service is the owner of future render orchestration:
+
+- which render steps are needed for a given frame
+- which steps may run in parallel
+- which steps must wait for others
+- how intermediate render products are composed into the final presentation frame
+
 ## 3. Why This Split
 
 This split keeps three responsibilities from collapsing into one another:
@@ -111,6 +118,7 @@ The render service should own:
 - decoded-frame to presentation-frame transformation
 - long-lived render context state
 - pipeline selection
+- render-step orchestration
 - render-oriented diagnostics
 
 The render service is the subsystem boundary for:
@@ -119,6 +127,16 @@ The render service is the subsystem boundary for:
 - scaling
 - subtitle composition
 - future overlays and OSD
+
+The render service should be treated as the coordinator of the whole render workflow, not merely as
+a thin wrapper around one pipeline call.
+
+For future complex rendering, it should decide:
+
+- whether video rendering and subtitle rendering can proceed independently
+- when composition must wait for upstream steps
+- whether cached subtitle/layout data can be reused
+- what the final presentation target of the frame should be
 
 ### 4.3 Pipeline
 
@@ -136,6 +154,10 @@ Pipeline responsibilities:
 - decide how a requested transformation should be performed
 - express what backend execution path is required
 - preserve a stable input/output contract for the render service
+
+Pipelines should not become the top-level scheduler of the whole frame render graph.
+
+That orchestration belongs to the render service.
 
 ### 4.4 Backend
 
@@ -194,6 +216,28 @@ video scheduler / host presenter
 
 This makes render the stage that turns raw decode output into display-usable output.
 
+For a more complex future frame, the intended flow is closer to:
+
+```text
+decoded video frame
+  + active subtitle state
+  + render request
+    ->
+RenderService
+    ->
+video pipeline
+    + subtitle pipeline
+    ->
+composition pipeline
+    ->
+PresentationFrame
+```
+
+In this shape:
+
+- the player/sync layer decides which playback time should be rendered
+- the render service decides how that playback time becomes a final frame
+
 ## 7. Relationship To `libplacebo` And `libass`
 
 This ownership model fits the planned libraries naturally.
@@ -220,6 +264,9 @@ It should provide:
 
 The render subsystem should then decide how those subtitle results are blended onto presentation
 frames.
+
+That means subtitle rendering should be treated as a sibling render workflow to video rendering,
+with composition owned above both by the render service.
 
 ## 8. Recommended Module Direction
 
@@ -253,6 +300,8 @@ Near-term design implications:
 - pipeline should be treated as a child concept of render
 - backend state should move toward render-instance ownership
 - D3D11 renderer lifetime should eventually be bound to the render service instance
+- future subtitle, overlay, and composition work should be orchestrated by the render service
+  rather than hidden inside a single video pipeline or backend
 
 ## 10. Summary
 

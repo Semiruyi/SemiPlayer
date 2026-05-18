@@ -259,6 +259,14 @@ Tasks:
   - player owns render
   - render owns pipeline selection and render-context state
   - pipelines use backend execution
+- make render service the owner of future multi-step render orchestration:
+  - video render
+  - subtitle render
+  - composition
+  - overlays / OSD
+- keep the ownership split explicit:
+  - player/sync chooses the playback time
+  - render service decides how that time becomes a final presentation frame
 - treat process-global renderer state as transitional scaffolding, not the target architecture
 - reserve the same stage for future:
   - scaling
@@ -323,6 +331,7 @@ Tasks:
 - delay / offset
 - embedded vs external subtitle source
 - keep subtitle timing independent from decoded video surfaces
+- make subtitle state consumable by a future render-service subtitle pipeline
 
 ### P2.2 Integrate libass
 
@@ -331,6 +340,7 @@ Tasks:
 - establish binding strategy
 - support text subtitle layout/rasterization
 - connect subtitle timing to the player timeline
+- define subtitle-render outputs that the render service can compose with video outputs
 
 ### P2.3 Unify subtitle timing with worker-owned playback
 
@@ -344,6 +354,9 @@ Tasks:
   - host presentation bias rules where relevant
 - keep subtitle composition out of decode output itself
 - first allow a transitional overlay path, then fold subtitle composition into the player render stage
+- make the long-term orchestration target explicit:
+  - video pipeline and subtitle pipeline may prepare work independently
+  - render service owns composition ordering and synchronization
 
 ## P3 - Quality and Portability
 
