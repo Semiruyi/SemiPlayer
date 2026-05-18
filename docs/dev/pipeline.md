@@ -561,6 +561,8 @@ Current implementation status:
   by the existing host copy-out path
 - that target profile is now player-owned state so a host can switch presentation contracts without
   redefining render-supply logic
+- transform-required frames are now tracked separately from temporary fallback-passthrough
+  execution so true passthrough and stopgap execution are no longer conflated
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 

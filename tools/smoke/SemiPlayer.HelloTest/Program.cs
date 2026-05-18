@@ -404,6 +404,7 @@ internal sealed class PlayerSmokeWindow : Window
     private bool _useAdaptivePump = true;
     private bool _drivePumpFromUi;
     private bool _showSeekDebug;
+    private SemiVideoPresentationProfile _presentationProfile = SemiVideoPresentationProfile.CpuBgraCompatibility;
 
     public PlayerSmokeWindow(string mediaPath, SmokeOptions options)
     {
@@ -499,6 +500,9 @@ internal sealed class PlayerSmokeWindow : Window
             _isPlayerCreated = true;
 
             EnsureOk(Native.semi_player_open(_player, _mediaPath), "semi_player_open");
+            EnsureOk(
+                Native.semi_player_set_video_presentation_profile(_player, (uint)_presentationProfile),
+                "semi_player_set_video_presentation_profile");
             EnsureOk(Native.semi_player_get_duration_ms(_player, out _durationMs), "semi_player_get_duration_ms");
             EnsureOk(Native.semi_player_get_media_info(_player, out _mediaInfo), "semi_player_get_media_info");
             _diagnostics.Reset();
@@ -793,9 +797,11 @@ internal sealed class PlayerSmokeWindow : Window
                 : $"Surface  {FormatSurfaceKind(snapshot.CurrentVideoSurfaceKind)}  " +
                   $"PixFmt {snapshot.CurrentVideoSurfacePixelFormat}";
         string renderLine =
-            $"Render  Total {snapshot.RenderFramesTotal}  Pass {snapshot.RenderPassthroughFramesTotal}  " +
+            $"Render  {FormatPresentationProfile(_presentationProfile)}  " +
+            $"Total {snapshot.RenderFramesTotal}  Pass {snapshot.RenderPassthroughFramesTotal}  " +
             $"PassSub {snapshot.RenderPassthroughWithSubtitleIntentFramesTotal}  " +
-            $"NeedXform {snapshot.RenderRequiresTransformFramesTotal}";
+            $"NeedXform {snapshot.RenderRequiresTransformFramesTotal}  " +
+            $"FallbackPass {snapshot.RenderFallbackPassthroughFramesTotal}";
 
         string audioLine1 =
             $"AudioOut  {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
@@ -852,7 +858,8 @@ internal sealed class PlayerSmokeWindow : Window
             $"AudioDiscardEvents {snapshot.StaleAudioDiscardEventCount}";
         string controlsLine =
             "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  " +
-            $"A AdaptivePump  P UiPump  D SeekDebug({(_showSeekDebug ? "On" : "Off")})";
+            $"A AdaptivePump  P UiPump  R Profile({FormatPresentationProfile(_presentationProfile)})  " +
+            $"D SeekDebug({(_showSeekDebug ? "On" : "Off")})";
 
         string statusText =
             $"{overviewLine1}{Environment.NewLine}" +
@@ -942,6 +949,14 @@ internal sealed class PlayerSmokeWindow : Window
         _ => "unknown",
     };
 
+    private static string FormatPresentationProfile(SemiVideoPresentationProfile profile) => profile switch
+    {
+        SemiVideoPresentationProfile.Passthrough => "Pass",
+        SemiVideoPresentationProfile.CpuBgraCompatibility => "CpuBgra",
+        SemiVideoPresentationProfile.D3d11BgraPresenter => "D3D11Bgra",
+        _ => "Unknown",
+    };
+
     private string BuildSourcePart()
     {
         if (_mediaInfo.VideoFrameRateNum > 0 && _mediaInfo.VideoFrameRateDen > 0)
@@ -990,6 +1005,10 @@ internal sealed class PlayerSmokeWindow : Window
                     break;
                 case Key.P:
                     ToggleUiPumpDriver();
+                    e.Handled = true;
+                    break;
+                case Key.R:
+                    CyclePresentationProfile();
                     e.Handled = true;
                     break;
                 case Key.D:
@@ -1041,6 +1060,22 @@ internal sealed class PlayerSmokeWindow : Window
     private void ToggleUiPumpDriver()
     {
         _drivePumpFromUi = !_drivePumpFromUi;
+        _diagnostics.Reset();
+        RefreshVideoFrame(forceCopy: false);
+    }
+
+    private void CyclePresentationProfile()
+    {
+        _presentationProfile = _presentationProfile switch
+        {
+            SemiVideoPresentationProfile.Passthrough => SemiVideoPresentationProfile.CpuBgraCompatibility,
+            SemiVideoPresentationProfile.CpuBgraCompatibility => SemiVideoPresentationProfile.D3d11BgraPresenter,
+            SemiVideoPresentationProfile.D3d11BgraPresenter => SemiVideoPresentationProfile.Passthrough,
+            _ => SemiVideoPresentationProfile.CpuBgraCompatibility,
+        };
+        EnsureOk(
+            Native.semi_player_set_video_presentation_profile(_player, (uint)_presentationProfile),
+            "semi_player_set_video_presentation_profile");
         _diagnostics.Reset();
         RefreshVideoFrame(forceCopy: false);
     }
@@ -1649,6 +1684,9 @@ internal static class Native
     internal static extern int semi_player_pump(IntPtr player, uint maxIterations);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_set_video_presentation_profile(IntPtr player, uint profile);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern void semi_player_destroy(IntPtr player);
 }
 
@@ -1730,6 +1768,7 @@ internal struct SemiPlaybackSnapshot
     internal ulong RenderPassthroughFramesTotal;
     internal ulong RenderPassthroughWithSubtitleIntentFramesTotal;
     internal ulong RenderRequiresTransformFramesTotal;
+    internal ulong RenderFallbackPassthroughFramesTotal;
     internal ulong SeekEventCount;
     internal uint SeekActive;
     internal long LastSeekTargetMs;
@@ -1847,4 +1886,11 @@ internal enum SemiVideoDecodeFallbackReason : uint
     HwDeviceContextBindFailed = 3,
     HwDecoderOpenFailed = 4,
     HwDecoderTypeMismatch = 5,
+}
+
+internal enum SemiVideoPresentationProfile : uint
+{
+    Passthrough = 0,
+    CpuBgraCompatibility = 1,
+    D3d11BgraPresenter = 2,
 }

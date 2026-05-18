@@ -154,6 +154,7 @@ pub struct SemiPlaybackSnapshot {
     pub render_passthrough_frames_total: u64,
     pub render_passthrough_with_subtitle_intent_frames_total: u64,
     pub render_requires_transform_frames_total: u64,
+    pub render_fallback_passthrough_frames_total: u64,
     pub seek_event_count: u64,
     pub seek_active: u32,
     pub last_seek_target_ms: i64,

@@ -107,6 +107,7 @@ pub struct VideoRenderStats {
     pub passthrough_frames: usize,
     pub passthrough_with_subtitle_intent_frames: usize,
     pub requires_transform_frames: usize,
+    pub fallback_passthrough_frames: usize,
 }
 
 #[derive(Debug, Default)]
@@ -130,9 +131,9 @@ impl VideoRenderPipeline {
         match plan.path {
             VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => frame,
             VideoRenderPath::RequiresTransform => {
-                // The first render-pipeline implementation only supports passthrough.
-                // Keep frame delivery stable for now while surfacing the required target
-                // through explicit planning/tests.
+                // Temporary execution path for unmet render targets.
+                // Keep playback alive by forwarding the original frame while diagnostics
+                // record that this frame still owes a real transform implementation.
                 let _target_pixel_format = plan.target.presentation_pixel_format;
                 let _target_surface_kind = plan.target.presentation_surface_kind;
                 frame
@@ -164,6 +165,10 @@ impl VideoRenderPipeline {
                     batch.stats.requires_transform_frames = batch
                         .stats
                         .requires_transform_frames
+                        .saturating_add(1);
+                    batch.stats.fallback_passthrough_frames = batch
+                        .stats
+                        .fallback_passthrough_frames
                         .saturating_add(1);
                 }
             }
@@ -474,6 +479,7 @@ mod tests {
                 passthrough_frames: 0,
                 passthrough_with_subtitle_intent_frames: 0,
                 requires_transform_frames: 2,
+                fallback_passthrough_frames: 2,
             }
         );
     }

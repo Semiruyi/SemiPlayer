@@ -35,6 +35,7 @@ pub struct PlayerDiagnosticsSnapshot {
     pub render_passthrough_frames_total: u64,
     pub render_passthrough_with_subtitle_intent_frames_total: u64,
     pub render_requires_transform_frames_total: u64,
+    pub render_fallback_passthrough_frames_total: u64,
     pub seek_event_count: u64,
     pub seek_active: bool,
     pub last_seek_target_us: MediaTimeUs,
@@ -89,6 +90,7 @@ struct PlayerDiagnostics {
     render_passthrough_frames_total: AtomicU64,
     render_passthrough_with_subtitle_intent_frames_total: AtomicU64,
     render_requires_transform_frames_total: AtomicU64,
+    render_fallback_passthrough_frames_total: AtomicU64,
     seek: Mutex<SeekDiagnosticsState>,
 }
 
@@ -381,12 +383,14 @@ impl SemiPlayerHandle {
         passthrough_frames: usize,
         passthrough_with_subtitle_intent_frames: usize,
         requires_transform_frames: usize,
+        fallback_passthrough_frames: usize,
     ) {
         self.diagnostics.observe_render_stats(
             rendered_frames,
             passthrough_frames,
             passthrough_with_subtitle_intent_frames,
             requires_transform_frames,
+            fallback_passthrough_frames,
         );
     }
 
@@ -546,6 +550,7 @@ impl PlayerDiagnostics {
         passthrough_frames: usize,
         passthrough_with_subtitle_intent_frames: usize,
         requires_transform_frames: usize,
+        fallback_passthrough_frames: usize,
     ) {
         self.render_frames_total.fetch_add(
             u64::try_from(rendered_frames).unwrap_or(u64::MAX),
@@ -561,6 +566,10 @@ impl PlayerDiagnostics {
         );
         self.render_requires_transform_frames_total.fetch_add(
             u64::try_from(requires_transform_frames).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        self.render_fallback_passthrough_frames_total.fetch_add(
+            u64::try_from(fallback_passthrough_frames).unwrap_or(u64::MAX),
             Ordering::Relaxed,
         );
     }
@@ -783,6 +792,9 @@ impl PlayerDiagnostics {
                 .load(Ordering::Relaxed),
             render_requires_transform_frames_total: self
                 .render_requires_transform_frames_total
+                .load(Ordering::Relaxed),
+            render_fallback_passthrough_frames_total: self
+                .render_fallback_passthrough_frames_total
                 .load(Ordering::Relaxed),
             seek_event_count: seek_snapshot.seek_event_count,
             seek_active: seek_snapshot.seek_active,

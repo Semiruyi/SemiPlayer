@@ -291,6 +291,8 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
             .render_passthrough_with_subtitle_intent_frames_total,
         render_requires_transform_frames_total: diagnostics
             .render_requires_transform_frames_total,
+        render_fallback_passthrough_frames_total: diagnostics
+            .render_fallback_passthrough_frames_total,
         seek_event_count: diagnostics.seek_event_count,
         seek_active: u32::from(diagnostics.seek_active),
         last_seek_target_ms: us_to_ms(diagnostics.last_seek_target_us),

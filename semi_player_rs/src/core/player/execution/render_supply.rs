@@ -8,6 +8,7 @@ pub(crate) struct RenderSupplyResult {
     pub passthrough_frames: usize,
     pub passthrough_with_subtitle_intent_frames: usize,
     pub requires_transform_frames: usize,
+    pub fallback_passthrough_frames: usize,
 }
 
 impl RenderSupplyResult {
@@ -36,6 +37,7 @@ pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult
         result.passthrough_frames,
         result.passthrough_with_subtitle_intent_frames,
         result.requires_transform_frames,
+        result.fallback_passthrough_frames,
     );
 
     result
@@ -54,6 +56,7 @@ fn render_stats_to_result(stats: VideoRenderStats) -> RenderSupplyResult {
         passthrough_frames: stats.passthrough_frames,
         passthrough_with_subtitle_intent_frames: stats.passthrough_with_subtitle_intent_frames,
         requires_transform_frames: stats.requires_transform_frames,
+        fallback_passthrough_frames: stats.fallback_passthrough_frames,
     }
 }
 
@@ -96,6 +99,7 @@ mod tests {
                 passthrough_frames: 0,
                 passthrough_with_subtitle_intent_frames: 2,
                 requires_transform_frames: 0,
+                fallback_passthrough_frames: 0,
             }
         );
         assert_eq!(player.runtime.decoded_video_queue_len(), 0);
@@ -118,6 +122,7 @@ mod tests {
                 passthrough_frames: 1,
                 passthrough_with_subtitle_intent_frames: 0,
                 requires_transform_frames: 0,
+                fallback_passthrough_frames: 0,
             }
         );
         assert_eq!(player.runtime.presentation_video_queue_len(), 1);
@@ -176,6 +181,7 @@ mod tests {
                 passthrough_frames: 0,
                 passthrough_with_subtitle_intent_frames: 0,
                 requires_transform_frames: 1,
+                fallback_passthrough_frames: 1,
             }
         );
         assert_eq!(player.runtime.presentation_video_queue_len(), 1);
