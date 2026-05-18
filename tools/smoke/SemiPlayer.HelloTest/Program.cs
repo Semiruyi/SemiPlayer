@@ -857,7 +857,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"Stalled {(_diagnostics.IsStalled ? $"yes ({_diagnostics.StallDurationMs} ms)" : "no")}  " +
             $"AudioDiscardEvents {snapshot.StaleAudioDiscardEventCount}";
         string controlsLine =
-            "Space Play/Pause  Left/Right Seek 5s  Up/Down PumpHz  +/- PumpIters  " +
+            "Space Play/Pause  Left/Right SeekPrevKF/NextKF  Up/Down PumpHz  +/- PumpIters  " +
             $"A AdaptivePump  P UiPump  R Profile({FormatPresentationProfile(_presentationProfile)})  " +
             $"D SeekDebug({(_showSeekDebug ? "On" : "Off")})";
 
@@ -984,11 +984,11 @@ internal sealed class PlayerSmokeWindow : Window
                     e.Handled = true;
                     break;
                 case Key.Left:
-                    SeekRelative(-5_000);
+                    SeekPrevKeyframe();
                     e.Handled = true;
                     break;
                 case Key.Right:
-                    SeekRelative(5_000);
+                    SeekNextKeyframe();
                     e.Handled = true;
                     break;
                 case Key.Up:
@@ -1107,6 +1107,26 @@ internal sealed class PlayerSmokeWindow : Window
         EnsureOk(Native.semi_player_get_position_ms(_player, out long positionMs), "semi_player_get_position_ms");
         long targetMs = Math.Clamp(positionMs + deltaMs, 0, _durationMs);
         EnsureOk(Native.semi_player_seek(_player, targetMs, 0), "semi_player_seek");
+        _diagnostics.Reset();
+        _lastPresentedPtsMs = long.MinValue;
+        EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
+        RefreshVideoFrame(forceCopy: true);
+    }
+
+    private const int KeyframeSeekMinOffsetMs = 3000;
+
+    private void SeekPrevKeyframe()
+    {
+        EnsureOk(Native.semi_player_seek_prev_keyframe(_player, KeyframeSeekMinOffsetMs), "semi_player_seek_prev_keyframe");
+        _diagnostics.Reset();
+        _lastPresentedPtsMs = long.MinValue;
+        EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
+        RefreshVideoFrame(forceCopy: true);
+    }
+
+    private void SeekNextKeyframe()
+    {
+        EnsureOk(Native.semi_player_seek_next_keyframe(_player, KeyframeSeekMinOffsetMs), "semi_player_seek_next_keyframe");
         _diagnostics.Reset();
         _lastPresentedPtsMs = long.MinValue;
         EnsureOk(Native.semi_player_pump(_player, StartupPumpIterations), "semi_player_pump");
@@ -1655,6 +1675,12 @@ internal static class Native
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_seek(IntPtr player, long positionMs, int exact);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_seek_prev_keyframe(IntPtr player, int minOffsetMs);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    internal static extern int semi_player_seek_next_keyframe(IntPtr player, int minOffsetMs);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     internal static extern int semi_player_get_position_ms(IntPtr player, out long positionMs);

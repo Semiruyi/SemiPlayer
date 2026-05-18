@@ -18,13 +18,14 @@ use crate::api::types::{
 use crate::core::media::{
     open_media_with_hw_device_ctx, DecodedOutput, MediaInfo, MediaOpenError,
     MediaProbeError, SharedOpenedMedia, StreamKind, VideoDecodeBackend, VideoDecodeFallbackReason,
+    probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts,
 };
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
 use crate::core::player::schedule::PlayerScheduleService;
 use crate::core::player::video_sync::VideoSyncService;
 use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
-use crate::util::time::{ms_to_us, us_to_ms};
+use crate::util::time::{ms_to_us, us_to_ms, MediaTimeUs};
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
 
@@ -642,13 +643,14 @@ pub unsafe extern "C" fn semi_player_seek(
         };
 
         player.observe_seek_ffmpeg_seek_started();
-        if opened_media
-            .with_mut(|opened_media| opened_media.seek(target_us))
-            .is_err()
-        {
-            player.observe_seek_aborted();
-            return SEMI_E_SEEK_FAILED;
-        }
+        let seek_result = opened_media.with_mut(|opened_media| opened_media.seek(target_us));
+        let keyframe_pts = match seek_result {
+            Ok(pts) => pts,
+            Err(_) => {
+                player.observe_seek_aborted();
+                return SEMI_E_SEEK_FAILED;
+            }
+        };
         player.observe_seek_ffmpeg_seek_finished();
 
         player.bump_media_generation();
@@ -656,19 +658,125 @@ pub unsafe extern "C" fn semi_player_seek(
         player
             .audio_output
             .with_mut(crate::audio::core::output_controller::AudioOutputController::clear_buffer);
-        player.audio_clock.seek(target_us);
+        player.audio_clock.seek(keyframe_pts);
         if player.state() == PlayerState::Playing {
             player.audio_clock.pause();
         }
         player.video_scheduler = crate::render::core::scheduler::VideoScheduler;
         player.video_sync.reset();
-        player.begin_seek_recovery(target_us);
+        player.begin_seek_recovery(keyframe_pts);
         player.observe_seek_reset_finished();
         player.notify_workers();
         player.observe_seek_api_completed();
         SEMI_OK
     })
     .unwrap_or_else(|code| code)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `player` must be a valid handle.
+pub unsafe extern "C" fn semi_player_seek_prev_keyframe(
+    player: *mut SemiPlayerHandle,
+    min_offset_ms: c_int,
+) -> c_int {
+    with_playback_coordinated_player_locked(player, |player| {
+        let current_pts_us = player
+            .runtime
+            .current_video_frame()
+            .map(|frame| frame.pts_us)
+            .unwrap_or(0);
+        let offset_us = ms_to_us(min_offset_ms.max(0) as i64);
+        let probe_target = current_pts_us.saturating_sub(offset_us).max(0);
+
+        let keyframe_pts = player
+            .opened_media
+            .as_ref()
+            .and_then(|opened_media| {
+                let path = opened_media.with_ref(|om| om.path().to_string());
+                let stream_index = opened_media.with_ref(|om| om.info().best_video_stream_index);
+                probe_expected_left_keyframe_pts(&path, stream_index, probe_target)
+                    .map(|(pts, _)| pts)
+            })
+            .unwrap_or(current_pts_us);
+
+        execute_keyframe_seek(player, keyframe_pts)
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[no_mangle]
+/// # Safety
+///
+/// `player` must be a valid handle.
+pub unsafe extern "C" fn semi_player_seek_next_keyframe(
+    player: *mut SemiPlayerHandle,
+    min_offset_ms: c_int,
+) -> c_int {
+    with_playback_coordinated_player_locked(player, |player| {
+        let current_pts_us = player
+            .runtime
+            .current_video_frame()
+            .map(|frame| frame.pts_us)
+            .unwrap_or(0);
+        let offset_us = ms_to_us(min_offset_ms.max(0) as i64);
+        let probe_target = current_pts_us.saturating_add(offset_us);
+
+        let keyframe_pts = player
+            .opened_media
+            .as_ref()
+            .and_then(|opened_media| {
+                let path = opened_media.with_ref(|om| om.path().to_string());
+                let stream_index = opened_media.with_ref(|om| om.info().best_video_stream_index);
+                probe_expected_right_keyframe_pts(&path, stream_index, probe_target)
+            })
+            .unwrap_or(current_pts_us);
+
+        execute_keyframe_seek(player, keyframe_pts)
+    })
+    .unwrap_or_else(|code| code)
+}
+
+fn execute_keyframe_seek(
+    player: &mut SemiPlayerHandle,
+    keyframe_pts: MediaTimeUs,
+) -> ResultCode {
+    player.observe_seek_requested(keyframe_pts);
+    player.observe_seek_lock_acquired();
+
+    let Some(opened_media) = player.opened_media.as_ref() else {
+        player.observe_seek_aborted();
+        return SEMI_E_INVALID_STATE;
+    };
+
+    player.observe_seek_ffmpeg_seek_started();
+    let seek_result = opened_media.with_mut(|opened_media| opened_media.seek(keyframe_pts));
+    let resolved_pts = match seek_result {
+        Ok(pts) => pts,
+        Err(_) => {
+            player.observe_seek_aborted();
+            return SEMI_E_SEEK_FAILED;
+        }
+    };
+    player.observe_seek_ffmpeg_seek_finished();
+
+    player.bump_media_generation();
+    player.runtime.clear();
+    player
+        .audio_output
+        .with_mut(crate::audio::core::output_controller::AudioOutputController::clear_buffer);
+    player.audio_clock.seek(resolved_pts);
+    if player.state() == PlayerState::Playing {
+        player.audio_clock.pause();
+    }
+    player.video_scheduler = crate::render::core::scheduler::VideoScheduler;
+    player.video_sync.reset();
+    player.begin_seek_recovery(resolved_pts);
+    player.observe_seek_reset_finished();
+    player.notify_workers();
+    player.observe_seek_api_completed();
+    SEMI_OK
 }
 
 #[no_mangle]

@@ -17,4 +17,5 @@ Thumbs.db
 third_party/ffmpeg/current/
 third_party/ffmpeg/archives/
 
+*.dll
 *.log

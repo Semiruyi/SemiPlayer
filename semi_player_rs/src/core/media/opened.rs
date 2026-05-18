@@ -282,21 +282,25 @@ impl OpenedMedia {
         self.audio_decoder.as_ref()
     }
 
-    pub fn seek(&mut self, position_us: MediaTimeUs) -> Result<(), MediaOpenError> {
+    pub fn seek(&mut self, position_us: MediaTimeUs) -> Result<MediaTimeUs, MediaOpenError> {
         self.seek_diagnostics.begin();
+        let probed_keyframe_pts = probe_expected_left_keyframe_pts(
+            &self.path,
+            self.info.best_video_stream_index,
+            position_us,
+        );
         self.seek_diagnostics
-            .observe_expected_left_keyframe(probe_expected_left_keyframe_pts(
-                &self.path,
-                self.info.best_video_stream_index,
-                position_us,
-            ));
+            .observe_expected_left_keyframe(probed_keyframe_pts);
         let position = position_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
         if let Err(error) = self.input.seek(position, ..) {
             self.seek_diagnostics.finish();
             return Err(MediaOpenError::Seek(error));
         }
         self.flush_decoders();
-        Ok(())
+        let keyframe_pts = probed_keyframe_pts
+            .map(|(pts, _)| pts)
+            .unwrap_or(position_us);
+        Ok(keyframe_pts)
     }
 
     pub fn seek_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
@@ -617,7 +621,7 @@ impl SeekDemuxDiagnostics {
     }
 }
 
-fn probe_expected_left_keyframe_pts(
+pub fn probe_expected_left_keyframe_pts(
     path: &str,
     best_video_stream_index: Option<usize>,
     target_us: MediaTimeUs,
@@ -666,6 +670,41 @@ fn probe_expected_left_keyframe_pts(
     }
 
     best
+}
+
+pub fn probe_expected_right_keyframe_pts(
+    path: &str,
+    best_video_stream_index: Option<usize>,
+    current_us: MediaTimeUs,
+) -> Option<MediaTimeUs> {
+    const VIDEO_PACKET_SCAN_LIMIT: usize = 512;
+
+    let video_stream_index = best_video_stream_index?;
+    let mut input = ffmpeg::format::input(path).ok()?;
+    let target = current_us.rescale((1, 1_000_000), ffmpeg::rescale::TIME_BASE);
+    let _ = input.seek(target, ..target);
+
+    let mut video_packets_scanned = 0usize;
+
+    for (stream, packet) in input.packets() {
+        if stream.index() != video_stream_index {
+            continue;
+        }
+
+        video_packets_scanned = video_packets_scanned.saturating_add(1);
+        let time_base = stream.time_base();
+        let pts_us = packet_timestamp_us(packet.pts(), Some(time_base));
+
+        if packet.is_key() && pts_us > current_us {
+            return Some(pts_us);
+        }
+
+        if video_packets_scanned >= VIDEO_PACKET_SCAN_LIMIT {
+            break;
+        }
+    }
+
+    None
 }
 
 impl SharedOpenedMedia {
