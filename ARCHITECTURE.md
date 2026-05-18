@@ -171,7 +171,9 @@ Planned growth around rendering:
 
 ```text
 render/
+  service/               player-owned render subsystem entry point
   core/                  portable frame/surface/scheduling contracts
+  pipelines/             render transformation strategies
   backends/
     d3d11/               first Windows hardware video backend
 ```
@@ -394,6 +396,41 @@ Current implementation note:
 - this is intentional so scheduling and seek behavior can stay stable while the render stage is
   carved out
 
+### 13.2.1 Ownership model
+
+The preferred ownership chain for the render stage is:
+
+```text
+player
+  ->
+render service
+  ->
+pipeline selection / orchestration
+  ->
+backend execution
+```
+
+That means:
+
+- the player should own render as a subsystem
+- render should own pipeline selection and long-lived render state
+- pipelines should express transformation strategy
+- backends such as D3D11 should provide platform execution details
+
+This is the preferred direction instead of a process-wide global renderer singleton.
+
+Why:
+
+- renderer state is more naturally tied to a player instance than to the whole process
+- future multi-player or multi-device scenarios should not be forced through one shared global
+  renderer
+- `libplacebo` context, texture pools, and render resources fit render-instance ownership better
+  than global ownership
+
+Reference:
+
+- [docs/dev/render-ownership.md](c:/y-s/project/Semi/docs/dev/render-ownership.md)
+
 ### 13.3 Host adapters should consume presentation frames, not decoder internals
 
 The host adapter boundary should move toward:
@@ -445,6 +482,15 @@ core/media/
 render/core/
   portable decoded-surface and presentation-surface contracts
 
+render/service/
+  player-owned render subsystem entry point
+  pipeline selection
+  render-context ownership
+
+render/pipelines/
+  transformation policy
+  subtitle/video composition policy
+
 render/backends/d3d11/
   Windows video-render implementation
   - color conversion
@@ -460,6 +506,7 @@ The key rule is:
 
 - decoder-native surfaces are an internal playback/render concern
 - presentation-friendly frames are the handoff to host adapters
+- render owns transformation policy; backend owns platform execution
 
 Current near-term implementation plan:
 

@@ -187,6 +187,25 @@ Current limitation:
 - render-core now has a pipeline entry point, but it still returns the decoded frame unchanged
 - no independent render worker exists yet
 
+Planned ownership refinement:
+
+- the player should own a render service
+- the render service should own pipeline selection and long-lived render state
+- render pipelines should describe concrete transformation paths
+- render backends should provide platform execution details
+
+In other words:
+
+```text
+player
+  ->
+render
+  ->
+pipeline(s)
+  ->
+backend(s)
+```
+
 ## 7. Internal Sync Worker
 
 Relevant files:
@@ -571,6 +590,9 @@ Current implementation status:
   work still reports backend-unavailable instead of pretending to succeed
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
+- current backend scaffolding should still be treated as transitional; the preferred end-state is a
+  player-owned render service that owns render-instance backend state rather than a process-global
+  renderer
 
 without forcing each host to understand decoder-native formats.
 

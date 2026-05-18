@@ -255,6 +255,11 @@ Tasks:
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`
   - presentation-friendly RGB output such as `BGRA`
+- move toward explicit ownership:
+  - player owns render
+  - render owns pipeline selection and render-context state
+  - pipelines use backend execution
+- treat process-global renderer state as transitional scaffolding, not the target architecture
 - reserve the same stage for future:
   - scaling
   - subtitle composition

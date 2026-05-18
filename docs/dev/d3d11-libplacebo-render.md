@@ -134,6 +134,10 @@ underlying frame struct today.
 Recommended ownership:
 
 ```text
+player-owned render service
+  ->
+pipeline selection
+  ->
 render/core/
   portable render request, frame, and scheduling contracts
 
@@ -145,6 +149,14 @@ render/backends/d3d11/
 
 This keeps `render/core/pipeline.rs` responsible for deciding that a transform is needed, while the
 backend decides how to execute that transform on Windows.
+
+Preferred ownership rule:
+
+- player owns render
+- render owns pipeline selection and render context state
+- pipelines use backend execution
+
+This is preferred over a process-global renderer singleton.
 
 ## 7. Proposed End-to-End Windows Path
 
@@ -253,9 +265,10 @@ The D3D11 backend should become a long-lived backend service, not a per-frame sc
 
 Recommended direction:
 
-- one backend-owned D3D11 render context
-- one backend-owned `libplacebo` context bound to that D3D11 device
-- pooled or reusable BGRA render targets
+- one render-owned D3D11 renderer instance
+- one render-owned D3D11 render context
+- one render-owned `libplacebo` context bound to that D3D11 device
+- pooled or reusable BGRA render targets owned by the render subsystem
 - frame objects carry references or handles to backend-owned textures
 
 Avoid this shape for the real implementation:
@@ -269,7 +282,7 @@ destroy renderer
 ```
 
 The current `D3d11Renderer::new()` skeleton is acceptable as a placeholder, but the real
-implementation should hold persistent backend state.
+implementation should hold persistent backend state owned by the render service instance.
 
 ## 12. Data Needed From Decode
 
