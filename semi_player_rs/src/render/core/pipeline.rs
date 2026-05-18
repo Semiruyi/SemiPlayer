@@ -17,6 +17,20 @@ impl Default for PresentationPixelFormatPreference {
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PresentationTargetProfile {
+    Passthrough,
+    CpuBgraCompatibility,
+    D3d11BgraPresenter,
+}
+
+impl Default for PresentationTargetProfile {
+    fn default() -> Self {
+        Self::Passthrough
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PresentationSurfaceKindPreference {
     PreserveInput,
     CpuPacked,
@@ -31,9 +45,41 @@ impl Default for PresentationSurfaceKindPreference {
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VideoRenderRequest {
+    pub target_profile: PresentationTargetProfile,
     pub presentation_pixel_format: PresentationPixelFormatPreference,
     pub presentation_surface_kind: PresentationSurfaceKindPreference,
     pub subtitles_visible: bool,
+}
+
+impl VideoRenderRequest {
+    pub fn passthrough(subtitles_visible: bool) -> Self {
+        Self {
+            target_profile: PresentationTargetProfile::Passthrough,
+            presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
+            presentation_surface_kind: PresentationSurfaceKindPreference::PreserveInput,
+            subtitles_visible,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn cpu_bgra_compatibility(subtitles_visible: bool) -> Self {
+        Self {
+            target_profile: PresentationTargetProfile::CpuBgraCompatibility,
+            presentation_pixel_format: PresentationPixelFormatPreference::Bgra8,
+            presentation_surface_kind: PresentationSurfaceKindPreference::CpuPacked,
+            subtitles_visible,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn d3d11_bgra_presenter(subtitles_visible: bool) -> Self {
+        Self {
+            target_profile: PresentationTargetProfile::D3d11BgraPresenter,
+            presentation_pixel_format: PresentationPixelFormatPreference::Bgra8,
+            presentation_surface_kind: PresentationSurfaceKindPreference::D3d11Texture2D,
+            subtitles_visible,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -49,8 +95,9 @@ impl VideoRenderPipeline {
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
-        let _target_pixel_format = self.resolve_target_pixel_format(request, &frame);
-        let _target_surface_kind = self.resolve_target_surface_kind(request, &frame);
+        let resolved_request = self.resolve_request(request, &frame);
+        let _target_pixel_format = resolved_request.presentation_pixel_format;
+        let _target_surface_kind = resolved_request.presentation_surface_kind;
         frame
     }
 
@@ -65,27 +112,79 @@ impl VideoRenderPipeline {
             .collect()
     }
 
-    fn resolve_target_pixel_format(
+    fn resolve_request(
         &self,
         request: VideoRenderRequest,
         frame: &DecodedVideoFrame,
-    ) -> PixelFormatCategory {
-        match request.presentation_pixel_format {
-            PresentationPixelFormatPreference::PreserveInput => frame.pixel_format(),
-            PresentationPixelFormatPreference::Bgra8 => PixelFormatCategory::Bgra8,
+    ) -> ResolvedVideoRenderRequest {
+        let profile_pixel_format = match request.target_profile {
+            PresentationTargetProfile::Passthrough => PresentationPixelFormatPreference::PreserveInput,
+            PresentationTargetProfile::CpuBgraCompatibility => {
+                PresentationPixelFormatPreference::Bgra8
+            }
+            PresentationTargetProfile::D3d11BgraPresenter => {
+                PresentationPixelFormatPreference::Bgra8
+            }
+        };
+        let profile_surface_kind = match request.target_profile {
+            PresentationTargetProfile::Passthrough => {
+                PresentationSurfaceKindPreference::PreserveInput
+            }
+            PresentationTargetProfile::CpuBgraCompatibility => {
+                PresentationSurfaceKindPreference::CpuPacked
+            }
+            PresentationTargetProfile::D3d11BgraPresenter => {
+                PresentationSurfaceKindPreference::D3d11Texture2D
+            }
+        };
+        let pixel_format_preference = merge_pixel_format_preference(
+            profile_pixel_format,
+            request.presentation_pixel_format,
+        );
+        let surface_kind_preference = merge_surface_kind_preference(
+            profile_surface_kind,
+            request.presentation_surface_kind,
+        );
+
+        ResolvedVideoRenderRequest {
+            presentation_pixel_format: match pixel_format_preference {
+                PresentationPixelFormatPreference::PreserveInput => frame.pixel_format(),
+                PresentationPixelFormatPreference::Bgra8 => PixelFormatCategory::Bgra8,
+            },
+            presentation_surface_kind: match surface_kind_preference {
+                PresentationSurfaceKindPreference::PreserveInput => frame.surface_kind(),
+                PresentationSurfaceKindPreference::CpuPacked => VideoSurfaceKind::CpuPacked,
+                PresentationSurfaceKindPreference::D3d11Texture2D => {
+                    VideoSurfaceKind::D3d11Texture2D
+                }
+            },
         }
     }
+}
 
-    fn resolve_target_surface_kind(
-        &self,
-        request: VideoRenderRequest,
-        frame: &DecodedVideoFrame,
-    ) -> VideoSurfaceKind {
-        match request.presentation_surface_kind {
-            PresentationSurfaceKindPreference::PreserveInput => frame.surface_kind(),
-            PresentationSurfaceKindPreference::CpuPacked => VideoSurfaceKind::CpuPacked,
-            PresentationSurfaceKindPreference::D3d11Texture2D => VideoSurfaceKind::D3d11Texture2D,
-        }
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ResolvedVideoRenderRequest {
+    presentation_pixel_format: PixelFormatCategory,
+    presentation_surface_kind: VideoSurfaceKind,
+}
+
+fn merge_pixel_format_preference(
+    profile: PresentationPixelFormatPreference,
+    explicit: PresentationPixelFormatPreference,
+) -> PresentationPixelFormatPreference {
+    match explicit {
+        PresentationPixelFormatPreference::PreserveInput => profile,
+        _ => explicit,
+    }
+}
+
+fn merge_surface_kind_preference(
+    profile: PresentationSurfaceKindPreference,
+    explicit: PresentationSurfaceKindPreference,
+) -> PresentationSurfaceKindPreference {
+    match explicit {
+        PresentationSurfaceKindPreference::PreserveInput => profile,
+        _ => explicit,
     }
 }
 
@@ -94,8 +193,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        PresentationPixelFormatPreference, PresentationSurfaceKindPreference, VideoRenderPipeline,
-        VideoRenderRequest,
+        PresentationPixelFormatPreference, PresentationSurfaceKindPreference,
+        PresentationTargetProfile, VideoRenderPipeline, VideoRenderRequest,
     };
     use crate::render::core::frame::{
         PixelFormatCategory, VideoFrame, VideoSurface, VideoSurfaceKind,
@@ -138,6 +237,7 @@ mod tests {
 
         let output = pipeline.render_frame(
             VideoRenderRequest {
+                target_profile: PresentationTargetProfile::Passthrough,
                 presentation_pixel_format: PresentationPixelFormatPreference::Bgra8,
                 presentation_surface_kind: PresentationSurfaceKindPreference::PreserveInput,
                 subtitles_visible: true,
@@ -156,6 +256,7 @@ mod tests {
 
         let output = pipeline.render_frame(
             VideoRenderRequest {
+                target_profile: PresentationTargetProfile::Passthrough,
                 presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
                 presentation_surface_kind: PresentationSurfaceKindPreference::D3d11Texture2D,
                 subtitles_visible: false,
@@ -165,5 +266,55 @@ mod tests {
 
         assert_eq!(output.pts_us, input.pts_us);
         assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
+    }
+
+    #[test]
+    fn cpu_bgra_compatibility_profile_resolves_to_cpu_bgra_targets() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(123_000);
+
+        let resolved = pipeline.resolve_request(
+            VideoRenderRequest::cpu_bgra_compatibility(true),
+            &input,
+        );
+
+        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
+        assert_eq!(resolved.presentation_surface_kind, VideoSurfaceKind::CpuPacked);
+    }
+
+    #[test]
+    fn d3d11_presenter_profile_resolves_to_d3d11_bgra_targets() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(123_000);
+
+        let resolved = pipeline.resolve_request(
+            VideoRenderRequest::d3d11_bgra_presenter(false),
+            &input,
+        );
+
+        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
+        assert_eq!(
+            resolved.presentation_surface_kind,
+            VideoSurfaceKind::D3d11Texture2D
+        );
+    }
+
+    #[test]
+    fn explicit_surface_preference_can_override_profile_default() {
+        let pipeline = VideoRenderPipeline::new();
+        let input = decoded_frame(123_000);
+
+        let resolved = pipeline.resolve_request(
+            VideoRenderRequest {
+                target_profile: PresentationTargetProfile::D3d11BgraPresenter,
+                presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
+                presentation_surface_kind: PresentationSurfaceKindPreference::CpuPacked,
+                subtitles_visible: true,
+            },
+            &input,
+        );
+
+        assert_eq!(resolved.presentation_pixel_format, PixelFormatCategory::Bgra8);
+        assert_eq!(resolved.presentation_surface_kind, VideoSurfaceKind::CpuPacked);
     }
 }

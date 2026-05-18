@@ -21,7 +21,7 @@ pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult
     let request = VideoRenderRequest {
         presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
         presentation_surface_kind: PresentationSurfaceKindPreference::PreserveInput,
-        subtitles_visible: player.subtitles_visible,
+        ..VideoRenderRequest::passthrough(player.subtitles_visible)
     };
     let mut decoded_frames = Vec::<DecodedVideoFrame>::new();
 

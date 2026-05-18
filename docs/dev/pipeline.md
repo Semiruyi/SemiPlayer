@@ -551,6 +551,8 @@ Current implementation status:
 - render-core pipeline input is now an explicit render request carrying output preference and
   subtitle-visibility intent
 - that render request now also carries presentation-surface-kind preference
+- render requests can now be constructed from higher-level presentation target profiles such as
+  CPU-BGRA compatibility or D3D11-presenter intent
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 
