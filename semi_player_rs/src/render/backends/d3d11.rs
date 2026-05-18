@@ -80,6 +80,27 @@ pub enum D3d11RenderError {
     BackendUnavailable,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct D3d11RendererConfig {
+    pub output_pool_hint: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[allow(dead_code)]
+pub struct D3d11RendererStateSnapshot {
+    pub render_attempts: u64,
+    pub successful_renders: u64,
+    pub backend_unavailable_errors: u64,
+    pub output_pool_hint: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct D3d11RendererState {
+    render_attempts: u64,
+    successful_renders: u64,
+    backend_unavailable_errors: u64,
+}
+
 pub fn build_bgra_render_request(
     frame: &DecodedVideoFrame,
 ) -> Result<D3d11BgraRenderRequest, D3d11RenderError> {
@@ -134,28 +155,49 @@ pub fn plan_bgra_texture_render(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct D3d11Renderer {
-    output_pool_hint: u32,
+    config: D3d11RendererConfig,
+    state: D3d11RendererState,
 }
 
 impl D3d11Renderer {
     pub fn new() -> Self {
-        Self::default()
+        Self::with_config(D3d11RendererConfig::default())
+    }
+
+    pub fn with_config(config: D3d11RendererConfig) -> Self {
+        Self {
+            config,
+            state: D3d11RendererState::default(),
+        }
     }
 
     pub fn plan_frame(
         &self,
         frame: &DecodedVideoFrame,
     ) -> Result<D3d11RenderPlan, D3d11RenderError> {
-        let _ = self.output_pool_hint;
+        let _ = self.config.output_pool_hint;
         plan_bgra_texture_render(frame)
     }
 
     pub fn render_frame(
-        &self,
+        &mut self,
         frame: &DecodedVideoFrame,
     ) -> Result<PresentationFrame, D3d11RenderError> {
+        self.state.render_attempts = self.state.render_attempts.saturating_add(1);
         let plan = self.plan_frame(frame)?;
-        self.execute_plan(frame, plan)
+        match self.execute_plan(frame, plan) {
+            Ok(presentation_frame) => {
+                self.state.successful_renders = self.state.successful_renders.saturating_add(1);
+                Ok(presentation_frame)
+            }
+            Err(error) => {
+                if error == D3d11RenderError::BackendUnavailable {
+                    self.state.backend_unavailable_errors =
+                        self.state.backend_unavailable_errors.saturating_add(1);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn execute_plan(
@@ -163,7 +205,7 @@ impl D3d11Renderer {
         frame: &DecodedVideoFrame,
         plan: D3d11RenderPlan,
     ) -> Result<PresentationFrame, D3d11RenderError> {
-        let _ = self.output_pool_hint;
+        let _ = self.config.output_pool_hint;
         match plan.kind {
             D3d11RenderPlanKind::CopyBgraTexture => Ok(VideoFrame {
                 pts_us: frame.pts_us,
@@ -178,12 +220,26 @@ impl D3d11Renderer {
             }
         }
     }
+
+    #[allow(dead_code)]
+    pub fn snapshot(&self) -> D3d11RendererStateSnapshot {
+        D3d11RendererStateSnapshot {
+            render_attempts: self.state.render_attempts,
+            successful_renders: self.state.successful_renders,
+            backend_unavailable_errors: self.state.backend_unavailable_errors,
+            output_pool_hint: self.config.output_pool_hint,
+        }
+    }
 }
 
+// Transitional compatibility helper for the current pipeline call site.
+// The preferred long-term ownership is: player -> render service -> renderer instance.
+#[allow(dead_code)]
 pub fn try_render_to_bgra_texture(
     frame: &DecodedVideoFrame,
 ) -> Result<PresentationFrame, D3d11RenderError> {
-    D3d11Renderer::new().render_frame(frame)
+    let mut renderer = D3d11Renderer::new();
+    renderer.render_frame(frame)
 }
 
 #[cfg(test)]
@@ -191,7 +247,7 @@ mod tests {
     use super::{
         build_bgra_render_request, build_bgra_render_target_desc, plan_bgra_texture_render,
         try_render_to_bgra_texture, D3d11BgraRenderRequest, D3d11RenderError, D3d11RenderPlanKind,
-        D3d11Renderer,
+        D3d11Renderer, D3d11RendererConfig, D3d11RendererStateSnapshot,
     };
     use crate::render::core::frame::{
         PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
@@ -330,5 +386,45 @@ mod tests {
         let plan = renderer.plan_frame(&frame).expect("copy plan");
 
         assert_eq!(plan.kind, D3d11RenderPlanKind::CopyBgraTexture);
+    }
+
+    #[test]
+    fn renderer_snapshot_reports_stateful_attempt_counters() {
+        let frame = d3d11_frame(PixelFormatCategory::Nv12);
+        let mut renderer = D3d11Renderer::with_config(D3d11RendererConfig {
+            output_pool_hint: 3,
+        });
+
+        let result = renderer.render_frame(&frame);
+
+        assert!(matches!(result, Err(D3d11RenderError::BackendUnavailable)));
+        assert_eq!(
+            renderer.snapshot(),
+            D3d11RendererStateSnapshot {
+                render_attempts: 1,
+                successful_renders: 0,
+                backend_unavailable_errors: 1,
+                output_pool_hint: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn renderer_snapshot_reports_successful_copy_path() {
+        let frame = d3d11_frame(PixelFormatCategory::Bgra8);
+        let mut renderer = D3d11Renderer::new();
+
+        let output = renderer.render_frame(&frame).expect("copy render");
+
+        assert_eq!(output.pixel_format(), PixelFormatCategory::Bgra8);
+        assert_eq!(
+            renderer.snapshot(),
+            D3d11RendererStateSnapshot {
+                render_attempts: 1,
+                successful_renders: 1,
+                backend_unavailable_errors: 0,
+                output_pool_hint: 0,
+            }
+        );
     }
 }

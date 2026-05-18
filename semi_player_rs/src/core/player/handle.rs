@@ -14,6 +14,7 @@ use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::core::scheduler::VideoScheduler;
+use crate::render::service::RenderService;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -194,6 +195,7 @@ pub struct SemiPlayerHandle {
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
+    pub(crate) render: RenderService,
     pub(crate) runtime: PlayerRuntime,
     pub(crate) video_sync: VideoSyncState,
 }
@@ -217,6 +219,7 @@ impl SemiPlayerHandle {
             audio_clock: AudioClock::new(),
             audio_output: SharedAudioOutputController::default(),
             video_scheduler: VideoScheduler::new(),
+            render: RenderService::new(),
             runtime: PlayerRuntime::new(),
             video_sync: VideoSyncState::default(),
         }

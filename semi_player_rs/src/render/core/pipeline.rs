@@ -1,4 +1,4 @@
-use crate::render::backends::d3d11;
+use crate::render::backends::d3d11::D3d11Renderer;
 use crate::render::core::frame::{
     DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame, VideoSurface,
     VideoSurfaceKind, VideoSurfaceStorage,
@@ -120,6 +120,7 @@ pub struct VideoRenderBatch {
 }
 
 impl VideoRenderPipeline {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self
     }
@@ -130,14 +131,35 @@ impl VideoRenderPipeline {
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
-        let plan = self.plan_render(request, &frame);
-        self.execute_render_plan(&plan, frame).0
+        let mut d3d11_renderer = D3d11Renderer::new();
+        self.render_frame_with_d3d11_renderer(request, frame, &mut d3d11_renderer)
     }
 
+    pub fn render_frame_with_d3d11_renderer(
+        &self,
+        request: VideoRenderRequest,
+        frame: DecodedVideoFrame,
+        d3d11_renderer: &mut D3d11Renderer,
+    ) -> PresentationFrame {
+        let plan = self.plan_render(request, &frame);
+        self.execute_render_plan(&plan, frame, d3d11_renderer).0
+    }
+
+    #[allow(dead_code)]
     pub fn render_frames(
         &self,
         request: VideoRenderRequest,
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
+    ) -> VideoRenderBatch {
+        let mut d3d11_renderer = D3d11Renderer::new();
+        self.render_frames_with_d3d11_renderer(request, frames, &mut d3d11_renderer)
+    }
+
+    pub fn render_frames_with_d3d11_renderer(
+        &self,
+        request: VideoRenderRequest,
+        frames: impl IntoIterator<Item = DecodedVideoFrame>,
+        d3d11_renderer: &mut D3d11Renderer,
     ) -> VideoRenderBatch {
         let mut batch = VideoRenderBatch::default();
 
@@ -160,7 +182,8 @@ impl VideoRenderPipeline {
                 }
             }
 
-            let (rendered_frame, fell_back) = self.execute_render_plan(&plan, frame);
+            let (rendered_frame, fell_back) =
+                self.execute_render_plan(&plan, frame, d3d11_renderer);
             if fell_back {
                 batch.stats.fallback_passthrough_frames =
                     batch.stats.fallback_passthrough_frames.saturating_add(1);
@@ -246,6 +269,7 @@ impl VideoRenderPipeline {
         &self,
         plan: &VideoRenderPlan,
         frame: DecodedVideoFrame,
+        d3d11_renderer: &mut D3d11Renderer,
     ) -> Result<PresentationFrame, DecodedVideoFrame> {
         match (
             plan.target.presentation_surface_kind,
@@ -255,7 +279,7 @@ impl VideoRenderPipeline {
                 self.try_render_cpu_bgra_compatibility(frame)
             }
             (VideoSurfaceKind::D3d11Texture2D, PixelFormatCategory::Bgra8) => {
-                self.try_render_d3d11_bgra_presenter(frame)
+                self.try_render_d3d11_bgra_presenter(frame, d3d11_renderer)
             }
             _ => Err(frame),
         }
@@ -301,8 +325,9 @@ impl VideoRenderPipeline {
     fn try_render_d3d11_bgra_presenter(
         &self,
         frame: DecodedVideoFrame,
+        d3d11_renderer: &mut D3d11Renderer,
     ) -> Result<PresentationFrame, DecodedVideoFrame> {
-        match d3d11::try_render_to_bgra_texture(&frame) {
+        match d3d11_renderer.render_frame(&frame) {
             Ok(rendered_frame) => Ok(rendered_frame),
             Err(_) => Err(frame),
         }
@@ -312,19 +337,22 @@ impl VideoRenderPipeline {
         &self,
         plan: &VideoRenderPlan,
         frame: DecodedVideoFrame,
+        d3d11_renderer: &mut D3d11Renderer,
     ) -> (PresentationFrame, bool) {
         match plan.path {
             VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => {
                 (frame, false)
             }
-            VideoRenderPath::RequiresTransform => match self.try_render_transform(plan, frame) {
-                Ok(transformed_frame) => (transformed_frame, false),
-                Err(frame) => {
-                    let _target_pixel_format = plan.target.presentation_pixel_format;
-                    let _target_surface_kind = plan.target.presentation_surface_kind;
-                    (frame, true)
+            VideoRenderPath::RequiresTransform => {
+                match self.try_render_transform(plan, frame, d3d11_renderer) {
+                    Ok(transformed_frame) => (transformed_frame, false),
+                    Err(frame) => {
+                        let _target_pixel_format = plan.target.presentation_pixel_format;
+                        let _target_surface_kind = plan.target.presentation_surface_kind;
+                        (frame, true)
+                    }
                 }
-            },
+            }
         }
     }
 }

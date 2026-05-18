@@ -1,6 +1,6 @@
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::DecodedVideoFrame;
-use crate::render::core::pipeline::{VideoRenderPipeline, VideoRenderRequest, VideoRenderStats};
+use crate::render::core::pipeline::{VideoRenderRequest, VideoRenderStats};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RenderSupplyResult {
@@ -18,7 +18,6 @@ impl RenderSupplyResult {
 }
 
 pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult {
-    let pipeline = VideoRenderPipeline::new();
     let request = default_render_request(player);
     let mut decoded_frames = Vec::<DecodedVideoFrame>::new();
 
@@ -26,7 +25,7 @@ pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult
         decoded_frames.push(frame);
     }
 
-    let batch = pipeline.render_frames(request, decoded_frames);
+    let batch = player.render.render_frames(request, decoded_frames);
     let result = render_stats_to_result(batch.stats);
 
     for frame in batch.frames {
