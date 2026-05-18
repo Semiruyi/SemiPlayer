@@ -259,6 +259,16 @@ Tasks:
   - scaling
   - subtitle composition
   - OSD / overlays
+- follow the first-phase integration sequence documented in:
+  - [docs/dev/d3d11-libplacebo-render.md](c:/y-s/project/Semi/docs/dev/d3d11-libplacebo-render.md)
+  - [docs/dev/d3d11-libplacebo-integration-plan.md](c:/y-s/project/Semi/docs/dev/d3d11-libplacebo-integration-plan.md)
+- before downloading or wiring `libplacebo`, first:
+  - pin D3D11 texture lifetime and ownership rules
+  - define where future video color metadata lives
+  - make the D3D11 backend stateful instead of per-frame scratch construction
+- only after that:
+  - choose and document the Windows `libplacebo` acquisition/link strategy
+  - implement the first narrow `D3D11 NV12 -> D3D11 BGRA` execution path
 
 ### P1.5 Define the presentation-oriented host ABI
 

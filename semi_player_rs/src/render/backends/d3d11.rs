@@ -1,15 +1,18 @@
 use crate::render::core::frame::{
-    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame, VideoSurface,
+    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoColorInfo, VideoFrame,
+    VideoSurface,
 };
 use std::sync::Arc;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct D3d11TextureSurfaceDesc {
+    // Raw `ID3D11Texture2D*` value owned by the decode or render backend.
     pub texture_ptr: u64,
     pub shared_handle: Option<u64>,
     pub array_slice: u32,
     pub pixel_format: PixelFormatCategory,
+    pub color_info: VideoColorInfo,
 }
 
 impl D3d11TextureSurfaceDesc {
@@ -21,6 +24,7 @@ impl D3d11TextureSurfaceDesc {
             self.shared_handle,
             self.array_slice,
         )
+        .with_color_info(self.color_info)
     }
 }
 
@@ -29,6 +33,7 @@ pub struct D3d11BgraRenderRequest {
     pub array_slice: u32,
     pub texture_ptr: u64,
     pub input_pixel_format: PixelFormatCategory,
+    pub input_color_info: VideoColorInfo,
     pub shared_handle: Option<u64>,
     pub width: u32,
     pub height: u32,
@@ -87,6 +92,7 @@ pub fn build_bgra_render_request(
             array_slice: *array_slice,
             texture_ptr: *texture_ptr,
             input_pixel_format: frame.pixel_format(),
+            input_color_info: frame.color_info(),
             shared_handle: *shared_handle,
             width: frame.width,
             height: frame.height,
@@ -187,7 +193,9 @@ mod tests {
         try_render_to_bgra_texture, D3d11BgraRenderRequest, D3d11RenderError, D3d11RenderPlanKind,
         D3d11Renderer,
     };
-    use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
+    use crate::render::core::frame::{
+        PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
+    };
     use std::sync::Arc;
 
     fn d3d11_frame(pixel_format: PixelFormatCategory) -> VideoFrame {
@@ -197,12 +205,10 @@ mod tests {
             width: 1920,
             height: 1080,
             is_key_frame: false,
-            surface: Arc::new(VideoSurface::new_d3d11_texture_2d(
-                pixel_format,
-                0x1234,
-                None,
-                0,
-            )),
+            surface: Arc::new(
+                VideoSurface::new_d3d11_texture_2d(pixel_format, 0x1234, None, 0)
+                    .with_color_info(VideoColorInfo::default()),
+            ),
         }
     }
 
@@ -258,12 +264,15 @@ mod tests {
             width: 1280,
             height: 720,
             is_key_frame: false,
-            surface: Arc::new(VideoSurface::new_d3d11_texture_2d(
-                PixelFormatCategory::Nv12,
-                0x9876,
-                Some(0x5555),
-                3,
-            )),
+            surface: Arc::new(
+                VideoSurface::new_d3d11_texture_2d(
+                    PixelFormatCategory::Nv12,
+                    0x9876,
+                    Some(0x5555),
+                    3,
+                )
+                .with_color_info(VideoColorInfo::default()),
+            ),
         };
 
         let request = build_bgra_render_request(&frame).expect("d3d11 surface request");
@@ -272,6 +281,7 @@ mod tests {
         assert_eq!(request.shared_handle, Some(0x5555));
         assert_eq!(request.array_slice, 3);
         assert_eq!(request.input_pixel_format, PixelFormatCategory::Nv12);
+        assert_eq!(request.input_color_info, VideoColorInfo::default());
         assert_eq!(request.width, 1280);
         assert_eq!(request.height, 720);
     }
@@ -282,6 +292,7 @@ mod tests {
             array_slice: 4,
             texture_ptr: 0x2000,
             input_pixel_format: PixelFormatCategory::Nv12,
+            input_color_info: VideoColorInfo::default(),
             shared_handle: Some(0x3000),
             width: 640,
             height: 360,

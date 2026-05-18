@@ -13,7 +13,8 @@ use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
 use crate::render::backends::d3d11::D3d11TextureSurfaceDesc;
 use crate::render::core::frame::{
-    DecodedVideoFrame, PixelFormatCategory, VideoFrame, VideoSurface,
+    DecodedVideoFrame, PixelFormatCategory, VideoColorInfo, VideoColorPrimaries, VideoColorRange,
+    VideoFrame, VideoMatrixCoefficients, VideoSurface, VideoTransferCharacteristic,
 };
 use crate::util::time::MediaTimeUs;
 
@@ -995,11 +996,10 @@ fn map_video_frame(
         width: converted.width(),
         height: converted.height(),
         is_key_frame: frame.is_key(),
-        surface: std::sync::Arc::new(VideoSurface::new_cpu_packed(
-            PixelFormatCategory::Bgra8,
-            stride,
-            data,
-        )),
+        surface: std::sync::Arc::new(
+            VideoSurface::new_cpu_packed(PixelFormatCategory::Bgra8, stride, data)
+                .with_color_info(video_color_info_from_av_frame(unsafe { frame.as_ptr() })),
+        ),
     })
 }
 
@@ -1037,6 +1037,7 @@ fn map_d3d11_video_frame(
         shared_handle: None,
         array_slice,
         pixel_format,
+        color_info: video_color_info_from_av_frame(av_frame),
     };
 
     Some(VideoFrame {
@@ -1394,6 +1395,66 @@ fn d3d11_hw_sw_format(av_frame: *const ffi::AVFrame) -> Option<PixelFormatCatego
     match unsafe { (*frames_ctx).sw_format } {
         ffi::AVPixelFormat::AV_PIX_FMT_NV12 => Some(PixelFormatCategory::Nv12),
         _ => None,
+    }
+}
+
+fn video_color_info_from_av_frame(av_frame: *const ffi::AVFrame) -> VideoColorInfo {
+    if av_frame.is_null() {
+        return VideoColorInfo::default();
+    }
+
+    VideoColorInfo {
+        range: map_av_color_range(unsafe { (*av_frame).color_range }),
+        primaries: map_av_color_primaries(unsafe { (*av_frame).color_primaries }),
+        transfer: map_av_color_transfer(unsafe { (*av_frame).color_trc }),
+        matrix: map_av_color_space(unsafe { (*av_frame).colorspace }),
+    }
+}
+
+fn map_av_color_range(range: ffi::AVColorRange) -> VideoColorRange {
+    match range {
+        ffi::AVColorRange::AVCOL_RANGE_MPEG => VideoColorRange::Limited,
+        ffi::AVColorRange::AVCOL_RANGE_JPEG => VideoColorRange::Full,
+        _ => VideoColorRange::Unknown,
+    }
+}
+
+fn map_av_color_primaries(primaries: ffi::AVColorPrimaries) -> VideoColorPrimaries {
+    match primaries {
+        ffi::AVColorPrimaries::AVCOL_PRI_BT709 => VideoColorPrimaries::Bt709,
+        ffi::AVColorPrimaries::AVCOL_PRI_BT470BG | ffi::AVColorPrimaries::AVCOL_PRI_SMPTE170M => {
+            VideoColorPrimaries::Bt601
+        }
+        ffi::AVColorPrimaries::AVCOL_PRI_BT2020 => VideoColorPrimaries::Bt2020,
+        _ => VideoColorPrimaries::Unknown,
+    }
+}
+
+fn map_av_color_transfer(
+    transfer: ffi::AVColorTransferCharacteristic,
+) -> VideoTransferCharacteristic {
+    match transfer {
+        ffi::AVColorTransferCharacteristic::AVCOL_TRC_BT709 => VideoTransferCharacteristic::Bt709,
+        ffi::AVColorTransferCharacteristic::AVCOL_TRC_IEC61966_2_1 => {
+            VideoTransferCharacteristic::Srgb
+        }
+        ffi::AVColorTransferCharacteristic::AVCOL_TRC_SMPTE2084 => VideoTransferCharacteristic::Pq,
+        ffi::AVColorTransferCharacteristic::AVCOL_TRC_ARIB_STD_B67 => {
+            VideoTransferCharacteristic::Hlg
+        }
+        _ => VideoTransferCharacteristic::Unknown,
+    }
+}
+
+fn map_av_color_space(space: ffi::AVColorSpace) -> VideoMatrixCoefficients {
+    match space {
+        ffi::AVColorSpace::AVCOL_SPC_BT709 => VideoMatrixCoefficients::Bt709,
+        ffi::AVColorSpace::AVCOL_SPC_BT470BG | ffi::AVColorSpace::AVCOL_SPC_SMPTE170M => {
+            VideoMatrixCoefficients::Bt601
+        }
+        ffi::AVColorSpace::AVCOL_SPC_BT2020_NCL => VideoMatrixCoefficients::Bt2020Ncl,
+        ffi::AVColorSpace::AVCOL_SPC_RGB => VideoMatrixCoefficients::Rgb,
+        _ => VideoMatrixCoefficients::Unknown,
     }
 }
 

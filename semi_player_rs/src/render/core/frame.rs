@@ -20,6 +20,59 @@ impl PixelFormatCategory {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum VideoColorRange {
+    Limited = 1,
+    Full = 2,
+    #[default]
+    Unknown = 0,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum VideoColorPrimaries {
+    Bt709 = 1,
+    Bt601 = 2,
+    Bt2020 = 3,
+    #[default]
+    Unknown = 0,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum VideoTransferCharacteristic {
+    Bt709 = 1,
+    Srgb = 2,
+    Pq = 3,
+    Hlg = 4,
+    #[default]
+    Unknown = 0,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[allow(dead_code)]
+pub enum VideoMatrixCoefficients {
+    Bt709 = 1,
+    Bt601 = 2,
+    Bt2020Ncl = 3,
+    Rgb = 4,
+    #[default]
+    Unknown = 0,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VideoColorInfo {
+    pub range: VideoColorRange,
+    pub primaries: VideoColorPrimaries,
+    pub transfer: VideoTransferCharacteristic,
+    pub matrix: VideoMatrixCoefficients,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VideoSurfaceKind {
     CpuPacked,
@@ -33,6 +86,10 @@ pub enum VideoSurfaceStorage {
         stride: usize,
         data: Vec<u8>,
     },
+    // `texture_ptr` stores a raw `ID3D11Texture2D*`.
+    // The decode or render backend owns that resource and must keep it alive for the lifetime
+    // of the `VideoFrame` carrying this surface.
+    // `array_slice` identifies the texture slice/subresource that contains the video frame.
     D3d11Texture2D {
         texture_ptr: u64,
         shared_handle: Option<u64>,
@@ -43,6 +100,7 @@ pub enum VideoSurfaceStorage {
 #[derive(Clone, Debug)]
 pub struct VideoSurface {
     pub pixel_format: PixelFormatCategory,
+    pub color_info: VideoColorInfo,
     pub storage: VideoSurfaceStorage,
 }
 
@@ -50,6 +108,7 @@ impl VideoSurface {
     pub fn new_cpu_packed(pixel_format: PixelFormatCategory, stride: usize, data: Vec<u8>) -> Self {
         Self {
             pixel_format,
+            color_info: VideoColorInfo::default(),
             storage: VideoSurfaceStorage::CpuPacked { stride, data },
         }
     }
@@ -63,12 +122,18 @@ impl VideoSurface {
     ) -> Self {
         Self {
             pixel_format,
+            color_info: VideoColorInfo::default(),
             storage: VideoSurfaceStorage::D3d11Texture2D {
                 texture_ptr,
                 shared_handle,
                 array_slice,
             },
         }
+    }
+
+    pub fn with_color_info(mut self, color_info: VideoColorInfo) -> Self {
+        self.color_info = color_info;
+        self
     }
 
     pub fn stride(&self) -> usize {
@@ -97,6 +162,10 @@ impl VideoSurface {
             VideoSurfaceStorage::CpuPacked { data, .. } => Some(data.as_slice()),
             VideoSurfaceStorage::D3d11Texture2D { .. } => None,
         }
+    }
+
+    pub fn color_info(&self) -> VideoColorInfo {
+        self.color_info
     }
 }
 
@@ -134,6 +203,10 @@ impl VideoFrame {
 
     pub fn cpu_packed_data(&self) -> Option<&[u8]> {
         self.surface.cpu_packed_data()
+    }
+
+    pub fn color_info(&self) -> VideoColorInfo {
+        self.surface.color_info()
     }
 
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {
