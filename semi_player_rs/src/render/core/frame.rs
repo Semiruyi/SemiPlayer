@@ -20,6 +20,12 @@ impl PixelFormatCategory {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VideoSurfaceKind {
+    CpuPacked,
+    D3d11Texture2D,
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum VideoSurfaceStorage {
@@ -76,6 +82,13 @@ impl VideoSurface {
         }
     }
 
+    pub fn kind(&self) -> VideoSurfaceKind {
+        match self.storage {
+            VideoSurfaceStorage::CpuPacked { .. } => VideoSurfaceKind::CpuPacked,
+            VideoSurfaceStorage::D3d11Texture2D { .. } => VideoSurfaceKind::D3d11Texture2D,
+        }
+    }
+
     pub fn byte_len(&self) -> usize {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { data, .. } => data.len(),
@@ -111,6 +124,10 @@ pub type DecodedVideoFrame = VideoFrame;
 pub type PresentationFrame = VideoFrame;
 
 impl VideoFrame {
+    pub fn surface_kind(&self) -> VideoSurfaceKind {
+        self.surface.kind()
+    }
+
     pub fn pixel_format(&self) -> PixelFormatCategory {
         self.surface.pixel_format
     }

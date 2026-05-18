@@ -235,6 +235,8 @@ Tasks:
 - keep decode-buffer accounting distinct from presentation-ready buffer accounting
 - move frame transformation responsibility into render supply instead of runtime queue helpers
 - move actual frame transformation ownership into `render/core/` pipeline code
+- route render-context inputs such as output preference and subtitle visibility through the pipeline
+- route presentation-surface policy through the pipeline instead of leaving it implicit in callers
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`

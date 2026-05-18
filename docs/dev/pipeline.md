@@ -548,6 +548,9 @@ Current implementation status:
 - `PlayerRuntime` now contains separate decoded-video and presentation-video queues
 - `execution/render_supply.rs` now owns the decoded-to-presentation handoff entry point
 - `render/core/pipeline.rs` now owns the render-core frame transformation entry point
+- render-core pipeline input is now an explicit render request carrying output preference and
+  subtitle-visibility intent
+- that render request now also carries presentation-surface-kind preference
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 
