@@ -217,7 +217,15 @@ pub struct SkippedAudioFrame {
     pub duration_us: Option<MediaTimeUs>,
 }
 
+#[allow(dead_code)]
 pub fn open_media(path: &str) -> Result<OpenedMedia, MediaOpenError> {
+    open_media_with_hw_device_ctx(path, None)
+}
+
+pub fn open_media_with_hw_device_ctx(
+    path: &str,
+    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
+) -> Result<OpenedMedia, MediaOpenError> {
     ffmpeg::init()
         .map_err(MediaProbeError::FfmpegInit)
         .map_err(MediaOpenError::Probe)?;
@@ -226,16 +234,17 @@ pub fn open_media(path: &str) -> Result<OpenedMedia, MediaOpenError> {
         .map_err(MediaProbeError::OpenInput)
         .map_err(MediaOpenError::Probe)?;
 
-    OpenedMedia::from_input(path.to_owned(), input)
+    OpenedMedia::from_input(path.to_owned(), input, hw_device_ctx)
 }
 
 impl OpenedMedia {
     pub fn from_input(
         path: String,
         input: ffmpeg::format::context::Input,
+        hw_device_ctx: Option<*mut ffi::AVBufferRef>,
     ) -> Result<Self, MediaOpenError> {
         let info = collect_media_info(&input).map_err(MediaOpenError::Probe)?;
-        let video_decoder = open_video_decoder(&input, info.best_video_stream_index)?;
+        let video_decoder = open_video_decoder(&input, info.best_video_stream_index, hw_device_ctx)?;
         let audio_decoder = open_audio_decoder(&input, info.best_audio_stream_index)?;
 
         Ok(Self {
@@ -696,6 +705,7 @@ pub struct MediaPacket {
 fn open_video_decoder(
     input: &ffmpeg::format::context::Input,
     stream_index: Option<usize>,
+    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 ) -> Result<Option<OpenedVideoDecoder>, MediaOpenError> {
     let Some(stream_index) = stream_index else {
         return Ok(None);
@@ -710,7 +720,7 @@ fn open_video_decoder(
         .ok_or(ffmpeg::Error::DecoderNotFound)
         .map_err(MediaOpenError::VideoDecoder)?;
 
-    match try_open_d3d11va_video_decoder(stream_index, &stream, codec)? {
+    match try_open_d3d11va_video_decoder(stream_index, &stream, codec, hw_device_ctx)? {
         Ok(decoder) => return Ok(Some(decoder)),
         Err(fallback_reason) => {
             let mut decoder = open_software_video_decoder(stream_index, &stream, codec)?;
@@ -752,6 +762,7 @@ fn try_open_d3d11va_video_decoder(
     stream_index: usize,
     stream: &ffmpeg::Stream<'_>,
     codec: ffmpeg::Codec,
+    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 ) -> Result<Result<OpenedVideoDecoder, VideoDecodeFallbackReason>, MediaOpenError> {
     let Some(hw_pix_fmt) = find_d3d11va_hw_pixel_format(&codec) else {
         return Ok(Err(VideoDecodeFallbackReason::NoHardwareConfig));
@@ -762,7 +773,7 @@ fn try_open_d3d11va_video_decoder(
     let mut decoder = context.decoder();
     decoder.set_packet_time_base(stream.time_base());
 
-    let hardware_context = match prepare_d3d11va_context(&mut decoder, hw_pix_fmt) {
+    let hardware_context = match prepare_d3d11va_context(&mut decoder, hw_pix_fmt, hw_device_ctx) {
         Ok(hardware_context) => hardware_context,
         Err(fallback_reason) => return Ok(Err(fallback_reason)),
     };
@@ -1308,20 +1319,33 @@ fn find_d3d11va_hw_pixel_format(codec: &ffmpeg::Codec) -> Option<ffi::AVPixelFor
 fn prepare_d3d11va_context(
     decoder: &mut ffmpeg::codec::decoder::Decoder,
     hw_pix_fmt: ffi::AVPixelFormat,
+    external_hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 ) -> Result<Box<VideoHardwareContext>, VideoDecodeFallbackReason> {
-    let mut hw_device_ctx = ptr::null_mut();
-    let create_result = unsafe {
-        ffi::av_hwdevice_ctx_create(
-            &mut hw_device_ctx,
-            ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
-            ptr::null(),
-            ptr::null_mut(),
-            0,
-        )
+    let hw_device_ctx = match external_hw_device_ctx {
+        Some(ctx) => {
+            let ref_ctx = unsafe { ffi::av_buffer_ref(ctx) };
+            if ref_ctx.is_null() {
+                return Err(VideoDecodeFallbackReason::HwDeviceCreateFailed);
+            }
+            ref_ctx
+        }
+        None => {
+            let mut created_ctx = ptr::null_mut();
+            let create_result = unsafe {
+                ffi::av_hwdevice_ctx_create(
+                    &mut created_ctx,
+                    ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    0,
+                )
+            };
+            if create_result < 0 || created_ctx.is_null() {
+                return Err(VideoDecodeFallbackReason::HwDeviceCreateFailed);
+            }
+            created_ctx
+        }
     };
-    if create_result < 0 || hw_device_ctx.is_null() {
-        return Err(VideoDecodeFallbackReason::HwDeviceCreateFailed);
-    }
 
     let avctx = unsafe { decoder.as_mut_ptr() };
     let mut hardware_context = Box::new(VideoHardwareContext {

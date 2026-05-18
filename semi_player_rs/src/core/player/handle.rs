@@ -198,6 +198,8 @@ pub struct SemiPlayerHandle {
     pub(crate) render: RenderService,
     pub(crate) runtime: PlayerRuntime,
     pub(crate) video_sync: VideoSyncState,
+    #[cfg(windows)]
+    pub(crate) d3d11_device: Option<crate::platform::windows::D3d11SharedDevice>,
 }
 
 impl SemiPlayerHandle {
@@ -222,6 +224,8 @@ impl SemiPlayerHandle {
             render: RenderService::new(),
             runtime: PlayerRuntime::new(),
             video_sync: VideoSyncState::default(),
+            #[cfg(windows)]
+            d3d11_device: crate::platform::windows::D3d11SharedDevice::new().ok(),
         }
     }
 

@@ -16,8 +16,8 @@ use crate::api::types::{
     SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
 use crate::core::media::{
-    open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
-    StreamKind, VideoDecodeBackend, VideoDecodeFallbackReason,
+    open_media_with_hw_device_ctx, DecodedOutput, MediaInfo, MediaOpenError,
+    MediaProbeError, SharedOpenedMedia, StreamKind, VideoDecodeBackend, VideoDecodeFallbackReason,
 };
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
@@ -521,7 +521,22 @@ pub extern "C" fn semi_player_open(
         Err(code) => return code,
     };
 
-    let opened_media = match open_media(&path) {
+    let hw_device_ctx = with_player_locked(player, |player| {
+        #[cfg(windows)]
+        {
+            player
+                .d3d11_device
+                .as_ref()
+                .and_then(|device| device.create_ffmpeg_hw_device_ctx().ok())
+        }
+        #[cfg(not(windows))]
+        {
+            None
+        }
+    })
+    .unwrap_or(None);
+
+    let opened_media = match open_media_with_hw_device_ctx(&path, hw_device_ctx) {
         Ok(opened_media) => opened_media,
         Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => {
             return SEMI_E_MEDIA_OPEN_FAILED

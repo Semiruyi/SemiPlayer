@@ -9,3 +9,11 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 [dependencies]
 cpal = "0.15"
 ffmpeg-next = { version = "8.1", features = ["codec", "format", "software-resampling", "software-scaling"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
