@@ -169,7 +169,7 @@ Current incremental split:
 ```text
 decoded output
   -> decoded-video queue
-  -> synchronous promotion
+  -> render supply
   -> presentation-video queue
   -> current presentation frame
 ```
@@ -178,11 +178,12 @@ Important current rule:
 
 - video sync and scheduling should now be thought of as operating on presentation frames
 - decode output is no longer the only video queue concept in runtime
+- decoded-video to presentation-video flow now goes through an explicit render-supply step
 
 Current limitation:
 
-- promotion from decoded video to presentation video is still synchronous passthrough
-- no independent render service or render worker exists yet
+- the first render-supply implementation is still synchronous passthrough
+- no independent render worker exists yet
 
 ## 7. Internal Sync Worker
 
@@ -543,9 +544,9 @@ Current implementation status:
 
 - `DecodedVideoFrame` and `PresentationFrame` roles now exist
 - `PlayerRuntime` now contains separate decoded-video and presentation-video queues
-- decode supply currently promotes decoded frames immediately into presentation frames
-- the first render-stage boundary therefore exists structurally, but not yet as an independent
-  service
+- `execution/render_supply.rs` now owns the decoded-to-presentation handoff entry point
+- that first render-stage implementation still promotes decoded frames immediately into
+  presentation frames
 
 without forcing each host to understand decoder-native formats.
 
@@ -639,10 +640,10 @@ Recommended implementation order:
 
 Immediate next sub-steps:
 
-1. replace runtime's synchronous promotion helper with an explicit render-service entry point
-2. keep the first render-service implementation synchronous passthrough
-3. make sync/error diagnostics explicitly presentation-frame-oriented
-4. only then add real color conversion and asynchronous render execution
+1. keep the first render-service implementation synchronous passthrough while the interface settles
+2. make sync/error diagnostics explicitly presentation-frame-oriented
+3. teach render supply to own real color conversion / surface transformation
+4. only then decide whether render needs asynchronous execution
 
 ## 12. Near-Term Direction
 

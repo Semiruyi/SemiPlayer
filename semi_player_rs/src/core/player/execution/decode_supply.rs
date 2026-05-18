@@ -1,6 +1,7 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
 use crate::core::media::{DecodePolicy, DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::player::execution::render_supply;
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::video_sync::VideoSyncService;
 
@@ -63,11 +64,13 @@ pub(crate) fn apply_decoded_output(
             let playback_time_us = player.audio_clock.presentation_time_us();
             player.observe_seek_video_decoded(frame.pts_us, playback_time_us);
             player.runtime.push_decoded_video_frame(frame);
-            let _ = player.runtime.promote_decoded_video_frames();
-            VideoSyncService::mark_dirty(player);
+            let render_result = render_supply(player);
+            if render_result.has_new_presentation_frames() {
+                VideoSyncService::mark_dirty(player);
+            }
             DecodedOutputApplyResult {
                 reached_end: false,
-                should_wake_sync: true,
+                should_wake_sync: render_result.has_new_presentation_frames(),
             }
         }
         DecodedOutput::SkippedVideo(frame) => {

@@ -259,12 +259,13 @@ Current incremental state of that split:
   - decoded-video queue
   - presentation-video queue
   - current presentation frame
-- the current promotion path is still synchronous passthrough:
+- decode output now flows through an explicit render-service entry point
+- the first render-service implementation is still synchronous passthrough:
   - decode output is queued as decoded video
-  - then immediately promoted into the presentation queue
+  - render supply immediately promotes it into the presentation queue
 
 That means the architecture boundary is now visible in code, even though the first render stage is
-not yet an independently scheduled service.
+not yet an independently scheduled service or worker lane.
 
 ## 11. What Is Still Transitional
 
@@ -274,7 +275,7 @@ Transitional parts:
 
 - decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
 - CPU BGRA copy is still the main host frame-delivery path
-- decoded-video to presentation-video promotion currently happens as synchronous passthrough, not yet as a real render service
+- render supply now exists as an explicit service boundary, but it still runs as synchronous passthrough
 - seek recovery is now explicit and keyframe-anchored diagnostics are in place, but reset/rebuild cost and post-target recovery cost are still being reduced
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state

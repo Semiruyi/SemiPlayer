@@ -87,13 +87,8 @@ impl PlayerRuntime {
         self.queued_decoded_video_frames.push_back(frame);
     }
 
-    pub fn promote_decoded_video_frames(&mut self) -> usize {
-        let mut promoted = 0usize;
-        while let Some(frame) = self.queued_decoded_video_frames.pop_front() {
-            self.push_presentation_video_frame(frame.into_presentation_frame());
-            promoted = promoted.saturating_add(1);
-        }
-        promoted
+    pub fn pop_decoded_video_frame(&mut self) -> Option<DecodedVideoFrame> {
+        self.queued_decoded_video_frames.pop_front()
     }
 
     pub fn push_presentation_video_frame(&mut self, frame: PresentationFrame) {

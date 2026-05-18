@@ -224,15 +224,15 @@ Tasks:
 
 ### P1.4 Add a real player-owned video-render stage
 
-Status: started at the structural level; runtime now has decoded/presentation queue split with synchronous passthrough promotion
+Status: in progress; explicit render-service boundary is now landed, first implementation remains synchronous passthrough
 
 Tasks:
 
 - introduce explicit `DecodedVideoFrame` / `DecoderSurface` concepts where needed
 - introduce explicit `PresentationFrame` / `RenderSurface` concepts where needed
 - keep runtime scheduling and sync centered on presentation frames
-- replace synchronous runtime promotion with an explicit render-service boundary
 - keep the first render-service implementation synchronous passthrough for stability
+- move frame transformation responsibility into render supply instead of runtime queue helpers
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`
