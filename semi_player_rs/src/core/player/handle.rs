@@ -12,6 +12,7 @@ use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::core::player::schedule::PlayerScheduleService;
 use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
+use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::core::scheduler::VideoScheduler;
 use crate::util::time::MediaTimeUs;
 
@@ -185,6 +186,7 @@ pub struct SemiPlayerHandle {
     media_generation: AtomicU64,
     pub(crate) speed: c_double,
     pub(crate) opened_media: Option<SharedOpenedMedia>,
+    pub(crate) video_presentation_profile: PresentationTargetProfile,
     pub(crate) subtitles_visible: bool,
     pub(crate) host_presentation_offset_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
@@ -207,6 +209,7 @@ impl SemiPlayerHandle {
             media_generation: AtomicU64::new(0),
             speed: 1.0,
             opened_media: None,
+            video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
             subtitles_visible: true,
             host_presentation_offset_us: 0,
             audio_clock: AudioClock::new(),
@@ -291,6 +294,7 @@ impl SemiPlayerHandle {
 
     pub fn reset_runtime_state(&mut self) {
         self.speed = 1.0;
+        self.video_presentation_profile = PresentationTargetProfile::CpuBgraCompatibility;
         self.subtitles_visible = true;
         self.host_presentation_offset_us = 0;
         self.audio_clock.reset();
@@ -324,6 +328,14 @@ impl SemiPlayerHandle {
         DecodePolicy {
             seek_recovery: target_us.map(|target_video_us| SeekRecoveryPolicy { target_video_us }),
         }
+    }
+
+    pub fn video_presentation_profile(&self) -> PresentationTargetProfile {
+        self.video_presentation_profile
+    }
+
+    pub fn set_video_presentation_profile(&mut self, profile: PresentationTargetProfile) {
+        self.video_presentation_profile = profile;
     }
 
     pub fn current_playback_time_us(&self) -> MediaTimeUs {

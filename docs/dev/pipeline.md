@@ -557,6 +557,10 @@ Current implementation status:
   require a real transform implementation
 - playback diagnostics can now expose how many rendered frames were passthrough versus still
   requiring a real transform path
+- the current default render-supply request now targets the CPU-BGRA compatibility contract used
+  by the existing host copy-out path
+- that target profile is now player-owned state so a host can switch presentation contracts without
+  redefining render-supply logic
 - that first render-stage implementation still promotes decoded frames immediately into
   presentation frames
 

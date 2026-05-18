@@ -240,6 +240,9 @@ Tasks:
 - define stable presentation target profiles for current host paths before real conversion lands
 - make transform-required requests explicit so real conversion work can land branch by branch
 - keep render-stage passthrough-vs-transform demand visible in diagnostics while implementation catches up
+- keep the current default render target aligned with the existing CPU-BGRA compatibility path until
+  a GPU presenter contract takes over
+- keep presentation target selection player-owned so hosts can switch contracts explicitly
 - keep color conversion inside the player, not the host
 - make the first D3D11 render path handle:
   - decoder-native input such as `NV12`

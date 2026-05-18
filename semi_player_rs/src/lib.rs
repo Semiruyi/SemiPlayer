@@ -13,7 +13,8 @@ use crate::api::error::{
 use crate::api::types::{
     PlayerState, SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
     SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
-    SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
+    SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc,
+    SemiVideoSurfaceKind,
 };
 use crate::core::media::{
     open_media, DecodedOutput, MediaInfo, MediaOpenError, MediaProbeError, SharedOpenedMedia,
@@ -717,6 +718,39 @@ pub extern "C" fn semi_player_set_subtitle_visible(
         }
 
         player.subtitles_visible = visible != 0;
+        SEMI_OK
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_set_video_presentation_profile(
+    player: *mut SemiPlayerHandle,
+    profile: u32,
+) -> c_int {
+    let Some(profile) = SemiVideoPresentationProfile::from_raw(profile) else {
+        return SEMI_E_INVALID_ARG;
+    };
+
+    with_playback_coordinated_player_locked(player, |player| {
+        if !player.is_media_loaded() {
+            return SEMI_E_INVALID_STATE;
+        }
+
+        let profile = match profile {
+            SemiVideoPresentationProfile::Passthrough => {
+                crate::render::core::pipeline::PresentationTargetProfile::Passthrough
+            }
+            SemiVideoPresentationProfile::CpuBgraCompatibility => {
+                crate::render::core::pipeline::PresentationTargetProfile::CpuBgraCompatibility
+            }
+            SemiVideoPresentationProfile::D3d11BgraPresenter => {
+                crate::render::core::pipeline::PresentationTargetProfile::D3d11BgraPresenter
+            }
+        };
+        player.set_video_presentation_profile(profile);
+        VideoSyncService::mark_dirty(player);
+        player.notify_workers();
         SEMI_OK
     })
     .unwrap_or_else(|code| code)

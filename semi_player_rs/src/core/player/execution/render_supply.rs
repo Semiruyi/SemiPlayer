@@ -1,9 +1,6 @@
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::DecodedVideoFrame;
-use crate::render::core::pipeline::{
-    PresentationPixelFormatPreference, PresentationSurfaceKindPreference, VideoRenderPipeline,
-    VideoRenderRequest, VideoRenderStats,
-};
+use crate::render::core::pipeline::{VideoRenderPipeline, VideoRenderRequest, VideoRenderStats};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RenderSupplyResult {
@@ -21,11 +18,7 @@ impl RenderSupplyResult {
 
 pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult {
     let pipeline = VideoRenderPipeline::new();
-    let request = VideoRenderRequest {
-        presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
-        presentation_surface_kind: PresentationSurfaceKindPreference::PreserveInput,
-        ..VideoRenderRequest::passthrough(player.subtitles_visible)
-    };
+    let request = default_render_request(player);
     let mut decoded_frames = Vec::<DecodedVideoFrame>::new();
 
     while let Some(frame) = player.runtime.pop_decoded_video_frame() {
@@ -48,6 +41,13 @@ pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult
     result
 }
 
+fn default_render_request(player: &SemiPlayerHandle) -> VideoRenderRequest {
+    VideoRenderRequest::from_target_profile(
+        player.video_presentation_profile(),
+        player.subtitles_visible,
+    )
+}
+
 fn render_stats_to_result(stats: VideoRenderStats) -> RenderSupplyResult {
     RenderSupplyResult {
         rendered_frames: stats.rendered_frames,
@@ -61,9 +61,10 @@ fn render_stats_to_result(stats: VideoRenderStats) -> RenderSupplyResult {
 mod tests {
     use std::sync::Arc;
 
-    use super::{render_supply, RenderSupplyResult};
+    use super::{default_render_request, render_supply, RenderSupplyResult};
     use crate::core::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
+    use crate::render::core::pipeline::VideoRenderRequest;
 
     fn decoded_frame(pts_us: i64) -> VideoFrame {
         VideoFrame {
@@ -117,6 +118,64 @@ mod tests {
                 passthrough_frames: 1,
                 passthrough_with_subtitle_intent_frames: 0,
                 requires_transform_frames: 0,
+            }
+        );
+        assert_eq!(player.runtime.presentation_video_queue_len(), 1);
+    }
+
+    #[test]
+    fn default_render_request_targets_cpu_bgra_compatibility() {
+        let player = SemiPlayerHandle::new();
+
+        let request = default_render_request(&player);
+
+        assert_eq!(
+            request,
+            VideoRenderRequest::cpu_bgra_compatibility(true)
+        );
+    }
+
+    #[test]
+    fn default_render_request_follows_player_profile() {
+        let mut player = SemiPlayerHandle::new();
+        player.set_video_presentation_profile(
+            crate::render::core::pipeline::PresentationTargetProfile::D3d11BgraPresenter,
+        );
+
+        let request = default_render_request(&player);
+
+        assert_eq!(
+            request,
+            VideoRenderRequest::d3d11_bgra_presenter(true)
+        );
+    }
+
+    #[test]
+    fn cpu_bgra_compatibility_marks_transform_need_for_d3d11_input() {
+        let mut player = SemiPlayerHandle::new();
+        player.runtime.push_decoded_video_frame(VideoFrame {
+            pts_us: 0,
+            duration_us: Some(33_000),
+            width: 1920,
+            height: 1080,
+            is_key_frame: false,
+            surface: Arc::new(VideoSurface::new_d3d11_texture_2d(
+                PixelFormatCategory::Nv12,
+                0x1234,
+                None,
+                0,
+            )),
+        });
+
+        let result = render_supply(&mut player);
+
+        assert_eq!(
+            result,
+            RenderSupplyResult {
+                rendered_frames: 1,
+                passthrough_frames: 0,
+                passthrough_with_subtitle_intent_frames: 0,
+                requires_transform_frames: 1,
             }
         );
         assert_eq!(player.runtime.presentation_video_queue_len(), 1);

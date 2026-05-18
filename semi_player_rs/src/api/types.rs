@@ -23,6 +23,30 @@ impl PlayerState {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemiVideoPresentationProfile {
+    Passthrough = 0,
+    CpuBgraCompatibility = 1,
+    D3d11BgraPresenter = 2,
+}
+
+impl SemiVideoPresentationProfile {
+    #[allow(dead_code)]
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::Passthrough),
+            1 => Some(Self::CpuBgraCompatibility),
+            2 => Some(Self::D3d11BgraPresenter),
+            _ => None,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SemiMediaInfo {

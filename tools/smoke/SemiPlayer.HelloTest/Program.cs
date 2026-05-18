@@ -792,6 +792,10 @@ internal sealed class PlayerSmokeWindow : Window
                   $"Stride {desc.Stride}  Bytes {desc.ByteLen}  Tex 0x{desc.TexturePtr:X}"
                 : $"Surface  {FormatSurfaceKind(snapshot.CurrentVideoSurfaceKind)}  " +
                   $"PixFmt {snapshot.CurrentVideoSurfacePixelFormat}";
+        string renderLine =
+            $"Render  Total {snapshot.RenderFramesTotal}  Pass {snapshot.RenderPassthroughFramesTotal}  " +
+            $"PassSub {snapshot.RenderPassthroughWithSubtitleIntentFramesTotal}  " +
+            $"NeedXform {snapshot.RenderRequiresTransformFramesTotal}";
 
         string audioLine1 =
             $"AudioOut  {audioOutput.ConfiguredSampleRate} Hz/{audioOutput.ConfiguredChannels} ch  " +
@@ -859,6 +863,7 @@ internal sealed class PlayerSmokeWindow : Window
             $"{videoLine}{Environment.NewLine}" +
             $"{decodeLine}{Environment.NewLine}" +
             $"{surfaceLine}{Environment.NewLine}" +
+            $"{renderLine}{Environment.NewLine}" +
             $"{audioLine1}{Environment.NewLine}" +
             $"{audioLine2}{Environment.NewLine}" +
             $"{seekLine1}{Environment.NewLine}" +

@@ -52,6 +52,22 @@ pub struct VideoRenderRequest {
 }
 
 impl VideoRenderRequest {
+    pub fn from_target_profile(
+        target_profile: PresentationTargetProfile,
+        subtitles_visible: bool,
+    ) -> Self {
+        match target_profile {
+            PresentationTargetProfile::Passthrough => Self::passthrough(subtitles_visible),
+            PresentationTargetProfile::CpuBgraCompatibility => {
+                Self::cpu_bgra_compatibility(subtitles_visible)
+            }
+            PresentationTargetProfile::D3d11BgraPresenter => {
+                Self::d3d11_bgra_presenter(subtitles_visible)
+            }
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn passthrough(subtitles_visible: bool) -> Self {
         Self {
             target_profile: PresentationTargetProfile::Passthrough,
