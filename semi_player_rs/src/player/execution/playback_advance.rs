@@ -1,10 +1,10 @@
 use crate::api::types::PlayerState;
 use crate::audio::core::output::AudioOutputChunk;
 use crate::audio::core::output_controller::SharedAudioOutputController;
+use crate::player::access::{PlaybackAdvanceObserveContext, PlaybackAdvancePlanContext};
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::AudioDiscardSummary;
 use crate::sync::video_sync::VideoSyncService;
-const AUDIO_SYNC_BATCH_CHUNK_LIMIT: usize = 4;
 
 pub fn advance_playback(player: &mut SemiPlayerHandle) {
     let plan = plan_playback_advance(player);
@@ -26,45 +26,54 @@ pub(crate) struct PlaybackAdvanceResult {
 }
 
 pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAdvancePlan {
-    let initial_playback_time_us = player.audio_clock.presentation_time_us();
-    let initial_discard = player
-        .runtime
-        .discard_consumed_audio_frames(initial_playback_time_us);
-    let audio_format = player.runtime.current_audio_format();
-    let state = player.state();
-    let audio_output = player.audio_output.clone();
-    let (request_frame_count, max_chunks) = audio_output.with_ref(|audio_output| {
-        let snapshot = audio_output.snapshot();
-        if snapshot.buffered_frames >= snapshot.target_buffer_frames {
-            return (0, 0);
-        }
+    let context = player.playback_advance_plan_context();
+    build_playback_advance_plan(context)
+}
 
-        let request_frame_count =
-            crate::audio::core::output_controller::AudioOutputController::next_request_frame_count(
-            );
-        if request_frame_count == 0 {
-            return (0, 0);
-        }
-
-        let deficit_frames = snapshot
-            .target_buffer_frames
-            .saturating_sub(snapshot.buffered_frames);
-        let max_chunks = deficit_frames
-            .saturating_add(request_frame_count.saturating_sub(1))
-            .saturating_div(request_frame_count)
-            .clamp(1, AUDIO_SYNC_BATCH_CHUNK_LIMIT);
-        (request_frame_count, max_chunks)
-    });
-    let audio_chunks = player
-        .runtime
-        .pull_audio_chunks(request_frame_count, max_chunks);
+fn build_playback_advance_plan(context: PlaybackAdvancePlanContext) -> PlaybackAdvancePlan {
+    let _ = (
+        context.initial_playback_time_us,
+        context.request_frame_count,
+        context.max_chunks,
+    );
 
     PlaybackAdvancePlan {
-        audio_output,
-        state,
-        initial_discard,
-        audio_chunks,
-        audio_format,
+        audio_output: context.audio_output,
+        state: context.state,
+        initial_discard: context.initial_discard,
+        audio_chunks: context.audio_chunks,
+        audio_format: context.audio_format,
+    }
+}
+
+fn observe_seek_stable_if_ready(
+    player: &SemiPlayerHandle,
+    observe: PlaybackAdvanceObserveContext<'_>,
+    sync_snapshot: crate::sync::video_sync::VideoSyncSnapshot,
+) {
+    let has_current_video_frame = observe.runtime.video.current_frame.is_some();
+    if sync_snapshot.current_video_pts_us == 0 && !has_current_video_frame {
+        return;
+    }
+
+    let audio_snapshot = observe.audio_output;
+    let decode_status = observe.runtime.decode_supply;
+    let state = PlayerState::from_raw(observe.control.state_raw)
+        .unwrap_or(crate::api::types::PlayerState::Idle);
+
+    let should_observe = match state {
+        PlayerState::Playing => {
+            audio_snapshot.started
+                && audio_snapshot.audible_frames_total > 0
+                && decode_status.has_sufficient_presentation_buffer
+                && sync_snapshot.core_sync_error_us == 0
+        }
+        PlayerState::Ready | PlayerState::Paused => sync_snapshot.core_sync_error_us == 0,
+        PlayerState::Idle => false,
+    };
+
+    if should_observe {
+        player.observe_seek_stable_access();
     }
 }
 
@@ -102,94 +111,65 @@ pub(crate) fn finish_playback_advance(
 ) {
     player.observe_stale_audio_discard(plan.initial_discard);
     if !result.audio_chunks_submitted && !result.audio_chunks.is_empty() {
-        player
-            .runtime
-            .restore_audio_chunks_front(result.audio_chunks);
+        player.with_runtime_access(|mut runtime| {
+            runtime.restore_audio_chunks_front(result.audio_chunks);
+        });
     }
-    let playback_time_us = player.current_playback_time_us();
+    let playback_time_us = player.playback_position_us_snapshot();
     let post_sync_discard = player
-        .runtime
-        .discard_consumed_audio_frames(playback_time_us);
+        .with_runtime_access(|mut runtime| runtime.discard_consumed_audio_frames(playback_time_us));
     player.observe_stale_audio_discard(post_sync_discard);
     let sync_snapshot = VideoSyncService::tick(player, playback_time_us);
 
-    let started_before_sync = player
-        .audio_output
-        .with_ref(|audio_output| audio_output.snapshot().started);
+    let started_before_sync = player.audio_coord_access().started_snapshot();
     let mut should_update_clock_from_device = false;
 
-    if player.is_gating_audio_for_seek_recovery() {
-        if player.runtime.current_video_frame().is_some() && sync_snapshot.core_sync_error_us == 0 {
+    if player.control_snapshot().gate_audio_until_video_ready {
+        if player.with_runtime_access(|runtime| runtime.has_current_video_frame())
+            && sync_snapshot.core_sync_error_us == 0
+        {
             player
-                .audio_output
-                .with_mut(|audio_output| audio_output.sync_started_state(plan.state));
+                .audio_coord_access()
+                .sync_output_started_state(plan.state);
 
-            let device_timing = player.audio_output.with_ref(
-                crate::audio::core::output_controller::AudioOutputController::playback_timing,
-            );
+            let device_timing = player.audio_coord_access().playback_timing_snapshot();
             if device_timing.is_some() {
-                player.audio_clock.play();
-                player.audio_clock.update_from_device(device_timing);
-                let _ = player.release_audio_gate_for_seek_recovery();
+                player.audio_coord_access().play_clock();
+                player
+                    .audio_coord_access()
+                    .update_clock_from_device(device_timing);
+                let _ = player.release_audio_gate_for_seek_recovery_access();
             }
         }
     } else {
         player
-            .audio_output
-            .with_mut(|audio_output| audio_output.sync_started_state(plan.state));
+            .audio_coord_access()
+            .sync_output_started_state(plan.state);
         should_update_clock_from_device = true;
     }
 
-    let started_after_sync = player
-        .audio_output
-        .with_ref(|audio_output| audio_output.snapshot().started);
+    let started_after_sync = player.audio_coord_access().started_snapshot();
     if !started_before_sync && started_after_sync {
-        player.observe_seek_audio_output_started();
+        player.observe_seek_audio_output_started_access();
     }
 
     if should_update_clock_from_device {
-        let device_timing = player.audio_output.with_ref(
-            crate::audio::core::output_controller::AudioOutputController::playback_timing,
-        );
-        player.audio_clock.update_from_device(device_timing);
+        let device_timing = player.audio_coord_access().playback_timing_snapshot();
+        player
+            .audio_coord_access()
+            .update_clock_from_device(device_timing);
     }
 
-    let playback_time_us = player.current_playback_time_us();
-    let audio_snapshot = player
-        .audio_output
-        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
-    if let Some(current_pts_us) = player
-        .runtime
-        .current_video_frame()
-        .map(|frame| frame.pts_us)
-    {
-        player.observe_seek_current_video(
+    let observe = player.playback_advance_observe_context();
+    if let Some(current_pts_us) = observe.runtime.video.current_pts_us {
+        player.observe_seek_current_video_access(
             current_pts_us,
             sync_snapshot.current_video_effective_end_us,
-            playback_time_us,
+            observe.playback_position_us,
         );
     }
-    if audio_snapshot.started && audio_snapshot.audible_frames_total > 0 {
-        player.observe_seek_target_audio_ready();
+    if observe.audio_output.started && observe.audio_output.audible_frames_total > 0 {
+        player.observe_seek_target_audio_ready_access();
     }
-    let decode_status = player.runtime.decode_supply_status();
-    if sync_snapshot.current_video_pts_us != 0 || player.runtime.current_video_frame().is_some() {
-        match player.state() {
-            PlayerState::Playing => {
-                if audio_snapshot.started
-                    && audio_snapshot.audible_frames_total > 0
-                    && decode_status.has_sufficient_presentation_buffer
-                    && sync_snapshot.core_sync_error_us == 0
-                {
-                    player.observe_seek_stable();
-                }
-            }
-            PlayerState::Ready | PlayerState::Paused => {
-                if sync_snapshot.core_sync_error_us == 0 {
-                    player.observe_seek_stable();
-                }
-            }
-            PlayerState::Idle => {}
-        }
-    }
+    observe_seek_stable_if_ready(player, observe, sync_snapshot);
 }

@@ -3,12 +3,12 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
+use crate::player::access::SyncWorkerPlanContext;
 use crate::player::diagnostics::LockOwner;
 use crate::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
 use crate::player::handle::SemiPlayerHandle;
-use crate::sync::schedule::PlayerScheduleService;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]
@@ -82,7 +82,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                         player_ptr,
                         LockOwner::SyncWorker,
                         |player| {
-                            if player.is_media_loaded() {
+                            if player.control_access().is_media_loaded() {
                                 Some(plan_playback_advance(player))
                             } else {
                                 None
@@ -122,21 +122,26 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
 }
 
 fn evaluate_worker_action(player: &mut SemiPlayerHandle) -> WorkerAction {
-    if !player.is_media_loaded() {
+    let context = player.sync_worker_plan_context();
+    if !context.media_loaded {
         return WorkerAction::WaitIndefinitely;
     }
 
-    match player.state() {
-        PlayerState::Playing => execute_worker_step(player, WorkerMode::Playing),
+    match context.state {
+        PlayerState::Playing => execute_worker_step(player, context, WorkerMode::Playing),
         PlayerState::Ready | PlayerState::Paused => {
-            execute_worker_step(player, WorkerMode::Stabilizing)
+            execute_worker_step(player, context, WorkerMode::Stabilizing)
         }
         PlayerState::Idle => WorkerAction::WaitIndefinitely,
     }
 }
 
-fn execute_worker_step(player: &mut SemiPlayerHandle, mode: WorkerMode) -> WorkerAction {
-    let hint = PlayerScheduleService::evaluate(player);
+fn execute_worker_step(
+    player: &mut SemiPlayerHandle,
+    context: SyncWorkerPlanContext,
+    mode: WorkerMode,
+) -> WorkerAction {
+    let hint = context.schedule_hint;
     if mode == WorkerMode::Stabilizing && !hint.playback_due_now && !hint.decode_supply_needed {
         return WorkerAction::WaitIndefinitely;
     }
@@ -149,7 +154,7 @@ fn execute_worker_step(player: &mut SemiPlayerHandle, mode: WorkerMode) -> Worke
     if scheduled_work.should_advance_playback {
         observe_worker_deadline_slip(player, scheduled_work.deadline_us);
         return WorkerAction::AdvancePlayback {
-            phase_lock: player.playback_phase_lock(),
+            phase_lock: context.phase_lock,
         };
     }
 
@@ -200,7 +205,7 @@ fn observe_worker_deadline_slip(player: &SemiPlayerHandle, deadline_us: Option<M
         return;
     };
 
-    let playback_time_us = player.audio_clock.presentation_time_us();
+    let playback_time_us = player.playback_position_us_snapshot();
     let slip_us = playback_time_us.saturating_sub(deadline_us).max(0);
     player.observe_worker_deadline_slip(slip_us);
 }

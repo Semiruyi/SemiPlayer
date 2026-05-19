@@ -3,6 +3,7 @@ use std::thread::{self, JoinHandle};
 
 use crate::decode::session::SharedMediaSession;
 use crate::decode::{DecodePolicy, DecodedOutputPoll};
+use crate::player::access::DecodePlanContext;
 use crate::player::diagnostics::LockOwner;
 use crate::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::player::handle::SemiPlayerHandle;
@@ -105,7 +106,15 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
 }
 
 fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
-    let hint = PlayerScheduleService::evaluate_decode(player);
+    let context = player.decode_plan_context();
+    let hint = PlayerScheduleService::evaluate_decode_from_inputs(player.decode_schedule_inputs());
+    plan_decode_action_from_context(context, hint)
+}
+
+fn plan_decode_action_from_context(
+    context: DecodePlanContext,
+    hint: crate::sync::schedule::DecodeScheduleHint,
+) -> DecodeWorkerPlan {
     if !hint.worker_active {
         return DecodeWorkerPlan::WaitIndefinitely;
     }
@@ -114,14 +123,14 @@ fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
         return DecodeWorkerPlan::WaitIndefinitely;
     }
 
-    let Some(opened_media) = player.cloned_media_session() else {
+    let Some(opened_media) = context.opened_media else {
         return DecodeWorkerPlan::WaitIndefinitely;
     };
 
     DecodeWorkerPlan::Decode {
         opened_media,
-        generation: player.media_generation(),
-        decode_policy: player.decode_policy(),
+        generation: context.generation,
+        decode_policy: context.decode_policy,
     }
 }
 
@@ -152,7 +161,9 @@ fn complete_decode_action(
 }
 
 fn next_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerAction {
-    if PlayerScheduleService::evaluate_decode(player).should_decode_now {
+    if PlayerScheduleService::evaluate_decode_from_inputs(player.decode_schedule_inputs())
+        .should_decode_now
+    {
         DecodeWorkerAction::ContinueSoon
     } else {
         DecodeWorkerAction::WaitIndefinitely

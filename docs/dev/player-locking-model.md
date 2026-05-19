@@ -492,6 +492,45 @@ Important rule:
 - Keep the old outer API as a temporary compatibility layer if needed.
 - Add access-layer skeleton helpers first, without rerouting behavior yet.
 
+### Current Implementation Status
+
+The skeleton is no longer only a proposal. The current tree already has a first-pass
+`src/player/access.rs` layer and several migrated paths.
+
+Landed access helpers:
+
+- `control_access()` / `control_snapshot()`
+- `with_runtime_access(...)`
+- `audio_coord_access()`
+- `playback_phase_handle()`
+- `decode_plan_context()`
+- `decode_audio_commit_context()`
+- `sync_worker_plan_context()`
+- `playback_advance_plan_context()`
+- `playback_advance_observe_context()`
+
+Paths already migrated onto the skeleton:
+
+- Host control path in `src/player/orchestrator.rs`
+- Playback snapshot and read helpers in `src/player/access.rs` and `src/player/view.rs`
+- Pump scheduling reads in `src/player/pump.rs`
+- Decode worker plan reads in `src/player/worker/decode.rs`
+- Sync worker plan reads and playback advance plan/commit in
+  `src/player/worker/sync.rs` and `src/player/execution/playback_advance.rs`
+- Decode audio / skipped-audio / EOS commit branches in
+  `src/player/execution/decode_supply.rs`
+
+Still intentionally conservative:
+
+- The decode video path still couples `push_decoded_video_frame -> render_supply -> mark_dirty`
+- `render_supply(...)` is still treated as one atomic backlog transfer
+- The outer `with_locked_ptr_as(...)` path still takes both `op_lock` and `runtime_lock`
+
+That means the project is currently in a hybrid stage:
+
+- access boundaries are becoming explicit
+- high-risk atomicity boundaries are still preserved on purpose
+
 ### Phase 1a Skeleton Goal
 
 Before large behavior changes, establish a small access-layer skeleton in code:

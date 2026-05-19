@@ -237,7 +237,8 @@ impl SemiPlayerHandle {
     }
 
     pub fn request_decode_if_needed(&self) {
-        let hint = PlayerScheduleService::evaluate_decode(self);
+        let hint =
+            PlayerScheduleService::evaluate_decode_from_inputs(self.decode_schedule_inputs());
         if !hint.should_decode_now {
             return;
         }

@@ -1,8 +1,7 @@
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputSnapshot;
-use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
-use crate::sync::video_sync::{VideoSyncInputs, VideoSyncService, VideoSyncSnapshot};
+use crate::sync::video_sync::VideoSyncSnapshot;
 use crate::util::time::MediaTimeUs;
 
 const MIN_PUMP_INTERVAL_US: MediaTimeUs = 1_000;
@@ -27,6 +26,13 @@ pub struct DecodeScheduleHint {
     pub worker_active: bool,
     pub needs_decode_supply: bool,
     pub should_decode_now: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodeScheduleInputs {
+    pub media_loaded: bool,
+    pub state: PlayerState,
+    pub decode_supply: DecodeSupplyStatus,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,10 +69,6 @@ pub struct ScheduleInputs<'a> {
 }
 
 impl PlayerScheduleService {
-    pub fn evaluate(player: &SemiPlayerHandle) -> PumpScheduleHint {
-        Self::evaluate_from_inputs(ScheduleContext::capture(player).into_inputs())
-    }
-
     pub fn evaluate_from_inputs(inputs: ScheduleInputs<'_>) -> PumpScheduleHint {
         let context = ScheduleContext::from_inputs(inputs);
         let next_video_deadline_us = compute_video_deadline_us(&context);
@@ -88,12 +90,8 @@ impl PlayerScheduleService {
         }
     }
 
-    pub fn evaluate_decode(player: &SemiPlayerHandle) -> DecodeScheduleHint {
-        compute_decode_schedule_hint(
-            player.is_media_loaded(),
-            player.state(),
-            player.runtime.decode_supply_status(),
-        )
+    pub fn evaluate_decode_from_inputs(inputs: DecodeScheduleInputs) -> DecodeScheduleHint {
+        compute_decode_schedule_hint(inputs.media_loaded, inputs.state, inputs.decode_supply)
     }
 }
 
@@ -110,43 +108,6 @@ struct ScheduleContext<'a> {
 }
 
 impl<'a> ScheduleContext<'a> {
-    fn capture(player: &'a SemiPlayerHandle) -> Self {
-        let playback_time_us = player.current_playback_time_us();
-        let runtime_video = player.runtime.video_snapshot();
-
-        Self {
-            state: player.state(),
-            playback_time_us,
-            gating_audio_for_seek_recovery: player.is_gating_audio_for_seek_recovery(),
-            decode_supply: player.runtime.decode_supply_status(),
-            video_sync_dirty: player.video_sync.is_dirty(),
-            runtime_video,
-            video_snapshot: VideoSyncService::evaluate_from_inputs(
-                VideoSyncInputs {
-                    host_presentation_offset_us: player.host_presentation_offset_us(),
-                    runtime_video,
-                },
-                playback_time_us,
-            ),
-            audio_output: player
-                .audio_output
-                .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot),
-        }
-    }
-
-    fn into_inputs(self) -> ScheduleInputs<'a> {
-        ScheduleInputs {
-            state: self.state,
-            playback_time_us: self.playback_time_us,
-            gating_audio_for_seek_recovery: self.gating_audio_for_seek_recovery,
-            decode_supply: self.decode_supply,
-            video_sync_dirty: self.video_sync_dirty,
-            runtime_video: self.runtime_video,
-            video_snapshot: self.video_snapshot,
-            audio_output: self.audio_output,
-        }
-    }
-
     fn from_inputs(inputs: ScheduleInputs<'a>) -> Self {
         Self {
             state: inputs.state,
@@ -293,7 +254,7 @@ mod tests {
             .runtime
             .select_video_frame(&player.video_scheduler, 0, |_| {});
 
-        let hint = PlayerScheduleService::evaluate(&player);
+        let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
         assert_eq!(hint.next_video_deadline_us, Some(41_000));
         assert_eq!(hint.next_pump_deadline_us, Some(41_000));
@@ -321,7 +282,7 @@ mod tests {
             });
         });
 
-        let hint = PlayerScheduleService::evaluate(&player);
+        let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
         let refill_delta_us = hint
             .next_audio_refill_deadline_us
@@ -342,7 +303,7 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.video_sync.reset();
 
-        let hint = PlayerScheduleService::evaluate(&player);
+        let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
         assert!(hint.playback_due_now);
         assert_eq!(hint.next_video_deadline_us, Some(0));
@@ -363,7 +324,7 @@ mod tests {
             ));
         });
 
-        let hint = PlayerScheduleService::evaluate(&player);
+        let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
         assert!(hint.playback_due_now);
         assert_eq!(
@@ -378,7 +339,7 @@ mod tests {
     fn insufficient_buffers_report_decode_supply_needed() {
         let player = SemiPlayerHandle::new();
 
-        let hint = PlayerScheduleService::evaluate(&player);
+        let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
         assert!(hint.decode_supply_needed);
     }

@@ -15,12 +15,12 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     } else {
         max_iterations
     };
-    let Some(opened_media) = player.cloned_media_session() else {
+    let Some(opened_media) = player.decode_plan_context().opened_media else {
         return SEMI_E_INVALID_STATE;
     };
 
     for _ in 0..iterations {
-        let decode_policy = player.decode_policy();
+        let decode_policy = player.decode_plan_context().decode_policy;
         let output = match poll_decoded_output_once(&opened_media, decode_policy) {
             Ok(DecodedOutputPoll::Output(output)) => output,
             Ok(DecodedOutputPoll::Pending | DecodedOutputPoll::Finished) => break,
@@ -31,7 +31,8 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
             break;
         }
 
-        if !player.runtime.decode_supply_status().needs_decode_supply {
+        if !player.with_runtime_access(|runtime| runtime.decode_supply_status().needs_decode_supply)
+        {
             break;
         }
     }
@@ -62,9 +63,11 @@ pub(crate) fn apply_decoded_output(
 ) -> DecodedOutputApplyResult {
     match output {
         DecodedOutput::Video(frame) => {
-            let playback_time_us = player.audio_clock.presentation_time_us();
-            player.observe_seek_video_decoded(frame.pts_us, playback_time_us);
-            player.runtime.push_decoded_video_frame(frame);
+            let playback_time_us = player.playback_position_us_snapshot();
+            player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
+            player.with_runtime_access(|mut runtime| {
+                runtime.push_decoded_video_frame(frame);
+            });
             let render_result = render_supply(player);
             if render_result.has_new_presentation_frames() {
                 VideoSyncService::mark_dirty(player);
@@ -75,30 +78,33 @@ pub(crate) fn apply_decoded_output(
             }
         }
         DecodedOutput::SkippedVideo(frame) => {
-            let playback_time_us = player.audio_clock.presentation_time_us();
-            player.observe_seek_video_decoded(frame.pts_us, playback_time_us);
+            let playback_time_us = player.playback_position_us_snapshot();
+            player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: false,
             }
         }
         DecodedOutput::Audio(frame) => {
-            player.observe_seek_first_audio_decoder_output();
-            player.observe_seek_first_audio_decoded();
-            let Some(frame) = trim_audio_for_seek_recovery(player, frame) else {
+            player.observe_seek_first_audio_decoder_output_access();
+            player.observe_seek_first_audio_decoded_access();
+            let context = player.decode_audio_commit_context();
+            let Some(frame) = trim_audio_for_seek_recovery(context.decode_policy, frame) else {
                 return DecodedOutputApplyResult {
                     reached_end: false,
                     should_wake_sync: false,
                 };
             };
-            player.runtime.push_audio_frame(frame);
+            player.with_runtime_access(|mut runtime| {
+                runtime.push_audio_frame(frame);
+            });
             DecodedOutputApplyResult {
                 reached_end: false,
-                should_wake_sync: should_wake_sync_for_audio_enqueue(player),
+                should_wake_sync: should_wake_sync_for_audio_enqueue(context),
             }
         }
         DecodedOutput::SkippedAudio(frame) => {
-            player.observe_seek_first_audio_decoder_output();
+            player.observe_seek_first_audio_decoder_output_access();
             let _ = frame;
             DecodedOutputApplyResult {
                 reached_end: false,
@@ -106,7 +112,9 @@ pub(crate) fn apply_decoded_output(
             }
         }
         DecodedOutput::EndOfStream => {
-            player.runtime.mark_end_of_stream();
+            player.with_runtime_access(|mut runtime| {
+                runtime.mark_end_of_stream();
+            });
             DecodedOutputApplyResult {
                 reached_end: true,
                 should_wake_sync: true,
@@ -115,22 +123,17 @@ pub(crate) fn apply_decoded_output(
     }
 }
 
-fn should_wake_sync_for_audio_enqueue(player: &SemiPlayerHandle) -> bool {
-    player.state() == PlayerState::Playing
-        && player
-            .audio_output
-            .with_ref(|audio_output| !audio_output.snapshot().started)
+fn should_wake_sync_for_audio_enqueue(
+    context: crate::player::access::DecodeAudioCommitContext,
+) -> bool {
+    context.state == PlayerState::Playing && !context.audio_output.started
 }
 
 fn trim_audio_for_seek_recovery(
-    player: &SemiPlayerHandle,
+    decode_policy: DecodePolicy,
     frame: crate::audio::core::frame::AudioFrame,
 ) -> Option<crate::audio::core::frame::AudioFrame> {
-    let Some(target_us) = player
-        .decode_policy()
-        .seek_recovery
-        .map(|policy| policy.target_video_us)
-    else {
+    let Some(target_us) = decode_policy.seek_recovery.map(|policy| policy.target_video_us) else {
         return Some(frame);
     };
 

@@ -4,11 +4,13 @@ use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::{PlayerScheduleService, ScheduledWork};
 
 pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
-    if !player.is_media_loaded() || player.media_session().is_none() {
+    let context = player.decode_plan_context();
+    if !context.media_loaded || context.opened_media.is_none() {
         return SEMI_E_INVALID_STATE;
     }
 
-    let first_pass = PlayerScheduleService::evaluate(player).scheduled_work();
+    let first_pass =
+        PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs()).scheduled_work();
     service_scheduled_work(player, first_pass);
 
     let decode_code = service_decode_work_if_needed(player, max_iterations);
@@ -16,7 +18,8 @@ pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> Result
         return decode_code;
     }
 
-    let second_pass = PlayerScheduleService::evaluate(player).scheduled_work();
+    let second_pass =
+        PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs()).scheduled_work();
     service_scheduled_work(player, second_pass);
 
     SEMI_OK
@@ -29,7 +32,9 @@ fn service_scheduled_work(player: &mut SemiPlayerHandle, scheduled_work: Schedul
 }
 
 fn service_decode_work_if_needed(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
-    if PlayerScheduleService::evaluate_decode(player).should_decode_now {
+    if PlayerScheduleService::evaluate_decode_from_inputs(player.decode_schedule_inputs())
+        .should_decode_now
+    {
         decode_supply(player, max_iterations)
     } else {
         SEMI_OK
@@ -68,7 +73,8 @@ mod tests {
         player.runtime.push_video_frame(frame(41_000, Some(41_000)));
         player.video_sync.reset();
 
-        let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();
+        let scheduled_work =
+            PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs()).scheduled_work();
         assert!(scheduled_work.should_advance_playback);
 
         service_scheduled_work(&mut player, scheduled_work);
@@ -95,7 +101,8 @@ mod tests {
             .select_video_frame(&player.video_scheduler, 0, |_| {});
         let _ = crate::sync::video_sync::VideoSyncService::tick(&mut player, 0);
 
-        let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();
+        let scheduled_work =
+            PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs()).scheduled_work();
         assert!(!scheduled_work.should_advance_playback);
 
         service_scheduled_work(&mut player, scheduled_work);
