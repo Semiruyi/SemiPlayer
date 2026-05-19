@@ -338,7 +338,7 @@ pub unsafe extern "C" fn semi_player_get_state(
     }
 
     match with_player_ref(player, |player| unsafe {
-        *out_state = player.state().as_raw();
+        *out_state = player.control_snapshot().state_raw;
     }) {
         Ok(()) => SEMI_OK,
         Err(code) => code,
@@ -358,7 +358,7 @@ pub unsafe extern "C" fn semi_player_get_position_ms(
     }
 
     match with_player_ref(player, |player| unsafe {
-        *out_position_ms = us_to_ms(player.current_playback_time_us());
+        *out_position_ms = us_to_ms(player.playback_position_us_snapshot());
     }) {
         Ok(()) => SEMI_OK,
         Err(code) => code,
@@ -379,7 +379,7 @@ pub unsafe extern "C" fn semi_player_get_duration_ms(
     }
 
     match with_player_ref(player, |player| unsafe {
-        *out_duration_ms = player.media_duration_us().map_or(0, us_to_ms);
+        *out_duration_ms = player.media_duration_us_snapshot().map_or(0, us_to_ms);
     }) {
         Ok(()) => SEMI_OK,
         Err(code) => code,
@@ -403,7 +403,7 @@ pub unsafe extern "C" fn semi_player_get_media_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(media_info) = player.media_info() else {
+        let Some(media_info) = player.media_info_snapshot() else {
             return SEMI_E_INVALID_STATE;
         };
 
@@ -500,13 +500,13 @@ pub unsafe extern "C" fn semi_player_get_audio_output_snapshot(
         return SEMI_E_INVALID_ARG;
     }
 
-    with_player_locked(player, |player| {
+    with_player_ref(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
 
         unsafe {
-            *out_snapshot = build_audio_output_snapshot(player);
+            *out_snapshot = build_audio_output_snapshot(player.audio_output_snapshot());
         }
 
         SEMI_OK
@@ -531,7 +531,7 @@ pub unsafe extern "C" fn semi_player_get_current_video_frame_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(frame) = player.current_video_frame_snapshot() else {
+        let Some(frame) = player.presentation_frame_snapshot() else {
             return SEMI_E_INVALID_STATE;
         };
 
@@ -561,7 +561,7 @@ pub unsafe extern "C" fn semi_player_get_current_video_surface_desc(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(frame) = player.current_video_frame_snapshot() else {
+        let Some(frame) = player.presentation_frame_snapshot() else {
             return SEMI_E_INVALID_STATE;
         };
 
@@ -593,7 +593,7 @@ pub unsafe extern "C" fn semi_player_copy_current_video_frame_bgra(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(frame) = player.current_video_frame_snapshot() else {
+        let Some(frame) = player.presentation_frame_snapshot() else {
             return SEMI_E_INVALID_STATE;
         };
 

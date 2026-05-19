@@ -3,12 +3,12 @@ use crate::api::types::{
     SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
     SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
+use crate::audio::core::output_controller::AudioOutputSnapshot;
 use crate::decode::{DecodedOutput, VideoDecodeBackend, VideoDecodeFallbackReason};
 use crate::demux::{MediaInfo, StreamKind};
+use crate::player::access::PlaybackSnapshotInputs;
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
-use crate::sync::schedule::PlayerScheduleService;
-use crate::sync::video_sync::VideoSyncService;
 use crate::util::time::us_to_ms;
 
 fn option_index_to_i32(index: Option<usize>) -> i32 {
@@ -122,20 +122,24 @@ fn diagnostic_us_to_ms(value_us: i64) -> i64 {
 
 #[allow(clippy::too_many_lines)]
 pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
-    let runtime_video = player.runtime.video_snapshot();
-    let last_audio_frame = player.runtime.last_audio_frame();
-    let audio_position_us = player.audio_clock.presentation_time_us();
-    let playback_position_ms = us_to_ms(audio_position_us);
-    let sync_snapshot = VideoSyncService::evaluate(player, audio_position_us);
-    let sync_stats = player.video_sync.stats();
-    let schedule_hint = PlayerScheduleService::evaluate(player);
-    let diagnostics = player.diagnostics_snapshot();
-    let seek_demux = player.seek_demux_diagnostics_snapshot();
-    let video_decode = player.video_decode_diagnostics_snapshot();
-    let audio_output_snapshot = player
-        .audio_output
-        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
-    let host_presentation_offset_us = player.host_presentation_offset_us();
+    build_playback_snapshot_from_inputs(player.playback_snapshot_inputs())
+}
+
+#[allow(clippy::too_many_lines)]
+pub fn build_playback_snapshot_from_inputs(
+    inputs: PlaybackSnapshotInputs<'_>,
+) -> SemiPlaybackSnapshot {
+    let runtime = inputs.runtime;
+    let runtime_video = runtime.video;
+    let playback_position_ms = us_to_ms(inputs.playback_position_us);
+    let sync_snapshot = inputs.video_sync_snapshot;
+    let sync_stats = inputs.video_sync_stats;
+    let schedule_hint = inputs.schedule_hint;
+    let diagnostics = inputs.diagnostics;
+    let seek_demux = inputs.seek_demux;
+    let video_decode = inputs.video_decode;
+    let audio_output_snapshot = inputs.audio_output;
+    let host_presentation_offset_us = inputs.control.host_presentation_offset_us;
     let host_presentation_offset_ms = i32::try_from(us_to_ms(host_presentation_offset_us))
         .unwrap_or_else(|_| {
             if host_presentation_offset_us.is_negative() {
@@ -165,8 +169,8 @@ pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapsho
 
     SemiPlaybackSnapshot {
         audio_position_ms: playback_position_ms,
-        audio_queue_len: u32::try_from(player.runtime.audio_queue_len()).unwrap_or(u32::MAX),
-        video_queue_len: u32::try_from(player.runtime.video_queue_len()).unwrap_or(u32::MAX),
+        audio_queue_len: u32::try_from(runtime.audio_queue_len).unwrap_or(u32::MAX),
+        video_queue_len: u32::try_from(runtime.video_queue_len).unwrap_or(u32::MAX),
         has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
         current_video_pts_ms: runtime_video.current_pts_us.map_or(0, us_to_ms),
         current_video_duration_ms: runtime_video.current_duration_us.map_or(0, us_to_ms),
@@ -185,7 +189,7 @@ pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapsho
         next_video_pts_ms,
         current_to_next_video_delta_ms,
         next_video_wake_deadline_ms: sync_snapshot.next_wake_deadline_us.map_or(0, us_to_ms),
-        last_audio_pts_ms: last_audio_frame.map_or(0, |frame| us_to_ms(frame.pts_us)),
+        last_audio_pts_ms: runtime.last_audio_pts_us.map_or(0, us_to_ms),
         host_presentation_offset_ms,
         core_av_delta_ms,
         core_sync_error_ms,
@@ -295,7 +299,7 @@ pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapsho
             .unwrap_or(u32::MAX),
         rendered_frames_total: audio_output_snapshot.rendered_frames_total,
         audible_frames_total: audio_output_snapshot.audible_frames_total,
-        end_of_stream: u32::from(player.runtime.has_reached_end_of_stream()),
+        end_of_stream: u32::from(runtime.end_of_stream),
     }
 }
 
@@ -388,10 +392,7 @@ pub fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
     }
 }
 
-pub fn build_audio_output_snapshot(player: &SemiPlayerHandle) -> SemiAudioOutputSnapshot {
-    let snapshot = player
-        .audio_output
-        .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
+pub fn build_audio_output_snapshot(snapshot: AudioOutputSnapshot) -> SemiAudioOutputSnapshot {
     let device_timing = snapshot.device_timing;
 
     SemiAudioOutputSnapshot {

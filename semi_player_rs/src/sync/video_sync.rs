@@ -1,9 +1,15 @@
 use crate::player::handle::SemiPlayerHandle;
-use crate::player::runtime::VideoSelectionStats;
+use crate::player::runtime::{RuntimeVideoSnapshot, VideoSelectionStats};
 use crate::render::core::frame::VideoFrame;
 use crate::util::time::add_media_time_us;
 
 pub struct VideoSyncService;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct VideoSyncInputs<'a> {
+    pub host_presentation_offset_us: i64,
+    pub runtime_video: RuntimeVideoSnapshot<'a>,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VideoSyncStats {
@@ -147,10 +153,23 @@ impl VideoSyncService {
     }
 
     pub fn evaluate(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
-        let target_video_time_us =
-            add_media_time_us(playback_time_us, player.host_presentation_offset_us());
+        Self::evaluate_from_inputs(
+            VideoSyncInputs {
+                host_presentation_offset_us: player.host_presentation_offset_us(),
+                runtime_video: player.runtime.video_snapshot(),
+            },
+            playback_time_us,
+        )
+    }
 
-        let runtime_video = player.runtime.video_snapshot();
+    pub fn evaluate_from_inputs(
+        inputs: VideoSyncInputs<'_>,
+        playback_time_us: i64,
+    ) -> VideoSyncSnapshot {
+        let target_video_time_us =
+            add_media_time_us(playback_time_us, inputs.host_presentation_offset_us);
+
+        let runtime_video = inputs.runtime_video;
         let current_video_pts_us = runtime_video.current_pts_us.unwrap_or(0);
         let next_video_pts_us = runtime_video.next_pts_us;
         let current_video_effective_end_us = runtime_video.current_effective_end_us;

@@ -508,6 +508,66 @@ The purpose of that skeleton is:
 - let old code continue to run unchanged
 - migrate one call path at a time instead of forcing a lock rewrite in one jump
 
+### Phase 1b Incremental Migration Rules
+
+The refactor should proceed by thread, from the safest paths to the most coupled paths.
+
+Two rules matter here:
+
+1. change access entrypoints before changing behavior boundaries
+2. change low-risk read paths before high-risk commit paths
+
+In practice that means:
+
+- first move a call path onto `access.rs`
+- keep its behavior and atomicity the same
+- only revisit its internal lock split after the access boundary is explicit
+
+This is important because an earlier thread migration can affect later threads in two ways:
+
+- later code may start calling a new access helper instead of touching `SemiPlayerHandle` directly
+- later code may need to respect a more explicit phase contract instead of assuming "`op_lock` makes everything safe"
+
+That kind of influence is expected and desirable.
+What must be avoided is changing the observed scheduling or commit semantics of a high-risk path too early.
+
+### Phase 1c Thread Migration Order
+
+Recommended order:
+
+1. Host / FFI query paths
+2. Host / FFI simple control paths
+3. Diagnostics-only and other narrow read helpers
+4. Decode worker plan reads
+5. Decode worker audio and EOS commit paths
+6. Sync worker plan/access cleanup
+7. Seek/open/reset prepare and commit reshaping
+8. Decode video path
+9. Sync worker execute/commit split, if still needed
+
+Why this order:
+
+- steps 1 to 3 are mostly read-only or short control transitions
+- steps 4 to 6 clarify ownership without breaking the core media transaction boundaries
+- steps 7 to 9 touch the strongest atomicity assumptions and should happen only after the access skeleton is proven
+
+### Phase 1d Paths That Must Stay Conservative
+
+The following paths should not be behaviorally split just because the new access skeleton exists:
+
+1. decode video prepare -> render execute -> video commit
+2. playback plan/discard decisions -> playback execute -> playback commit
+3. seek/open/reset prepare -> media execute -> commit
+
+For these paths, the first job is to make resource ownership explicit.
+The second job, later, is to decide whether a true plan/execute/commit split needs an explicit in-flight model.
+
+Until then:
+
+- keep current atomicity boundaries intact
+- avoid moving heavy execution out of a critical section unless the intermediate state is modeled
+- treat startup/video-present paths as correctness-first, not lock-granularity-first
+
 ### Phase 2
 
 - Move diagnostics reads off the player-wide lock.

@@ -20,6 +20,16 @@ pub struct RuntimeVideoSnapshot<'a> {
     pub current_to_next_delta_us: Option<MediaTimeUs>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuntimeSnapshot<'a> {
+    pub video: RuntimeVideoSnapshot<'a>,
+    pub audio_queue_len: usize,
+    pub video_queue_len: usize,
+    pub end_of_stream: bool,
+    pub last_audio_pts_us: Option<MediaTimeUs>,
+    pub decode_supply: DecodeSupplyStatus,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AudioDiscardSummary {
     pub removed_frames: usize,
@@ -178,6 +188,17 @@ impl PlayerRuntime {
             current_to_next_delta_us: current_frame
                 .zip(next_frame)
                 .map(|(current, next)| next.pts_us.saturating_sub(current.pts_us)),
+        }
+    }
+
+    pub fn snapshot(&self) -> RuntimeSnapshot<'_> {
+        RuntimeSnapshot {
+            video: self.video_snapshot(),
+            audio_queue_len: self.audio_queue_len(),
+            video_queue_len: self.video_queue_len(),
+            end_of_stream: self.has_reached_end_of_stream(),
+            last_audio_pts_us: self.last_audio_frame().map(|frame| frame.pts_us),
+            decode_supply: self.decode_supply_status(),
         }
     }
 
