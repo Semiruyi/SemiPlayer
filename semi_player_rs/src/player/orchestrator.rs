@@ -138,7 +138,7 @@ pub fn prepare_seek_next_keyframe(
 
 pub fn reset(player: &mut SemiPlayerHandle) -> ResultCode {
     player.bump_media_generation();
-    player.media_session = None;
+    player.clear_media_session();
     reset_playback_domains_for_new_timeline(player);
     player.control_access().set_state(PlayerState::Idle);
     player.notify_workers();

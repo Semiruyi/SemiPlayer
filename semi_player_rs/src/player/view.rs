@@ -127,7 +127,7 @@ pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapsho
 
 #[allow(clippy::too_many_lines)]
 pub fn build_playback_snapshot_from_inputs(
-    inputs: PlaybackSnapshotInputs<'_>,
+    inputs: PlaybackSnapshotInputs,
 ) -> SemiPlaybackSnapshot {
     let runtime = inputs.runtime;
     let runtime_video = runtime.video;
@@ -153,17 +153,8 @@ pub fn build_playback_snapshot_from_inputs(
         .map_or(0, |pts_us| playback_position_ms - us_to_ms(pts_us));
     let next_video_pts_ms = runtime_video.next_pts_us.map_or(0, us_to_ms);
     let current_to_next_video_delta_ms = runtime_video.current_to_next_delta_us.map_or(0, us_to_ms);
-    let (current_video_surface_kind, current_video_surface_pixel_format) = runtime_video
-        .current_frame
-        .as_ref()
-        .map(|frame| {
-            let surface_kind = match &frame.surface.storage {
-                VideoSurfaceStorage::CpuPacked { .. } => SemiVideoSurfaceKind::CpuPacked,
-                VideoSurfaceStorage::GpuTexture(_) => SemiVideoSurfaceKind::D3d11Texture2D,
-            };
-            (surface_kind.as_raw(), frame.pixel_format().as_raw())
-        })
-        .unwrap_or((SemiVideoSurfaceKind::Unknown.as_raw(), 0));
+    let (current_video_surface_kind, current_video_surface_pixel_format) =
+        (inputs.current_video_surface_kind_raw, inputs.current_video_pixel_format_raw);
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
@@ -171,7 +162,7 @@ pub fn build_playback_snapshot_from_inputs(
         audio_position_ms: playback_position_ms,
         audio_queue_len: u32::try_from(runtime.audio_queue_len).unwrap_or(u32::MAX),
         video_queue_len: u32::try_from(runtime.video_queue_len).unwrap_or(u32::MAX),
-        has_current_video_frame: u32::from(runtime_video.current_frame.is_some()),
+        has_current_video_frame: u32::from(runtime_video.has_current_frame),
         current_video_pts_ms: runtime_video.current_pts_us.map_or(0, us_to_ms),
         current_video_duration_ms: runtime_video.current_duration_us.map_or(0, us_to_ms),
         video_decode_backend: map_video_decode_backend(video_decode.backend).as_raw(),

@@ -62,9 +62,9 @@ pub struct RenderAccess<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PlaybackSnapshotInputs<'a> {
+pub struct PlaybackSnapshotInputs {
     pub control: ControlSnapshot,
-    pub runtime: RuntimeSnapshot<'a>,
+    pub runtime: RuntimeSnapshot,
     pub playback_position_us: MediaTimeUs,
     pub video_sync_snapshot: VideoSyncSnapshot,
     pub video_sync_stats: VideoSyncStats,
@@ -73,6 +73,8 @@ pub struct PlaybackSnapshotInputs<'a> {
     pub seek_demux: SeekDemuxDiagnosticsSnapshot,
     pub video_decode: VideoDecodeDiagnosticsSnapshot,
     pub audio_output: AudioOutputSnapshot,
+    pub current_video_surface_kind_raw: u32,
+    pub current_video_pixel_format_raw: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,9 +126,9 @@ pub struct PlaybackAdvancePlanContext {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct PlaybackAdvanceObserveContext<'a> {
+pub struct PlaybackAdvanceObserveContext {
     pub control: ControlSnapshot,
-    pub runtime: RuntimeSnapshot<'a>,
+    pub runtime: RuntimeSnapshot,
     pub playback_position_us: MediaTimeUs,
     pub audio_output: AudioOutputSnapshot,
 }
@@ -156,7 +158,7 @@ impl SemiPlayerHandle {
 
     pub fn with_runtime_access<T>(&mut self, f: impl FnOnce(RuntimeAccess<'_>) -> T) -> T {
         f(RuntimeAccess {
-            runtime: &mut self.runtime,
+            runtime: &mut *self.runtime.lock().unwrap(),
             video_scheduler: &mut self.video_scheduler,
             video_sync: &mut self.video_sync,
         })
@@ -179,12 +181,12 @@ impl SemiPlayerHandle {
     }
 
     pub fn media_duration_us_snapshot(&self) -> Option<MediaTimeUs> {
-        self.media_session()
+        self.cloned_media_session()
             .and_then(|media_session| media_session.with_ref(|session| session.duration_us()))
     }
 
     pub fn media_info_snapshot(&self) -> Option<MediaInfo> {
-        self.media_session()
+        self.cloned_media_session()
             .map(|media_session| media_session.with_ref(|session| session.info().clone()))
     }
 
@@ -198,8 +200,8 @@ impl SemiPlayerHandle {
         self.current_video_frame_snapshot()
     }
 
-    pub fn runtime_snapshot(&self) -> RuntimeSnapshot<'_> {
-        self.runtime.snapshot()
+    pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
+        self.runtime.lock().unwrap().snapshot()
     }
 
     pub fn seek_prepare_context(&self) -> SeekPrepareContext {
@@ -242,7 +244,7 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn schedule_inputs(&self) -> ScheduleInputs<'_> {
+    pub fn schedule_inputs(&self) -> ScheduleInputs {
         let playback_time_us = self.playback_position_us_snapshot();
         let control = self.control_snapshot();
         let runtime = self.runtime_snapshot();
@@ -338,13 +340,16 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn playback_snapshot_inputs(&self) -> PlaybackSnapshotInputs<'_> {
+    pub fn playback_snapshot_inputs(&self) -> PlaybackSnapshotInputs {
         let control = self.control_snapshot();
         let runtime = self.runtime_snapshot();
         let schedule_inputs = self.schedule_inputs();
         let playback_position_us = schedule_inputs.playback_time_us;
         let video_sync_snapshot = schedule_inputs.video_snapshot;
         let audio_output = self.audio_output_snapshot();
+
+        let (current_video_surface_kind_raw, current_video_pixel_format_raw) =
+            self.current_video_surface_info_snapshot();
 
         PlaybackSnapshotInputs {
             control,
@@ -359,10 +364,12 @@ impl SemiPlayerHandle {
             seek_demux: self.seek_demux_diagnostics_snapshot(),
             video_decode: self.video_decode_diagnostics_snapshot(),
             audio_output,
+            current_video_surface_kind_raw,
+            current_video_pixel_format_raw,
         }
     }
 
-    pub fn playback_advance_observe_context(&self) -> PlaybackAdvanceObserveContext<'_> {
+    pub fn playback_advance_observe_context(&self) -> PlaybackAdvanceObserveContext {
         PlaybackAdvanceObserveContext {
             control: self.control_snapshot(),
             runtime: self.runtime_snapshot(),
@@ -569,7 +576,19 @@ impl RuntimeAccess<'_> {
 
 impl SemiPlayerHandle {
     pub fn current_video_pts_us_snapshot(&self) -> Option<MediaTimeUs> {
-        self.runtime.current_video_frame().map(|frame| frame.pts_us)
+        self.runtime.lock().unwrap().current_video_frame().map(|frame| frame.pts_us)
+    }
+
+    pub fn current_video_surface_info_snapshot(&self) -> (u32, u32) {
+        self.runtime.lock().unwrap().current_video_frame()
+            .map(|frame| {
+                let kind = match &frame.surface.storage {
+                    crate::render::core::frame::VideoSurfaceStorage::CpuPacked { .. } => 1u32,
+                    crate::render::core::frame::VideoSurfaceStorage::GpuTexture(_) => 2u32,
+                };
+                (kind, frame.pixel_format().as_raw())
+            })
+            .unwrap_or((0, 0))
     }
 
     pub fn probe_prev_keyframe_pts_snapshot(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {

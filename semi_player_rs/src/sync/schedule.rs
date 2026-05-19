@@ -57,19 +57,19 @@ impl PumpScheduleHint {
 pub struct PlayerScheduleService;
 
 #[derive(Clone, Copy, Debug)]
-pub struct ScheduleInputs<'a> {
+pub struct ScheduleInputs {
     pub state: PlayerState,
     pub playback_time_us: MediaTimeUs,
     pub gating_audio_for_seek_recovery: bool,
     pub decode_supply: DecodeSupplyStatus,
     pub video_sync_dirty: bool,
-    pub runtime_video: RuntimeVideoSnapshot<'a>,
+    pub runtime_video: RuntimeVideoSnapshot,
     pub video_snapshot: VideoSyncSnapshot,
     pub audio_output: AudioOutputSnapshot,
 }
 
 impl PlayerScheduleService {
-    pub fn evaluate_from_inputs(inputs: ScheduleInputs<'_>) -> PumpScheduleHint {
+    pub fn evaluate_from_inputs(inputs: ScheduleInputs) -> PumpScheduleHint {
         let context = ScheduleContext::from_inputs(inputs);
         let next_video_deadline_us = compute_video_deadline_us(&context);
         let next_audio_refill_deadline_us = compute_audio_refill_deadline_us(&context);
@@ -96,19 +96,19 @@ impl PlayerScheduleService {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct ScheduleContext<'a> {
+struct ScheduleContext {
     state: PlayerState,
     playback_time_us: MediaTimeUs,
     gating_audio_for_seek_recovery: bool,
     decode_supply: DecodeSupplyStatus,
     video_sync_dirty: bool,
-    runtime_video: RuntimeVideoSnapshot<'a>,
+    runtime_video: RuntimeVideoSnapshot,
     video_snapshot: VideoSyncSnapshot,
     audio_output: AudioOutputSnapshot,
 }
 
-impl<'a> ScheduleContext<'a> {
-    fn from_inputs(inputs: ScheduleInputs<'a>) -> Self {
+impl ScheduleContext {
+    fn from_inputs(inputs: ScheduleInputs) -> Self {
         Self {
             state: inputs.state,
             playback_time_us: inputs.playback_time_us,
@@ -122,7 +122,7 @@ impl<'a> ScheduleContext<'a> {
     }
 }
 
-fn compute_video_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeUs> {
+fn compute_video_deadline_us(context: &ScheduleContext) -> Option<MediaTimeUs> {
     if context.video_sync_dirty {
         return Some(context.playback_time_us);
     }
@@ -131,14 +131,14 @@ fn compute_video_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeU
         return Some(context.playback_time_us);
     }
 
-    if context.runtime_video.current_frame.is_none() && context.runtime_video.next_frame.is_some() {
+    if !context.runtime_video.has_current_frame && context.runtime_video.has_next_frame {
         return Some(context.playback_time_us);
     }
 
     context.video_snapshot.next_wake_deadline_us
 }
 
-fn compute_audio_refill_deadline_us(context: &ScheduleContext<'_>) -> Option<MediaTimeUs> {
+fn compute_audio_refill_deadline_us(context: &ScheduleContext) -> Option<MediaTimeUs> {
     if context.gating_audio_for_seek_recovery {
         return None;
     }
@@ -166,7 +166,7 @@ fn compute_audio_refill_deadline_us(context: &ScheduleContext<'_>) -> Option<Med
 }
 
 fn compute_suggested_wait_us(
-    context: &ScheduleContext<'_>,
+    context: &ScheduleContext,
     next_pump_deadline_us: Option<MediaTimeUs>,
 ) -> MediaTimeUs {
     if context.state != PlayerState::Playing {
@@ -248,11 +248,10 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Playing);
         player.audio_clock.play();
-        player.runtime.push_video_frame(frame(0, Some(33_000)));
-        player.runtime.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = player
-            .runtime
-            .select_video_frame(&player.video_scheduler, 0, |_| {});
+        let rt = player.runtime.get_mut().unwrap();
+        rt.push_video_frame(frame(0, Some(33_000)));
+        rt.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = rt.select_video_frame(&player.video_scheduler, 0, |_| {});
 
         let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 

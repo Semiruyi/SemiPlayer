@@ -177,21 +177,17 @@ mod tests {
     #[test]
     fn queued_video_frames_count_toward_startup_buffer_target() {
         let mut player = SemiPlayerHandle::new();
+        let rt = player.runtime.get_mut().unwrap();
 
         for index in 0..8 {
-            player.runtime.push_audio_frame(audio_frame(index * 10_000));
+            rt.push_audio_frame(audio_frame(index * 10_000));
         }
 
-        player.runtime.push_video_frame(video_frame(0));
-        player.runtime.push_video_frame(video_frame(33_000));
-        player.runtime.push_video_frame(video_frame(66_000));
+        rt.push_video_frame(video_frame(0));
+        rt.push_video_frame(video_frame(33_000));
+        rt.push_video_frame(video_frame(66_000));
 
-        assert!(
-            player
-                .runtime
-                .decode_supply_status()
-                .has_sufficient_presentation_buffer
-        );
+        assert!(rt.decode_supply_status().has_sufficient_presentation_buffer);
     }
 
     #[test]

@@ -42,10 +42,10 @@ fn build_playback_advance_plan(context: PlaybackAdvancePlanContext) -> PlaybackA
 
 fn observe_seek_stable_if_ready(
     player: &SemiPlayerHandle,
-    observe: PlaybackAdvanceObserveContext<'_>,
+    observe: PlaybackAdvanceObserveContext,
     sync_snapshot: crate::sync::video_sync::VideoSyncSnapshot,
 ) {
-    let has_current_video_frame = observe.runtime.video.current_frame.is_some();
+    let has_current_video_frame = observe.runtime.video.has_current_frame;
     if sync_snapshot.current_video_pts_us == 0 && !has_current_video_frame {
         return;
     }

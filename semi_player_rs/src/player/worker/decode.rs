@@ -66,9 +66,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
     loop {
         let plan = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr_as(player_ptr, LockOwner::DecodeWorker, |player| {
-                plan_decode_action(player)
-            })
+            plan_decode_action(&*player_ptr)
         };
 
         match plan {
@@ -253,7 +251,7 @@ mod tests {
         );
 
         assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
-        assert_eq!(player.runtime.video_queue_len(), 0);
+        assert_eq!(player.runtime.get_mut().unwrap().video_queue_len(), 0);
         assert!(!player.video_sync.is_dirty());
     }
 
@@ -272,7 +270,7 @@ mod tests {
         );
 
         assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
-        assert_eq!(player.runtime.video_queue_len(), 1);
+        assert_eq!(player.runtime.get_mut().unwrap().video_queue_len(), 1);
         assert!(player.video_sync.is_dirty());
     }
 }

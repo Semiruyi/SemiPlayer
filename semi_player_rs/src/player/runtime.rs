@@ -10,9 +10,9 @@ pub const TARGET_AUDIO_QUEUE_LEN: usize = 8;
 pub const TARGET_FUTURE_VIDEO_QUEUE_LEN: usize = 2;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RuntimeVideoSnapshot<'a> {
-    pub current_frame: Option<&'a PresentationFrame>,
-    pub next_frame: Option<&'a PresentationFrame>,
+pub struct RuntimeVideoSnapshot {
+    pub has_current_frame: bool,
+    pub has_next_frame: bool,
     pub current_pts_us: Option<MediaTimeUs>,
     pub next_pts_us: Option<MediaTimeUs>,
     pub current_duration_us: Option<MediaTimeUs>,
@@ -21,8 +21,8 @@ pub struct RuntimeVideoSnapshot<'a> {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct RuntimeSnapshot<'a> {
-    pub video: RuntimeVideoSnapshot<'a>,
+pub struct RuntimeSnapshot {
+    pub video: RuntimeVideoSnapshot,
     pub audio_queue_len: usize,
     pub video_queue_len: usize,
     pub end_of_stream: bool,
@@ -191,13 +191,13 @@ impl PlayerRuntime {
         self.next_presentation_video_frame()
     }
 
-    pub fn video_snapshot(&self) -> RuntimeVideoSnapshot<'_> {
+    pub fn video_snapshot(&self) -> RuntimeVideoSnapshot {
         let current_frame = self.current_presentation_video_frame();
         let next_frame = self.next_presentation_video_frame();
 
         RuntimeVideoSnapshot {
-            current_frame,
-            next_frame,
+            has_current_frame: current_frame.is_some(),
+            has_next_frame: next_frame.is_some(),
             current_pts_us: current_frame.map(|frame| frame.pts_us),
             next_pts_us: next_frame.map(|frame| frame.pts_us),
             current_duration_us: current_frame.and_then(|frame| frame.duration_us),
@@ -209,7 +209,7 @@ impl PlayerRuntime {
         }
     }
 
-    pub fn snapshot(&self) -> RuntimeSnapshot<'_> {
+    pub fn snapshot(&self) -> RuntimeSnapshot {
         RuntimeSnapshot {
             video: self.video_snapshot(),
             audio_queue_len: self.audio_queue_len(),

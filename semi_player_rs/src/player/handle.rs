@@ -1,6 +1,6 @@
 use std::ffi::c_double;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use crate::api::types::PlayerState;
@@ -64,12 +64,12 @@ pub struct SemiPlayerHandle {
     diagnostics: PlayerDiagnostics,
     control: Mutex<ControlState>,
     media_generation: AtomicU64,
-    pub(crate) media_session: Option<SharedMediaSession>,
+    media_session: RwLock<Option<SharedMediaSession>>,
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
     pub(crate) render: RenderService,
-    pub(crate) runtime: PlayerRuntime,
+    pub(crate) runtime: Mutex<PlayerRuntime>,
     pub(crate) video_sync: VideoSyncState,
     pub(crate) gpu_device: Option<Arc<dyn GpuDevice>>,
 }
@@ -92,90 +92,102 @@ impl SemiPlayerHandle {
             diagnostics: PlayerDiagnostics::default(),
             control: Mutex::new(ControlState::default()),
             media_generation: AtomicU64::new(0),
-            media_session: None,
+            media_session: RwLock::new(None),
             audio_clock: AudioClock::new(),
             audio_output: SharedAudioOutputController::default(),
             video_scheduler: VideoScheduler::new(),
             render,
-            runtime: PlayerRuntime::new(),
+            runtime: Mutex::new(PlayerRuntime::new()),
             video_sync: VideoSyncState::default(),
             gpu_device,
         }
     }
 
-    pub fn is_media_loaded(&self) -> bool {
-        self.media_session.is_some()
+    fn with_media_session<R>(&self, f: impl FnOnce(Option<&SharedMediaSession>) -> R) -> R {
+        f(self.media_session.read().unwrap().as_ref())
     }
 
-    pub fn media_session(&self) -> Option<&SharedMediaSession> {
-        self.media_session.as_ref()
+    fn with_media_session_mut<R>(&self, f: impl FnOnce(&mut Option<SharedMediaSession>) -> R) -> R {
+        f(&mut *self.media_session.write().unwrap())
+    }
+
+    pub fn is_media_loaded(&self) -> bool {
+        self.with_media_session(|ms| ms.is_some())
     }
 
     pub fn cloned_media_session(&self) -> Option<SharedMediaSession> {
-        self.media_session.clone()
+        self.with_media_session(|ms| ms.cloned())
     }
 
-    pub fn install_media_session(&mut self, media_session: MediaSession) {
-        self.media_session = Some(SharedMediaSession::new(media_session));
+    pub fn install_media_session(&self, media_session: MediaSession) {
+        self.with_media_session_mut(|ms| *ms = Some(SharedMediaSession::new(media_session)));
     }
 
     pub fn media_duration_us(&self) -> Option<MediaTimeUs> {
-        self.media_session()
-            .and_then(|media_session| media_session.with_ref(MediaSession::duration_us))
+        self.with_media_session(|ms| {
+            ms.and_then(|media_session| media_session.with_ref(MediaSession::duration_us))
+        })
     }
 
     pub fn media_info(&self) -> Option<MediaInfo> {
-        self.media_session()
-            .map(|media_session| media_session.with_ref(|session| session.info().clone()))
+        self.with_media_session(|ms| {
+            ms.map(|media_session| media_session.with_ref(|session| session.info().clone()))
+        })
     }
 
     pub fn seek_demux_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
-        self.media_session()
-            .map(SharedMediaSession::seek_diagnostics_snapshot)
-            .unwrap_or_default()
+        self.with_media_session(|ms| {
+            ms.map(SharedMediaSession::seek_diagnostics_snapshot)
+                .unwrap_or_default()
+        })
     }
 
     pub fn video_decode_diagnostics_snapshot(&self) -> VideoDecodeDiagnosticsSnapshot {
-        self.media_session()
-            .map(SharedMediaSession::video_decode_diagnostics_snapshot)
-            .unwrap_or_default()
+        self.with_media_session(|ms| {
+            ms.map(SharedMediaSession::video_decode_diagnostics_snapshot)
+                .unwrap_or_default()
+        })
     }
 
     pub fn seek_media(&self, target_us: MediaTimeUs) -> Result<MediaTimeUs, MediaOpenError> {
-        let media_session = self
-            .media_session()
-            .ok_or(ffmpeg_next::Error::Bug)
-            .map_err(MediaOpenError::Seek)?;
-        media_session.with_mut(|media_session| media_session.seek(target_us))
+        self.with_media_session(|ms| {
+            let media_session = ms.ok_or(ffmpeg_next::Error::Bug).map_err(MediaOpenError::Seek)?;
+            media_session.with_mut(|media_session| media_session.seek(target_us))
+        })
     }
 
     pub fn finish_media_seek_diagnostics(&self) {
-        if let Some(media_session) = self.media_session() {
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            media_session.with_mut(|media_session| media_session.finish_seek_diagnostics());
-        }
+        self.with_media_session(|ms| {
+            if let Some(media_session) = ms {
+                #[allow(clippy::redundant_closure_for_method_calls)]
+                media_session.with_mut(|media_session| media_session.finish_seek_diagnostics());
+            }
+        });
     }
 
     pub fn probe_prev_keyframe_pts(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {
-        let media_session = self.media_session()?;
-        let path = media_session.with_ref(|session| session.path().to_string());
-        let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
-        probe_expected_left_keyframe_pts(&path, stream_index, target_us).map(|(pts, _)| pts)
+        self.with_media_session(|ms| {
+            let media_session = ms?;
+            let path = media_session.with_ref(|session| session.path().to_string());
+            let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
+            probe_expected_left_keyframe_pts(&path, stream_index, target_us).map(|(pts, _)| pts)
+        })
     }
 
     pub fn probe_next_keyframe_pts(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {
-        let media_session = self.media_session()?;
-        let path = media_session.with_ref(|session| session.path().to_string());
-        let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
-        probe_expected_right_keyframe_pts(&path, stream_index, target_us)
+        self.with_media_session(|ms| {
+            let media_session = ms?;
+            let path = media_session.with_ref(|session| session.path().to_string());
+            let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
+            probe_expected_right_keyframe_pts(&path, stream_index, target_us)
+        })
     }
 
     pub fn next_debug_decoded_output(&self) -> Result<Option<DecodedOutput>, MediaOpenError> {
-        let media_session = self
-            .media_session()
-            .ok_or(ffmpeg_next::Error::Bug)
-            .map_err(MediaOpenError::Seek)?;
-        media_session.with_mut(MediaSession::next_decoded_output)
+        self.with_media_session(|ms| {
+            let media_session = ms.ok_or(ffmpeg_next::Error::Bug).map_err(MediaOpenError::Seek)?;
+            media_session.with_mut(MediaSession::next_decoded_output)
+        })
     }
 
     pub unsafe fn with_locked_ptr<T>(
@@ -254,13 +266,17 @@ impl SemiPlayerHandle {
         self.audio_output
             .with_mut(crate::audio::core::output_controller::AudioOutputController::stop);
         self.video_scheduler = VideoScheduler::new();
-        self.runtime.clear();
+        self.runtime.lock().unwrap().clear();
         self.video_sync.reset();
     }
 
     pub fn clear_media(&mut self) {
-        self.media_session = None;
+        self.clear_media_session();
         self.reset_runtime_state();
+    }
+
+    pub fn clear_media_session(&self) {
+        *self.media_session.write().unwrap() = None;
     }
 
     pub fn set_state(&self, state: PlayerState) {
@@ -278,8 +294,7 @@ impl SemiPlayerHandle {
     pub fn current_video_frame_snapshot(
         &self,
     ) -> Option<crate::render::core::frame::PresentationFrame> {
-        let _guard = self.runtime_lock.lock().unwrap();
-        self.runtime.current_video_frame().cloned()
+        self.runtime.lock().unwrap().current_video_frame().cloned()
     }
 
     pub fn decode_policy(&self) -> DecodePolicy {
