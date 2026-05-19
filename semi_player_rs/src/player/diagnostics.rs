@@ -60,15 +60,6 @@ pub struct PlayerDiagnosticsSnapshot {
     pub seek_audio_packets_read: u64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum LockOwner {
-    Ffi,
-    #[allow(dead_code)]
-    SyncWorker,
-    #[allow(dead_code)]
-    DecodeWorker,
-}
-
 #[derive(Default)]
 pub(crate) struct PlayerDiagnostics {
     ffi_lock_wait_last_us: AtomicI64,
@@ -162,25 +153,6 @@ struct SeekDiagnosticsState {
 }
 
 impl PlayerDiagnostics {
-    pub(crate) fn observe_lock_wait(&self, owner: LockOwner, wait_us: MediaTimeUs) {
-        match owner {
-            LockOwner::Ffi => {
-                self.ffi_lock_wait_last_us.store(wait_us, Ordering::Relaxed);
-                update_atomic_max(&self.ffi_lock_wait_max_us, wait_us);
-            }
-            LockOwner::SyncWorker => {
-                self.sync_worker_lock_wait_last_us
-                    .store(wait_us, Ordering::Relaxed);
-                update_atomic_max(&self.sync_worker_lock_wait_max_us, wait_us);
-            }
-            LockOwner::DecodeWorker => {
-                self.decode_worker_lock_wait_last_us
-                    .store(wait_us, Ordering::Relaxed);
-                update_atomic_max(&self.decode_worker_lock_wait_max_us, wait_us);
-            }
-        }
-    }
-
     pub(crate) fn observe_worker_deadline_slip(&self, slip_us: MediaTimeUs) {
         self.worker_deadline_slip_last_us
             .store(slip_us, Ordering::Relaxed);

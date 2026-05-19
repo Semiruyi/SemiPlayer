@@ -1,7 +1,6 @@
 use std::ffi::c_double;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
 
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::SharedAudioOutputController;
@@ -14,7 +13,7 @@ use crate::demux::{
     probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts, MediaInfo,
     SeekDemuxDiagnosticsSnapshot,
 };
-use crate::player::diagnostics::{LockOwner, PlayerDiagnostics, PlayerDiagnosticsSnapshot};
+use crate::player::diagnostics::{PlayerDiagnostics, PlayerDiagnosticsSnapshot};
 use crate::player::runtime::AudioDiscardSummary;
 use crate::player::worker::{DecodeWorkerHandle, SyncWorkerHandle};
 use crate::render::core::pipeline::PresentationTargetProfile;
@@ -54,7 +53,6 @@ impl Default for ControlState {
 #[repr(C)]
 pub struct SemiPlayerHandle {
     state: AtomicU32,
-    op_lock: Mutex<()>,
     playback_phase_lock: Arc<Mutex<()>>,
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
@@ -79,7 +77,6 @@ impl SemiPlayerHandle {
 
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
-            op_lock: Mutex::new(()),
             playback_phase_lock: Arc::new(Mutex::new(())),
             sync_worker: None,
             decode_worker: None,
@@ -180,26 +177,6 @@ impl SemiPlayerHandle {
             let media_session = ms.ok_or(ffmpeg_next::Error::Bug).map_err(MediaOpenError::Seek)?;
             media_session.with_mut(MediaSession::next_decoded_output)
         })
-    }
-
-    pub unsafe fn with_locked_ptr<T>(
-        player_ptr: *mut SemiPlayerHandle,
-        f: impl FnOnce(&mut SemiPlayerHandle) -> T,
-    ) -> T {
-        Self::with_locked_ptr_as(player_ptr, LockOwner::Ffi, f)
-    }
-
-    pub(crate) unsafe fn with_locked_ptr_as<T>(
-        player_ptr: *mut SemiPlayerHandle,
-        owner: LockOwner,
-        f: impl FnOnce(&mut SemiPlayerHandle) -> T,
-    ) -> T {
-        let player_ref = &*player_ptr;
-        let wait_start = Instant::now();
-        let _guard = player_ref.op_lock.lock().unwrap();
-        let wait_us = i64::try_from(wait_start.elapsed().as_micros()).unwrap_or(i64::MAX);
-        player_ref.diagnostics.observe_lock_wait(owner, wait_us);
-        f(&mut *player_ptr)
     }
 
     pub fn start_workers(&mut self, player_ptr: *mut SemiPlayerHandle) {

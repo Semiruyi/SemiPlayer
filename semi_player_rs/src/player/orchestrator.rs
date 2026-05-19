@@ -7,7 +7,7 @@ use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::util::time::{ms_to_us, MediaTimeUs};
 
-fn reset_playback_domains_for_new_timeline(player: &mut SemiPlayerHandle) {
+fn reset_playback_domains_for_new_timeline(player: &SemiPlayerHandle) {
     player.with_runtime_access(|mut runtime| {
         runtime.clear_runtime();
         runtime.reset_video_scheduler();
@@ -17,7 +17,7 @@ fn reset_playback_domains_for_new_timeline(player: &mut SemiPlayerHandle) {
     player.audio_coord_access().stop_output();
 }
 
-pub fn load_media_session(player: &mut SemiPlayerHandle, media_session: MediaSession) {
+pub fn load_media_session(player: &SemiPlayerHandle, media_session: MediaSession) {
     player.bump_media_generation();
     player.install_media_session(media_session);
     reset_playback_domains_for_new_timeline(player);
@@ -28,13 +28,13 @@ pub fn load_media_session(player: &mut SemiPlayerHandle, media_session: MediaSes
     player.notify_workers();
 }
 
-fn mark_video_sync_dirty(player: &mut SemiPlayerHandle) {
+fn mark_video_sync_dirty(player: &SemiPlayerHandle) {
     player.with_runtime_access(|mut runtime| {
         runtime.mark_video_sync_dirty();
     });
 }
 
-pub fn play(player: &mut SemiPlayerHandle) -> ResultCode {
+pub fn play(player: &SemiPlayerHandle) -> ResultCode {
     let control = player.control_access();
     let audio = player.audio_coord_access();
     if !control.is_media_loaded() {
@@ -49,7 +49,7 @@ pub fn play(player: &mut SemiPlayerHandle) -> ResultCode {
     SEMI_OK
 }
 
-pub fn pause(player: &mut SemiPlayerHandle) -> ResultCode {
+pub fn pause(player: &SemiPlayerHandle) -> ResultCode {
     let control = player.control_access();
     let audio = player.audio_coord_access();
     if !control.is_media_loaded() {
@@ -65,7 +65,7 @@ pub fn pause(player: &mut SemiPlayerHandle) -> ResultCode {
 }
 
 pub fn prepare_seek(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     position_ms: i64,
 ) -> Result<MediaTimeUs, ResultCode> {
     let target_us = ms_to_us(position_ms.max(0));
@@ -84,7 +84,7 @@ pub fn prepare_seek(
     Ok(target_us)
 }
 
-pub fn commit_seek(player: &mut SemiPlayerHandle, resolved_pts: MediaTimeUs) -> ResultCode {
+pub fn commit_seek(player: &SemiPlayerHandle, resolved_pts: MediaTimeUs) -> ResultCode {
     let seek = player.seek_commit_context();
     player.bump_media_generation();
     player.with_runtime_access(|mut runtime| {
@@ -105,7 +105,7 @@ pub fn commit_seek(player: &mut SemiPlayerHandle, resolved_pts: MediaTimeUs) -> 
 }
 
 pub fn prepare_seek_prev_keyframe(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     min_offset_ms: i32,
 ) -> Result<MediaTimeUs, ResultCode> {
     let seek = player.seek_prepare_context();
@@ -121,7 +121,7 @@ pub fn prepare_seek_prev_keyframe(
 }
 
 pub fn prepare_seek_next_keyframe(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     min_offset_ms: i32,
 ) -> Result<MediaTimeUs, ResultCode> {
     let seek = player.seek_prepare_context();
@@ -136,7 +136,7 @@ pub fn prepare_seek_next_keyframe(
     Ok(keyframe_pts)
 }
 
-pub fn reset(player: &mut SemiPlayerHandle) -> ResultCode {
+pub fn reset(player: &SemiPlayerHandle) -> ResultCode {
     player.bump_media_generation();
     player.clear_media_session();
     reset_playback_domains_for_new_timeline(player);
@@ -145,7 +145,7 @@ pub fn reset(player: &mut SemiPlayerHandle) -> ResultCode {
     SEMI_OK
 }
 
-pub fn set_speed(player: &mut SemiPlayerHandle, speed: c_double) -> ResultCode {
+pub fn set_speed(player: &SemiPlayerHandle, speed: c_double) -> ResultCode {
     let control = player.control_access();
     let audio = player.audio_coord_access();
     if !control.is_media_loaded() {
@@ -162,7 +162,7 @@ pub fn set_speed(player: &mut SemiPlayerHandle, speed: c_double) -> ResultCode {
     SEMI_OK
 }
 
-pub fn set_video_presentation_bias(player: &mut SemiPlayerHandle, bias_ms: i32) -> ResultCode {
+pub fn set_video_presentation_bias(player: &SemiPlayerHandle, bias_ms: i32) -> ResultCode {
     player
         .control_access()
         .set_host_presentation_offset_us(ms_to_us(i64::from(bias_ms)));
@@ -171,7 +171,7 @@ pub fn set_video_presentation_bias(player: &mut SemiPlayerHandle, bias_ms: i32) 
     SEMI_OK
 }
 
-pub fn set_subtitle_visible(player: &mut SemiPlayerHandle, visible: bool) -> ResultCode {
+pub fn set_subtitle_visible(player: &SemiPlayerHandle, visible: bool) -> ResultCode {
     let control = player.control_access();
     if !control.is_media_loaded() {
         return SEMI_E_INVALID_STATE;
@@ -182,7 +182,7 @@ pub fn set_subtitle_visible(player: &mut SemiPlayerHandle, visible: bool) -> Res
 }
 
 pub fn set_video_presentation_profile(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     profile: PresentationTargetProfile,
 ) -> ResultCode {
     let control = player.control_access();

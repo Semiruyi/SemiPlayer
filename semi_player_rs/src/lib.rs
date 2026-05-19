@@ -30,17 +30,6 @@ use crate::util::time::us_to_ms;
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
 
-fn with_player_locked<T>(
-    player: *mut SemiPlayerHandle,
-    f: impl FnOnce(&mut SemiPlayerHandle) -> T,
-) -> Result<T, ResultCode> {
-    if player.is_null() {
-        return Err(SEMI_E_INVALID_ARG);
-    }
-
-    Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
-}
-
 fn with_player_ref<T>(
     player: *mut SemiPlayerHandle,
     f: impl FnOnce(&SemiPlayerHandle) -> T,
@@ -52,9 +41,9 @@ fn with_player_ref<T>(
     Ok(unsafe { f(&*player) })
 }
 
-fn with_playback_coordinated_player_locked<T>(
+fn with_playback_coordinated_player_ref<T>(
     player: *mut SemiPlayerHandle,
-    f: impl FnOnce(&mut SemiPlayerHandle) -> T,
+    f: impl FnOnce(&SemiPlayerHandle) -> T,
 ) -> Result<T, ResultCode> {
     if player.is_null() {
         return Err(SEMI_E_INVALID_ARG);
@@ -62,7 +51,7 @@ fn with_playback_coordinated_player_locked<T>(
 
     let phase_lock = unsafe { (&*player).playback_phase_lock() };
     let _phase_guard = phase_lock.lock().unwrap();
-    Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
+    Ok(unsafe { f(&*player) })
 }
 
 fn with_playback_phase_lock<T>(
@@ -80,10 +69,10 @@ fn with_playback_phase_lock<T>(
 
 fn execute_seek_with_phase_lock(
     player: *mut SemiPlayerHandle,
-    prepare: impl FnOnce(&mut SemiPlayerHandle) -> Result<i64, ResultCode>,
+    prepare: impl FnOnce(&SemiPlayerHandle) -> Result<i64, ResultCode>,
 ) -> c_int {
     match with_playback_phase_lock(player, || {
-        let target_us = match with_player_locked(player, prepare) {
+        let target_us = match with_player_ref(player, prepare) {
             Ok(Ok(target_us)) => target_us,
             Ok(Err(code)) | Err(code) => return code,
         };
@@ -103,7 +92,7 @@ fn execute_seek_with_phase_lock(
             Err(code) => return code,
         };
 
-        with_player_locked(player, |player| {
+        with_player_ref(player, |player| {
             orchestrator::commit_seek(player, resolved_pts)
         })
         .unwrap_or_else(|code| code)
@@ -175,7 +164,7 @@ pub extern "C" fn semi_player_open(
         Err(code) => return code,
     };
 
-    let hw_device_ctx = with_player_locked(player, |player| {
+    let hw_device_ctx = with_player_ref(player, |player| {
         player
             .gpu_device
             .as_ref()
@@ -207,7 +196,7 @@ pub extern "C" fn semi_player_open(
         }
     };
 
-    match with_playback_coordinated_player_locked(player, |player| {
+    match with_playback_coordinated_player_ref(player, |player| {
         orchestrator::load_media_session(player, opened_media);
     }) {
         Ok(()) => SEMI_OK,
@@ -217,12 +206,12 @@ pub extern "C" fn semi_player_open(
 
 #[no_mangle]
 pub extern "C" fn semi_player_play(player: *mut SemiPlayerHandle) -> c_int {
-    with_playback_coordinated_player_locked(player, orchestrator::play).unwrap_or_else(|code| code)
+    with_playback_coordinated_player_ref(player, orchestrator::play).unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_pause(player: *mut SemiPlayerHandle) -> c_int {
-    with_playback_coordinated_player_locked(player, orchestrator::pause).unwrap_or_else(|code| code)
+    with_playback_coordinated_player_ref(player, orchestrator::pause).unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -267,12 +256,12 @@ pub unsafe extern "C" fn semi_player_seek_next_keyframe(
 
 #[no_mangle]
 pub extern "C" fn semi_player_reset(player: *mut SemiPlayerHandle) -> c_int {
-    with_playback_coordinated_player_locked(player, orchestrator::reset).unwrap_or_else(|code| code)
+    with_playback_coordinated_player_ref(player, orchestrator::reset).unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
 pub extern "C" fn semi_player_set_speed(player: *mut SemiPlayerHandle, speed: c_double) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| orchestrator::set_speed(player, speed))
+    with_playback_coordinated_player_ref(player, |player| orchestrator::set_speed(player, speed))
         .unwrap_or_else(|code| code)
 }
 
@@ -281,7 +270,7 @@ pub extern "C" fn semi_player_set_video_presentation_bias_ms(
     player: *mut SemiPlayerHandle,
     bias_ms: i32,
 ) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_ref(player, |player| {
         orchestrator::set_video_presentation_bias(player, bias_ms)
     })
     .unwrap_or_else(|code| code)
@@ -292,7 +281,7 @@ pub extern "C" fn semi_player_set_subtitle_visible(
     player: *mut SemiPlayerHandle,
     visible: c_int,
 ) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_ref(player, |player| {
         orchestrator::set_subtitle_visible(player, visible != 0)
     })
     .unwrap_or_else(|code| code)
@@ -307,7 +296,7 @@ pub extern "C" fn semi_player_set_video_presentation_profile(
         return SEMI_E_INVALID_ARG;
     };
 
-    with_playback_coordinated_player_locked(player, |player| {
+    with_playback_coordinated_player_ref(player, |player| {
         let profile = match profile {
             SemiVideoPresentationProfile::Passthrough => {
                 crate::render::core::pipeline::PresentationTargetProfile::Passthrough
@@ -427,7 +416,7 @@ pub unsafe extern "C" fn semi_player_debug_decode_next(
         return SEMI_E_INVALID_ARG;
     }
 
-    with_player_locked(player, |player| {
+    with_player_ref(player, |player| {
         if !player.is_media_loaded() {
             return SEMI_E_INVALID_STATE;
         }
