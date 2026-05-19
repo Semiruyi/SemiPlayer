@@ -5,7 +5,15 @@ use std::time::Instant;
 
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::SharedAudioOutputController;
-use crate::core::media::{DecodePolicy, SeekRecoveryPolicy, SharedOpenedMedia};
+use crate::core::media::decode::{
+    DecodePolicy, DecodedOutput, SeekRecoveryPolicy, VideoDecodeDiagnosticsSnapshot,
+};
+use crate::core::media::demux::{
+    probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts, MediaInfo,
+    SeekDemuxDiagnosticsSnapshot,
+};
+use crate::core::media::MediaOpenError;
+use crate::core::media::session::{MediaSession, SharedMediaSession};
 use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::core::player::sync_worker::SyncWorkerHandle;
@@ -189,7 +197,7 @@ pub struct SemiPlayerHandle {
     seek_recovery: Mutex<SeekRecoveryState>,
     media_generation: AtomicU64,
     pub(crate) speed: c_double,
-    pub(crate) opened_media: Option<SharedOpenedMedia>,
+    pub(crate) media_session: Option<SharedMediaSession>,
     pub(crate) video_presentation_profile: PresentationTargetProfile,
     pub(crate) subtitles_visible: bool,
     pub(crate) host_presentation_offset_us: MediaTimeUs,
@@ -220,7 +228,7 @@ impl SemiPlayerHandle {
             seek_recovery: Mutex::new(SeekRecoveryState::default()),
             media_generation: AtomicU64::new(0),
             speed: 1.0,
-            opened_media: None,
+            media_session: None,
             video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
             subtitles_visible: true,
             host_presentation_offset_us: 0,
@@ -235,7 +243,78 @@ impl SemiPlayerHandle {
     }
 
     pub fn is_media_loaded(&self) -> bool {
-        self.opened_media.is_some()
+        self.media_session.is_some()
+    }
+
+    pub fn media_session(&self) -> Option<&SharedMediaSession> {
+        self.media_session.as_ref()
+    }
+
+    pub fn cloned_media_session(&self) -> Option<SharedMediaSession> {
+        self.media_session.clone()
+    }
+
+    pub fn install_media_session(&mut self, media_session: MediaSession) {
+        self.media_session = Some(SharedMediaSession::new(media_session));
+    }
+
+    pub fn media_duration_us(&self) -> Option<MediaTimeUs> {
+        self.media_session()
+            .and_then(|media_session| media_session.with_ref(MediaSession::duration_us))
+    }
+
+    pub fn media_info(&self) -> Option<MediaInfo> {
+        self.media_session()
+            .map(|media_session| media_session.with_ref(|session| session.info().clone()))
+    }
+
+    pub fn seek_demux_diagnostics_snapshot(&self) -> SeekDemuxDiagnosticsSnapshot {
+        self.media_session()
+            .map(SharedMediaSession::seek_diagnostics_snapshot)
+            .unwrap_or_default()
+    }
+
+    pub fn video_decode_diagnostics_snapshot(&self) -> VideoDecodeDiagnosticsSnapshot {
+        self.media_session()
+            .map(SharedMediaSession::video_decode_diagnostics_snapshot)
+            .unwrap_or_default()
+    }
+
+    pub fn seek_media(&self, target_us: MediaTimeUs) -> Result<MediaTimeUs, MediaOpenError> {
+        let media_session = self
+            .media_session()
+            .ok_or(ffmpeg_next::Error::Bug)
+            .map_err(MediaOpenError::Seek)?;
+        media_session.with_mut(|media_session| media_session.seek(target_us))
+    }
+
+    pub fn finish_media_seek_diagnostics(&self) {
+        if let Some(media_session) = self.media_session() {
+            #[allow(clippy::redundant_closure_for_method_calls)]
+            media_session.with_mut(|media_session| media_session.finish_seek_diagnostics());
+        }
+    }
+
+    pub fn probe_prev_keyframe_pts(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {
+        let media_session = self.media_session()?;
+        let path = media_session.with_ref(|session| session.path().to_string());
+        let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
+        probe_expected_left_keyframe_pts(&path, stream_index, target_us).map(|(pts, _)| pts)
+    }
+
+    pub fn probe_next_keyframe_pts(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {
+        let media_session = self.media_session()?;
+        let path = media_session.with_ref(|session| session.path().to_string());
+        let stream_index = media_session.with_ref(|session| session.info().best_video_stream_index);
+        probe_expected_right_keyframe_pts(&path, stream_index, target_us)
+    }
+
+    pub fn next_debug_decoded_output(&self) -> Result<Option<DecodedOutput>, MediaOpenError> {
+        let media_session = self
+            .media_session()
+            .ok_or(ffmpeg_next::Error::Bug)
+            .map_err(MediaOpenError::Seek)?;
+        media_session.with_mut(MediaSession::next_decoded_output)
     }
 
     pub unsafe fn with_locked_ptr<T>(
@@ -321,7 +400,7 @@ impl SemiPlayerHandle {
     }
 
     pub fn clear_media(&mut self) {
-        self.opened_media = None;
+        self.media_session = None;
         self.reset_runtime_state();
     }
 
@@ -454,10 +533,7 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_aborted(&self) {
         self.diagnostics.observe_seek_aborted();
-        if let Some(opened_media) = self.opened_media.as_ref() {
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
-        }
+        self.finish_media_seek_diagnostics();
         self.clear_seek_recovery();
     }
 
@@ -505,10 +581,7 @@ impl SemiPlayerHandle {
 
     pub fn observe_seek_stable(&self) {
         self.diagnostics.observe_seek_stable();
-        if let Some(opened_media) = self.opened_media.as_ref() {
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            opened_media.with_mut(|opened_media| opened_media.finish_seek_diagnostics());
-        }
+        self.finish_media_seek_diagnostics();
         self.clear_seek_recovery();
     }
 }

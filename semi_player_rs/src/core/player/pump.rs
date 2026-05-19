@@ -4,7 +4,7 @@ use crate::core::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::{PlayerScheduleService, ScheduledWork};
 
 pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
-    if !player.is_media_loaded() || player.opened_media.is_none() {
+    if !player.is_media_loaded() || player.media_session().is_none() {
         return SEMI_E_INVALID_STATE;
     }
 

@@ -16,11 +16,12 @@ use crate::api::types::{
     SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
     SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
-use crate::core::media::{
-    open_media_with_hw_device_ctx, DecodedOutput, MediaInfo, MediaOpenError,
-    MediaProbeError, SharedOpenedMedia, StreamKind, VideoDecodeBackend, VideoDecodeFallbackReason,
-    probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts,
+use crate::core::media::decode::{
+    DecodedOutput, VideoDecodeBackend, VideoDecodeFallbackReason,
 };
+use crate::core::media::demux::{MediaInfo, MediaProbeError, StreamKind};
+use crate::core::media::session::open_media_with_hw_device_ctx;
+use crate::core::media::MediaOpenError;
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
 use crate::sync::schedule::PlayerScheduleService;
@@ -182,16 +183,8 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
     let sync_stats = player.video_sync.stats();
     let schedule_hint = PlayerScheduleService::evaluate(player);
     let diagnostics = player.diagnostics_snapshot();
-    let seek_demux = player
-        .opened_media
-        .as_ref()
-        .map(crate::core::media::SharedOpenedMedia::seek_diagnostics_snapshot)
-        .unwrap_or_default();
-    let video_decode = player
-        .opened_media
-        .as_ref()
-        .map(crate::core::media::SharedOpenedMedia::video_decode_diagnostics_snapshot)
-        .unwrap_or_default();
+    let seek_demux = player.seek_demux_diagnostics_snapshot();
+    let video_decode = player.video_decode_diagnostics_snapshot();
     let audio_output_snapshot = player
         .audio_output
         .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
@@ -560,7 +553,7 @@ pub extern "C" fn semi_player_open(
 
     match with_playback_coordinated_player_locked(player, |player| {
         player.bump_media_generation();
-        player.opened_media = Some(SharedOpenedMedia::new(opened_media));
+        player.install_media_session(opened_media);
         player.reset_runtime_state();
         VideoSyncService::mark_dirty(player);
         player.set_state(PlayerState::Ready);
@@ -634,14 +627,8 @@ pub unsafe extern "C" fn semi_player_seek(
             return SEMI_E_INVALID_ARG;
         }
 
-        let Some(opened_media) = player.opened_media.as_ref() else {
-            player.observe_seek_aborted();
-            return SEMI_E_INVALID_STATE;
-        };
-
         player.observe_seek_ffmpeg_seek_started();
-        let seek_result = opened_media.with_mut(|opened_media| opened_media.seek(target_us));
-        let keyframe_pts = match seek_result {
+        let keyframe_pts = match player.seek_media(target_us) {
             Ok(pts) => pts,
             Err(_) => {
                 player.observe_seek_aborted();
@@ -688,14 +675,7 @@ pub unsafe extern "C" fn semi_player_seek_prev_keyframe(
         let probe_target = current_pts_us.saturating_sub(offset_us).max(0);
 
         let keyframe_pts = player
-            .opened_media
-            .as_ref()
-            .and_then(|opened_media| {
-                let path = opened_media.with_ref(|om| om.path().to_string());
-                let stream_index = opened_media.with_ref(|om| om.info().best_video_stream_index);
-                probe_expected_left_keyframe_pts(&path, stream_index, probe_target)
-                    .map(|(pts, _)| pts)
-            })
+            .probe_prev_keyframe_pts(probe_target)
             .unwrap_or(current_pts_us);
 
         execute_keyframe_seek(player, keyframe_pts)
@@ -721,13 +701,7 @@ pub unsafe extern "C" fn semi_player_seek_next_keyframe(
         let probe_target = current_pts_us.saturating_add(offset_us);
 
         let keyframe_pts = player
-            .opened_media
-            .as_ref()
-            .and_then(|opened_media| {
-                let path = opened_media.with_ref(|om| om.path().to_string());
-                let stream_index = opened_media.with_ref(|om| om.info().best_video_stream_index);
-                probe_expected_right_keyframe_pts(&path, stream_index, probe_target)
-            })
+            .probe_next_keyframe_pts(probe_target)
             .unwrap_or(current_pts_us);
 
         execute_keyframe_seek(player, keyframe_pts)
@@ -742,14 +716,8 @@ fn execute_keyframe_seek(
     player.observe_seek_requested(keyframe_pts);
     player.observe_seek_lock_acquired();
 
-    let Some(opened_media) = player.opened_media.as_ref() else {
-        player.observe_seek_aborted();
-        return SEMI_E_INVALID_STATE;
-    };
-
     player.observe_seek_ffmpeg_seek_started();
-    let seek_result = opened_media.with_mut(|opened_media| opened_media.seek(keyframe_pts));
-    let resolved_pts = match seek_result {
+    let resolved_pts = match player.seek_media(keyframe_pts) {
         Ok(pts) => pts,
         Err(_) => {
             player.observe_seek_aborted();
@@ -924,13 +892,7 @@ pub unsafe extern "C" fn semi_player_get_duration_ms(
     }
 
     match with_player_locked(player, |player| unsafe {
-        *out_duration_ms = player
-            .opened_media
-            .as_ref()
-            .and_then(|opened_media| {
-                opened_media.with_ref(|opened_media| opened_media.duration_us())
-            })
-            .map_or(0, us_to_ms);
+        *out_duration_ms = player.media_duration_us().map_or(0, us_to_ms);
     }) {
         Ok(()) => SEMI_OK,
         Err(code) => code,
@@ -954,14 +916,12 @@ pub unsafe extern "C" fn semi_player_get_media_info(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(media_info_view) = player.opened_media.as_ref().map(|opened_media| {
-            opened_media.with_ref(|opened_media| build_media_info_view(opened_media.info()))
-        }) else {
+        let Some(media_info) = player.media_info() else {
             return SEMI_E_INVALID_STATE;
         };
 
         unsafe {
-            *out_media_info = media_info_view;
+            *out_media_info = build_media_info_view(&media_info);
         }
 
         SEMI_OK
@@ -986,16 +946,11 @@ pub unsafe extern "C" fn semi_player_debug_decode_next(
             return SEMI_E_INVALID_STATE;
         }
 
-        let Some(opened_media) = player.opened_media.as_ref() else {
-            return SEMI_E_INVALID_STATE;
+        let output = match player.next_debug_decoded_output() {
+            Ok(Some(output)) => Ok(output),
+            Ok(None) => Ok(DecodedOutput::EndOfStream),
+            Err(_) => Err(SEMI_E_INVALID_STATE),
         };
-
-        let output =
-            opened_media.with_mut(|opened_media| match opened_media.next_decoded_output() {
-                Ok(Some(output)) => Ok(output),
-                Ok(None) => Ok(DecodedOutput::EndOfStream),
-                Err(_) => Err(SEMI_E_INVALID_STATE),
-            });
         let output = match output {
             Ok(output) => output,
             Err(code) => return code,

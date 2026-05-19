@@ -1,6 +1,7 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
-use crate::core::media::{DecodePolicy, DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::media::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
+use crate::core::media::session::SharedMediaSession;
 use crate::core::player::execution::render_supply;
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::sync::video_sync::VideoSyncService;
@@ -14,7 +15,7 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
     } else {
         max_iterations
     };
-    let Some(opened_media) = player.opened_media.clone() else {
+    let Some(opened_media) = player.cloned_media_session() else {
         return SEMI_E_INVALID_STATE;
     };
 
@@ -39,7 +40,7 @@ pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> Resu
 }
 
 pub(crate) fn poll_decoded_output_once(
-    opened_media: &SharedOpenedMedia,
+    opened_media: &SharedMediaSession,
     decode_policy: DecodePolicy,
 ) -> Result<DecodedOutputPoll, ResultCode> {
     opened_media
@@ -144,7 +145,7 @@ mod tests {
     use crate::api::types::PlayerState;
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
-    use crate::core::media::DecodedOutput;
+    use crate::core::media::decode::DecodedOutput;
     use crate::core::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 

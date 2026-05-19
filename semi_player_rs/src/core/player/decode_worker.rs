@@ -1,7 +1,8 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::core::media::{DecodePolicy, DecodedOutputPoll, SharedOpenedMedia};
+use crate::core::media::decode::{DecodePolicy, DecodedOutputPoll};
+use crate::core::media::session::SharedMediaSession;
 use crate::core::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
 use crate::sync::schedule::PlayerScheduleService;
@@ -112,7 +113,7 @@ fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
         return DecodeWorkerPlan::WaitIndefinitely;
     }
 
-    let Some(opened_media) = player.opened_media.clone() else {
+    let Some(opened_media) = player.cloned_media_session() else {
         return DecodeWorkerPlan::WaitIndefinitely;
     };
 
@@ -193,7 +194,7 @@ enum DecodeWorkerAction {
 
 enum DecodeWorkerPlan {
     Decode {
-        opened_media: SharedOpenedMedia,
+        opened_media: SharedMediaSession,
         generation: u64,
         decode_policy: DecodePolicy,
     },
@@ -205,7 +206,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{complete_decode_action, DecodeWorkerAction};
-    use crate::core::media::{DecodedOutput, DecodedOutputPoll};
+    use crate::core::media::decode::{DecodedOutput, DecodedOutputPoll};
     use crate::core::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
