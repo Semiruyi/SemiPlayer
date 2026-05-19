@@ -1,8 +1,6 @@
 use std::ffi::c_double;
 
-use crate::api::error::{
-    ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_E_SEEK_FAILED, SEMI_OK,
-};
+use crate::api::error::{ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputController;
 use crate::decode::session::MediaSession;
@@ -51,23 +49,48 @@ pub fn pause(player: &mut SemiPlayerHandle) -> ResultCode {
     SEMI_OK
 }
 
-pub fn seek(player: &mut SemiPlayerHandle, position_ms: i64) -> ResultCode {
+pub fn prepare_seek(
+    player: &mut SemiPlayerHandle,
+    position_ms: i64,
+) -> Result<MediaTimeUs, ResultCode> {
     let target_us = ms_to_us(position_ms.max(0));
     player.observe_seek_requested(target_us);
     player.observe_seek_lock_acquired();
     if !player.is_media_loaded() {
         player.observe_seek_aborted();
-        return SEMI_E_INVALID_STATE;
+        return Err(SEMI_E_INVALID_STATE);
     }
     if position_ms < 0 {
         player.observe_seek_aborted();
-        return SEMI_E_INVALID_ARG;
+        return Err(SEMI_E_INVALID_ARG);
     }
 
-    seek_to_keyframe(player, target_us)
+    Ok(target_us)
 }
 
-pub fn seek_prev_keyframe(player: &mut SemiPlayerHandle, min_offset_ms: i32) -> ResultCode {
+pub fn commit_seek(player: &mut SemiPlayerHandle, resolved_pts: MediaTimeUs) -> ResultCode {
+    player.bump_media_generation();
+    player.runtime.clear();
+    player
+        .audio_output
+        .with_mut(AudioOutputController::clear_buffer);
+    player.audio_clock.seek(resolved_pts);
+    if player.state() == PlayerState::Playing {
+        player.audio_clock.pause();
+    }
+    player.video_scheduler = VideoScheduler;
+    player.video_sync.reset();
+    player.begin_seek_recovery(resolved_pts);
+    player.observe_seek_reset_finished();
+    player.notify_workers();
+    player.observe_seek_api_completed();
+    SEMI_OK
+}
+
+pub fn prepare_seek_prev_keyframe(
+    player: &mut SemiPlayerHandle,
+    min_offset_ms: i32,
+) -> Result<MediaTimeUs, ResultCode> {
     let current_pts_us = player
         .runtime
         .current_video_frame()
@@ -80,10 +103,13 @@ pub fn seek_prev_keyframe(player: &mut SemiPlayerHandle, min_offset_ms: i32) -> 
         .probe_prev_keyframe_pts(probe_target)
         .unwrap_or(current_pts_us);
 
-    seek_to_keyframe(player, keyframe_pts)
+    Ok(keyframe_pts)
 }
 
-pub fn seek_next_keyframe(player: &mut SemiPlayerHandle, min_offset_ms: i32) -> ResultCode {
+pub fn prepare_seek_next_keyframe(
+    player: &mut SemiPlayerHandle,
+    min_offset_ms: i32,
+) -> Result<MediaTimeUs, ResultCode> {
     let current_pts_us = player
         .runtime
         .current_video_frame()
@@ -96,7 +122,7 @@ pub fn seek_next_keyframe(player: &mut SemiPlayerHandle, min_offset_ms: i32) -> 
         .probe_next_keyframe_pts(probe_target)
         .unwrap_or(current_pts_us);
 
-    seek_to_keyframe(player, keyframe_pts)
+    Ok(keyframe_pts)
 }
 
 pub fn reset(player: &mut SemiPlayerHandle) -> ResultCode {
@@ -149,34 +175,5 @@ pub fn set_video_presentation_profile(
     player.set_video_presentation_profile(profile);
     VideoSyncService::mark_dirty(player);
     player.notify_workers();
-    SEMI_OK
-}
-
-fn seek_to_keyframe(player: &mut SemiPlayerHandle, keyframe_pts: MediaTimeUs) -> ResultCode {
-    player.observe_seek_ffmpeg_seek_started();
-    let resolved_pts = match player.seek_media(keyframe_pts) {
-        Ok(pts) => pts,
-        Err(_) => {
-            player.observe_seek_aborted();
-            return SEMI_E_SEEK_FAILED;
-        }
-    };
-    player.observe_seek_ffmpeg_seek_finished();
-
-    player.bump_media_generation();
-    player.runtime.clear();
-    player
-        .audio_output
-        .with_mut(AudioOutputController::clear_buffer);
-    player.audio_clock.seek(resolved_pts);
-    if player.state() == PlayerState::Playing {
-        player.audio_clock.pause();
-    }
-    player.video_scheduler = VideoScheduler;
-    player.video_sync.reset();
-    player.begin_seek_recovery(resolved_pts);
-    player.observe_seek_reset_finished();
-    player.notify_workers();
-    player.observe_seek_api_completed();
     SEMI_OK
 }

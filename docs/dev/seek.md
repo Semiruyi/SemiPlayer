@@ -30,14 +30,14 @@ Current behavior:
 
 ```text
 seek(target)
-  -> take playback coordination lock
+  -> take playback coordination gate
+  -> take player operation lock for seek prepare
+  -> release player operation lock
   -> call FFmpeg input.seek(target)
-  -> flush audio/video decoder state
+  -> retake player operation lock for seek commit
+  -> clear runtime and audio state
   -> bump media generation
-  -> clear runtime queues
-  -> clear audio backend buffer
-  -> move audio clock to target
-  -> reset video scheduler + video sync
+  -> move audio clock to target and reset sync state
   -> wake workers
   -> decode worker refills
   -> sync worker rebuilds playback state
@@ -72,6 +72,7 @@ Current diagnostic findings:
 - pre-target audio trimming was moved early enough that audio recovery no longer appears to be a meaningful seek bottleneck in current smoke measurements
 - direct seek-cost measurements now show that the dominant steady seek cost is forward video recovery from the correct left keyframe, not audio recovery, not reset, and not demux packet read
 - the next optimization stage should therefore focus less on "did FFmpeg pick the right keyframe?" and more on "how expensive is forward video recovery from the correct anchor?"
+- the first lock refactor stage now keeps FFmpeg seek itself outside the player-wide operation lock while still preserving the outer playback coordination gate
 
 ## 3. Design Goals
 
@@ -215,6 +216,12 @@ That should remain the correctness baseline.
 
 The next step is not to remove correctness barriers first.
 The next step is to reduce work performed while those barriers are held.
+
+Current implementation note:
+
+- the outer playback coordination gate is still held across the full seek operation
+- the player operation lock is now split into prepare and commit sections, with FFmpeg seek running outside that lock
+- keyframe-relative seek entrypoints now follow the same prepare / execute / commit structure as direct seek
 
 Near-term rules:
 

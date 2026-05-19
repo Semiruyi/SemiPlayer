@@ -66,6 +66,54 @@ fn with_playback_coordinated_player_locked<T>(
     Ok(unsafe { SemiPlayerHandle::with_locked_ptr(player, f) })
 }
 
+fn with_playback_phase_lock<T>(
+    player: *mut SemiPlayerHandle,
+    f: impl FnOnce() -> T,
+) -> Result<T, ResultCode> {
+    if player.is_null() {
+        return Err(SEMI_E_INVALID_ARG);
+    }
+
+    let phase_lock = unsafe { (&*player).playback_phase_lock() };
+    let _phase_guard = phase_lock.lock().unwrap();
+    Ok(f())
+}
+
+fn execute_seek_with_phase_lock(
+    player: *mut SemiPlayerHandle,
+    prepare: impl FnOnce(&mut SemiPlayerHandle) -> Result<i64, ResultCode>,
+) -> c_int {
+    match with_playback_phase_lock(player, || {
+        let target_us = match with_player_locked(player, prepare) {
+            Ok(Ok(target_us)) => target_us,
+            Ok(Err(code)) | Err(code) => return code,
+        };
+
+        let resolved_pts = match with_player_ref(player, |player| {
+            player.observe_seek_ffmpeg_seek_started();
+            let result = player.seek_media(target_us);
+            if result.is_ok() {
+                player.observe_seek_ffmpeg_seek_finished();
+            } else {
+                player.observe_seek_aborted();
+            }
+            result
+        }) {
+            Ok(Ok(resolved_pts)) => resolved_pts,
+            Ok(Err(_)) => return crate::api::error::SEMI_E_SEEK_FAILED,
+            Err(code) => return code,
+        };
+
+        with_player_locked(player, |player| {
+            orchestrator::commit_seek(player, resolved_pts)
+        })
+        .unwrap_or_else(|code| code)
+    }) {
+        Ok(code) => code,
+        Err(code) => code,
+    }
+}
+
 fn cstr_to_string(input: *const c_char) -> Result<String, c_int> {
     if input.is_null() {
         return Err(SEMI_E_INVALID_ARG);
@@ -187,10 +235,9 @@ pub unsafe extern "C" fn semi_player_seek(
     position_ms: i64,
     _exact: c_int,
 ) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
-        orchestrator::seek(player, position_ms)
+    execute_seek_with_phase_lock(player, |player| {
+        orchestrator::prepare_seek(player, position_ms)
     })
-    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -201,10 +248,9 @@ pub unsafe extern "C" fn semi_player_seek_prev_keyframe(
     player: *mut SemiPlayerHandle,
     min_offset_ms: c_int,
 ) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
-        orchestrator::seek_prev_keyframe(player, min_offset_ms)
+    execute_seek_with_phase_lock(player, |player| {
+        orchestrator::prepare_seek_prev_keyframe(player, min_offset_ms)
     })
-    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
@@ -215,10 +261,9 @@ pub unsafe extern "C" fn semi_player_seek_next_keyframe(
     player: *mut SemiPlayerHandle,
     min_offset_ms: c_int,
 ) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
-        orchestrator::seek_next_keyframe(player, min_offset_ms)
+    execute_seek_with_phase_lock(player, |player| {
+        orchestrator::prepare_seek_next_keyframe(player, min_offset_ms)
     })
-    .unwrap_or_else(|code| code)
 }
 
 #[no_mangle]
