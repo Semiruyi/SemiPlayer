@@ -22,7 +22,6 @@ use crate::decode::{DecodedOutput, MediaOpenError};
 use crate::demux::MediaProbeError;
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::orchestrator;
-use crate::player::pump::pump_player;
 use crate::player::view::{
     build_audio_output_snapshot, build_decoded_output_view, build_media_info_view,
     build_playback_snapshot, build_video_frame_info, build_video_surface_desc,
@@ -448,16 +447,6 @@ pub unsafe extern "C" fn semi_player_debug_decode_next(
         }
 
         SEMI_OK
-    })
-    .unwrap_or_else(|code| code)
-}
-
-#[no_mangle]
-pub extern "C" fn semi_player_pump(player: *mut SemiPlayerHandle, max_iterations: u32) -> c_int {
-    with_playback_coordinated_player_locked(player, |player| {
-        let code = pump_player(player, max_iterations);
-        player.notify_workers();
-        code
     })
     .unwrap_or_else(|code| code)
 }

@@ -114,7 +114,6 @@ The worker currently reevaluates when:
 - reset occurs
 - speed changes
 - host presentation bias changes
-- explicit host pump happens
 
 It also forces immediate work when:
 
@@ -144,23 +143,13 @@ Still owns:
 - feeding presentation bias back into the player
 - application/UI event handling
 
-### `pump`
-
-Still useful for:
-
-- decode supply
-- diagnostics
-- explicit host-assisted stepping
-
-But no longer the sole driver of playback progression.
-
 ## 6. What This Solved
 
 Compared with the original host-polling prototype, this stage solved:
 
 - frame advancement waiting on host timer cadence
 - strong dependence of sync quality on fixed UI polling intervals
-- stale-frame accumulation when the host failed to call pump in time
+- stale-frame accumulation when the host failed to service playback in time
 
 The specific failure mode that was recently fixed:
 
@@ -174,7 +163,7 @@ This is not yet the final playback architecture.
 
 Still missing:
 
-- decode worker separate from the pump path
+- decode worker and render work with finer-grained ownership boundaries
 - explicit queue-to-worker notifications from decode enqueue
 - subtitle timing integration into the same worker-owned progression model
 - richer worker diagnostics over FFI

@@ -136,7 +136,6 @@ The worker currently wakes for:
 - reset
 - speed changes
 - host presentation bias changes
-- explicit host pump calls
 
 Decode refill is now owned by a separate decode worker.
 The sync worker can request decode wakeups, but no longer needs to perform decode work itself.
@@ -148,20 +147,7 @@ Playback advancement now follows the same broad idea: the sync worker captures a
 under lock, executes audio-output work outside the main player lock, and then re-enters to commit
 clock, runtime, and video-sync updates under a playback phase lock.
 
-## 7. Pump Role Now
-
-`semi_player_pump(...)` still exists, but its role has changed.
-
-Today it is:
-
-- a decode supply entry
-- a control/debug hook
-- a useful diagnostic API
-- a manual service entry that uses the same schedule-driven playback/decode split as the worker path
-
-It is no longer supposed to be the only timing-plane driver.
-
-## 8. Current Diagnostics
+## 7. Current Diagnostics
 
 Playback snapshots expose:
 
@@ -187,7 +173,7 @@ Interpretation:
 - `Expected End-to-end A-V`:
   model-derived result after host offset, not a measured display metric
 
-## 9. What "Healthy" Looks Like
+## 8. What "Healthy" Looks Like
 
 A healthy current run usually means:
 
@@ -197,7 +183,7 @@ A healthy current run usually means:
 - positive sync-error spikes are limited
 - playback quality is no longer strongly tied to a fixed host timer interval
 
-## 10. Current Limitations
+## 9. Current Limitations
 
 The current model is much stronger than the original host-pump prototype, but there are still limits:
 
@@ -205,7 +191,7 @@ The current model is much stronger than the original host-pump prototype, but th
 - end-to-end display timing is still partly host-dependent
 - subtitle timing has not yet been folded into the same worker-owned progression path
 
-## 11. Near-Term Direction
+## 10. Near-Term Direction
 
 Near-term sync work should focus on:
 

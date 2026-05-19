@@ -93,7 +93,7 @@ The point is to answer:
 
 | Thread | Current Main Entry | Responsibility |
 | --- | --- | --- |
-| Host / FFI thread | `semi_player_*` in `src/lib.rs` | Control operations, synchronous queries, pump calls |
+| Host / FFI thread | `semi_player_*` in `src/lib.rs` | Control operations and synchronous queries |
 | Decode worker | `src/player/worker/decode.rs` | Decode scheduling, media polling, decoded-output application |
 | Sync worker | `src/player/worker/sync.rs` | Playback scheduling, audio submission, video sync advancement |
 | Audio backend thread | internal to audio backend | Device timing progression; does not directly lock `SemiPlayerHandle` |
@@ -158,7 +158,6 @@ Legend:
 | Seek/Open/Reset Prepare | `open`, `seek`, `seek_prev_keyframe`, `seek_next_keyframe`, `reset` | `playback_phase`, `control (R/W)`, `runtime (R)`, `diagnostics (W)` | Short preflight / staging section |
 | Seek/Open/Reset Execute | `open`, `seek`, keyframe-relative seek | `media (X/W)` | Heavy FFmpeg/media work; should not hold wide player locks |
 | Seek/Open/Reset Commit | `open`, `seek`, `reset` | `playback_phase`, `control (W)`, `runtime (W)`, `audio_coord (W)`, `playback_sync (W)`, `diagnostics (W)` | Atomic player-state commit after media work finishes |
-| Pump | `semi_player_pump` | `playback_phase`, `control (R/W)`, `runtime (R/W)`, `playback_sync (R/W)`, `audio_coord (R/W)` | Synchronous single-threaded playback drive path |
 
 ### 5.2 Decode Worker
 

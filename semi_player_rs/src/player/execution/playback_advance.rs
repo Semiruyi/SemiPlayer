@@ -6,12 +6,6 @@ use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::AudioDiscardSummary;
 use crate::sync::video_sync::VideoSyncService;
 
-pub fn advance_playback(player: &mut SemiPlayerHandle) {
-    let plan = plan_playback_advance(player);
-    let result = execute_playback_plan(&plan);
-    finish_playback_advance(player, plan, result);
-}
-
 pub(crate) struct PlaybackAdvancePlan {
     audio_output: SharedAudioOutputController,
     state: PlayerState,

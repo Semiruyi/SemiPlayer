@@ -21,7 +21,6 @@ FFI / host commands
 Important current rule:
 
 - playback progression is now primarily driven by the internal sync worker
-- `semi_player_pump(...)` still exists and is still useful
 - decode supply now has its own internal worker lane
 - decode supply still shares the same serialized player lock, so it is not yet an independently concurrent pipeline
 - lock-wait diagnostics are now split by `ffi`, `sync worker`, and `decode worker`
@@ -277,7 +276,6 @@ The worker is woken on:
 - reset
 - speed change
 - host presentation bias change
-- explicit external `semi_player_pump(...)`
 
 Current scheduling input combines:
 
@@ -286,7 +284,6 @@ Current scheduling input combines:
 - decode-supply-needed state
 - a dedicated decode-schedule hint used by:
   - decode worker
-  - manual pump path
   - internal decode wake requests
 - immediate wake conditions such as:
   - dirty sync state
@@ -306,9 +303,6 @@ Execution ownership is now split more explicitly:
   - runs synchronous decode supply
 - `decode_worker.rs`
   - owns decode refill wake/sleep policy
-- `pump.rs`
-  - remains as an external/manual entry point
-  - follows the same schedule-driven playback/decode split as the worker path
 
 ## 8. Serialized FFI Access
 
@@ -318,7 +312,7 @@ Relevant file:
 
 The player handle now serializes mutable access through a single operation lock.
 Playback advancement also uses a separate phase lock so host mutations such as open, seek, reset,
-or manual pump do not interleave with a sync-worker playback step while it is executing outside the
+do not interleave with a sync-worker playback step while it is executing outside the
 main player lock.
 
 Why this exists:

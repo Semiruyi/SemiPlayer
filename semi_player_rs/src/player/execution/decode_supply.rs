@@ -1,4 +1,4 @@
-use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
+use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE};
 use crate::api::types::PlayerState;
 use crate::decode::session::SharedMediaSession;
 use crate::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
@@ -6,39 +6,7 @@ use crate::player::execution::render_supply;
 use crate::player::handle::SemiPlayerHandle;
 use crate::sync::video_sync::VideoSyncService;
 
-const DEFAULT_PUMP_ITERATIONS: u32 = 256;
 pub(crate) const DECODE_POLL_PACKET_BUDGET: usize = 4;
-
-pub fn decode_supply(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
-    let iterations = if max_iterations == 0 {
-        DEFAULT_PUMP_ITERATIONS
-    } else {
-        max_iterations
-    };
-    let Some(opened_media) = player.decode_plan_context().opened_media else {
-        return SEMI_E_INVALID_STATE;
-    };
-
-    for _ in 0..iterations {
-        let decode_policy = player.decode_plan_context().decode_policy;
-        let output = match poll_decoded_output_once(&opened_media, decode_policy) {
-            Ok(DecodedOutputPoll::Output(output)) => output,
-            Ok(DecodedOutputPoll::Pending | DecodedOutputPoll::Finished) => break,
-            Err(code) => return code,
-        };
-
-        if apply_decoded_output(player, output).reached_end {
-            break;
-        }
-
-        if !player.with_runtime_access(|runtime| runtime.decode_supply_status().needs_decode_supply)
-        {
-            break;
-        }
-    }
-
-    SEMI_OK
-}
 
 pub(crate) fn poll_decoded_output_once(
     opened_media: &SharedMediaSession,

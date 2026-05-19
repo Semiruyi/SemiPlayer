@@ -31,9 +31,7 @@ Already done:
 - player-owned decode worker is active
 - playback advancement now executes in phased lock-in / lock-out / lock-in form
 - decode polling now runs outside the main player lock and applies results back under generation guards
-- manual `pump` path now follows the same playback/decode scheduling semantics as the worker path
 - decode-to-sync wake behavior has started tightening to avoid unnecessary sync wakeups on steady audio refill
-- worker-vs-UI pump comparison tooling exists in smoke
 - FFI and worker mutations are serialized through the player handle
 - current seek diagnostics are strong enough to justify starting the video hardware-decode track
 
@@ -73,15 +71,13 @@ Tasks:
   - sensitivity to host polling cadence
 - keep a repeatable comparison path for regressions
 
-### P0.2 Split decode supply from `pump_player(...)`
+### P0.2 Split decode supply from shared playback advancement flow
 
 Status: major baseline done, deeper concurrency split still pending
 
 Tasks:
 
 - keep decode supply separated from playback advancement at the code-path level
-- stop treating `pump_player(...)` as the primary internal execution model
-- keep manual pump aligned with worker scheduling semantics
 - continue reducing decode worker dependence on the shared player handle commit path
 - keep tightening how decoded-frame enqueue decides whether the sync worker really needs a wake
 

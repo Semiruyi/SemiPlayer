@@ -104,7 +104,6 @@ The host currently owns:
 - UI windowing
 - presenting current video output
 - input wiring
-- optional explicit pump calls for diagnostics
 - host-side presentation delay estimation
 
 ## 6. Important Current Design Rules
