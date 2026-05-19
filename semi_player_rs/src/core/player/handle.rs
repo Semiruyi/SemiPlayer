@@ -14,9 +14,8 @@ use crate::core::media::demux::{
 };
 use crate::core::media::MediaOpenError;
 use crate::core::media::session::{MediaSession, SharedMediaSession};
-use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
-use crate::core::player::sync_worker::SyncWorkerHandle;
+use crate::core::player::worker::{DecodeWorkerHandle, SyncWorkerHandle};
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
