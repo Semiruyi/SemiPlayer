@@ -45,7 +45,7 @@ pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult
 fn default_render_request(player: &SemiPlayerHandle) -> VideoRenderRequest {
     VideoRenderRequest::from_target_profile(
         player.video_presentation_profile(),
-        player.subtitles_visible,
+        player.subtitles_visible(),
     )
 }
 
@@ -111,7 +111,7 @@ mod tests {
     #[test]
     fn render_supply_reads_subtitle_visibility_from_player_state() {
         let mut player = SemiPlayerHandle::new();
-        player.subtitles_visible = false;
+        player.set_subtitles_visible(false);
         player.runtime.push_decoded_video_frame(decoded_frame(0));
 
         let result = render_supply(&mut player);
@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn default_render_request_follows_player_profile() {
-        let mut player = SemiPlayerHandle::new();
+        let player = SemiPlayerHandle::new();
         player.set_video_presentation_profile(
             crate::render::core::pipeline::PresentationTargetProfile::D3d11BgraPresenter,
         );

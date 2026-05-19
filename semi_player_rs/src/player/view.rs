@@ -135,9 +135,10 @@ pub fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapsho
     let audio_output_snapshot = player
         .audio_output
         .with_ref(crate::audio::core::output_controller::AudioOutputController::snapshot);
-    let host_presentation_offset_ms = i32::try_from(us_to_ms(player.host_presentation_offset_us))
+    let host_presentation_offset_us = player.host_presentation_offset_us();
+    let host_presentation_offset_ms = i32::try_from(us_to_ms(host_presentation_offset_us))
         .unwrap_or_else(|_| {
-            if player.host_presentation_offset_us.is_negative() {
+            if host_presentation_offset_us.is_negative() {
                 i32::MIN
             } else {
                 i32::MAX

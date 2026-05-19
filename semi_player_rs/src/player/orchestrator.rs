@@ -115,7 +115,7 @@ pub fn set_speed(player: &mut SemiPlayerHandle, speed: c_double) -> ResultCode {
         return SEMI_E_INVALID_ARG;
     }
 
-    player.speed = speed;
+    player.set_speed_value(speed);
     player.audio_clock.set_speed(speed);
     VideoSyncService::mark_dirty(player);
     player.notify_workers();
@@ -123,7 +123,7 @@ pub fn set_speed(player: &mut SemiPlayerHandle, speed: c_double) -> ResultCode {
 }
 
 pub fn set_video_presentation_bias(player: &mut SemiPlayerHandle, bias_ms: i32) -> ResultCode {
-    player.host_presentation_offset_us = ms_to_us(i64::from(bias_ms));
+    player.set_host_presentation_offset_us(ms_to_us(i64::from(bias_ms)));
     VideoSyncService::mark_dirty(player);
     player.notify_workers();
     SEMI_OK
@@ -134,7 +134,7 @@ pub fn set_subtitle_visible(player: &mut SemiPlayerHandle, visible: bool) -> Res
         return SEMI_E_INVALID_STATE;
     }
 
-    player.subtitles_visible = visible;
+    player.set_subtitles_visible(visible);
     SEMI_OK
 }
 

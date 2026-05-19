@@ -32,6 +32,27 @@ struct SeekRecoveryState {
     gate_audio_until_video_ready: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ControlState {
+    speed: c_double,
+    video_presentation_profile: PresentationTargetProfile,
+    subtitles_visible: bool,
+    host_presentation_offset_us: MediaTimeUs,
+    seek_recovery: SeekRecoveryState,
+}
+
+impl Default for ControlState {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
+            subtitles_visible: true,
+            host_presentation_offset_us: 0,
+            seek_recovery: SeekRecoveryState::default(),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct SemiPlayerHandle {
     state: AtomicU32,
@@ -41,13 +62,9 @@ pub struct SemiPlayerHandle {
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
-    seek_recovery: Mutex<SeekRecoveryState>,
+    control: Mutex<ControlState>,
     media_generation: AtomicU64,
-    pub(crate) speed: c_double,
     pub(crate) media_session: Option<SharedMediaSession>,
-    pub(crate) video_presentation_profile: PresentationTargetProfile,
-    pub(crate) subtitles_visible: bool,
-    pub(crate) host_presentation_offset_us: MediaTimeUs,
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) video_scheduler: VideoScheduler,
@@ -73,13 +90,9 @@ impl SemiPlayerHandle {
             sync_worker: None,
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
-            seek_recovery: Mutex::new(SeekRecoveryState::default()),
+            control: Mutex::new(ControlState::default()),
             media_generation: AtomicU64::new(0),
-            speed: 1.0,
             media_session: None,
-            video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
-            subtitles_visible: true,
-            host_presentation_offset_us: 0,
             audio_clock: AudioClock::new(),
             audio_output: SharedAudioOutputController::default(),
             video_scheduler: VideoScheduler::new(),
@@ -235,17 +248,13 @@ impl SemiPlayerHandle {
     }
 
     pub fn reset_runtime_state(&mut self) {
-        self.speed = 1.0;
-        self.video_presentation_profile = PresentationTargetProfile::CpuBgraCompatibility;
-        self.subtitles_visible = true;
-        self.host_presentation_offset_us = 0;
+        *self.control.lock().unwrap() = ControlState::default();
         self.audio_clock.reset();
         self.audio_output
             .with_mut(crate::audio::core::output_controller::AudioOutputController::stop);
         self.video_scheduler = VideoScheduler::new();
         self.runtime.clear();
         self.video_sync.reset();
-        self.clear_seek_recovery();
     }
 
     pub fn clear_media(&mut self) {
@@ -273,34 +282,58 @@ impl SemiPlayerHandle {
     }
 
     pub fn decode_policy(&self) -> DecodePolicy {
-        let target_us = self.seek_recovery.lock().unwrap().target_us;
+        let target_us = self.control.lock().unwrap().seek_recovery.target_us;
         DecodePolicy {
             seek_recovery: target_us.map(|target_video_us| SeekRecoveryPolicy { target_video_us }),
         }
     }
 
     pub fn video_presentation_profile(&self) -> PresentationTargetProfile {
-        self.video_presentation_profile
+        self.control.lock().unwrap().video_presentation_profile
     }
 
-    pub fn set_video_presentation_profile(&mut self, profile: PresentationTargetProfile) {
-        self.video_presentation_profile = profile;
+    pub fn set_video_presentation_profile(&self, profile: PresentationTargetProfile) {
+        self.control.lock().unwrap().video_presentation_profile = profile;
+    }
+
+    pub fn subtitles_visible(&self) -> bool {
+        self.control.lock().unwrap().subtitles_visible
+    }
+
+    pub fn set_subtitles_visible(&self, visible: bool) {
+        self.control.lock().unwrap().subtitles_visible = visible;
+    }
+
+    pub fn host_presentation_offset_us(&self) -> MediaTimeUs {
+        self.control.lock().unwrap().host_presentation_offset_us
+    }
+
+    pub fn set_host_presentation_offset_us(&self, offset_us: MediaTimeUs) {
+        self.control.lock().unwrap().host_presentation_offset_us = offset_us;
+    }
+
+    pub fn speed(&self) -> c_double {
+        self.control.lock().unwrap().speed
+    }
+
+    pub fn set_speed_value(&self, speed: c_double) {
+        self.control.lock().unwrap().speed = speed;
     }
 
     pub fn current_playback_time_us(&self) -> MediaTimeUs {
-        let seek_recovery = self.seek_recovery.lock().unwrap();
+        let seek_recovery = self.control.lock().unwrap().seek_recovery;
         if seek_recovery.gate_audio_until_video_ready {
             return seek_recovery.target_us.unwrap_or(0);
         }
 
-        drop(seek_recovery);
         self.audio_clock.presentation_time_us()
     }
 
     pub fn is_gating_audio_for_seek_recovery(&self) -> bool {
-        self.seek_recovery
+        self.control
             .lock()
             .unwrap()
+            .seek_recovery
             .gate_audio_until_video_ready
     }
 
@@ -346,19 +379,22 @@ impl SemiPlayerHandle {
     }
 
     pub fn begin_seek_recovery(&self, target_us: MediaTimeUs) {
-        let mut seek_recovery = self.seek_recovery.lock().unwrap();
+        let mut control = self.control.lock().unwrap();
+        let seek_recovery = &mut control.seek_recovery;
         seek_recovery.target_us = Some(target_us);
         seek_recovery.gate_audio_until_video_ready = self.state() == PlayerState::Playing;
     }
 
     pub fn clear_seek_recovery(&self) {
-        let mut seek_recovery = self.seek_recovery.lock().unwrap();
+        let mut control = self.control.lock().unwrap();
+        let seek_recovery = &mut control.seek_recovery;
         seek_recovery.target_us = None;
         seek_recovery.gate_audio_until_video_ready = false;
     }
 
     pub fn release_audio_gate_for_seek_recovery(&self) -> bool {
-        let mut seek_recovery = self.seek_recovery.lock().unwrap();
+        let mut control = self.control.lock().unwrap();
+        let seek_recovery = &mut control.seek_recovery;
         if !seek_recovery.gate_audio_until_video_ready {
             return false;
         }

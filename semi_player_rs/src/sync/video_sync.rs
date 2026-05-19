@@ -148,7 +148,7 @@ impl VideoSyncService {
 
     pub fn evaluate(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         let target_video_time_us =
-            add_media_time_us(playback_time_us, player.host_presentation_offset_us);
+            add_media_time_us(playback_time_us, player.host_presentation_offset_us());
 
         let runtime_video = player.runtime.video_snapshot();
         let current_video_pts_us = runtime_video.current_pts_us.unwrap_or(0);
@@ -193,7 +193,7 @@ impl VideoSyncService {
 
     pub fn sync(player: &mut SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         let target_video_time_us =
-            add_media_time_us(playback_time_us, player.host_presentation_offset_us);
+            add_media_time_us(playback_time_us, player.host_presentation_offset_us());
         let mut dropped_pts = Vec::new();
         let selection = player.runtime.select_video_frame(
             &player.video_scheduler,
