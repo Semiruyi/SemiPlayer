@@ -8,4 +8,3 @@ pub const SEMI_E_INVALID_STATE: ResultCode = -2;
 pub const SEMI_E_MEDIA_OPEN_FAILED: ResultCode = -3;
 pub const SEMI_E_MEDIA_PROBE_FAILED: ResultCode = -4;
 pub const SEMI_E_DECODER_OPEN_FAILED: ResultCode = -5;
-pub const SEMI_E_SEEK_FAILED: ResultCode = -6;

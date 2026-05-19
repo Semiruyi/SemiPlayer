@@ -84,8 +84,17 @@ pub fn prepare_seek(
     Ok(target_us)
 }
 
-pub fn commit_seek(player: &SemiPlayerHandle, resolved_pts: MediaTimeUs) -> ResultCode {
-    let seek = player.seek_commit_context();
+pub fn execute_seek(player: &SemiPlayerHandle, target_us: MediaTimeUs) -> ResultCode {
+    player.observe_seek_ffmpeg_seek_started();
+    let seek_result = player.seek_media(target_us);
+    if seek_result.is_err() {
+        player.observe_seek_aborted_access();
+        return SEMI_E_INVALID_STATE;
+    }
+    player.observe_seek_ffmpeg_seek_finished();
+
+    let resolved_pts = seek_result.unwrap_or(0);
+    let was_playing = player.control_access().current_state_is_playing();
     player.bump_media_generation();
     player.with_runtime_access(|mut runtime| {
         runtime.clear_runtime();
@@ -94,7 +103,7 @@ pub fn commit_seek(player: &SemiPlayerHandle, resolved_pts: MediaTimeUs) -> Resu
     });
     player.audio_coord_access().clear_output_buffer();
     player.audio_coord_access().seek_clock(resolved_pts);
-    if seek.was_playing {
+    if was_playing {
         player.audio_coord_access().pause_clock();
     }
     player.control_access().begin_seek_recovery(resolved_pts);

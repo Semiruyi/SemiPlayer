@@ -77,23 +77,8 @@ fn execute_seek_with_phase_lock(
             Ok(Err(code)) | Err(code) => return code,
         };
 
-        let resolved_pts = match with_player_ref(player, |player| {
-            player.observe_seek_ffmpeg_seek_started();
-            let result = player.seek_media(target_us);
-            if result.is_ok() {
-                player.observe_seek_ffmpeg_seek_finished();
-            } else {
-                player.observe_seek_aborted();
-            }
-            result
-        }) {
-            Ok(Ok(resolved_pts)) => resolved_pts,
-            Ok(Err(_)) => return crate::api::error::SEMI_E_SEEK_FAILED,
-            Err(code) => return code,
-        };
-
         with_player_ref(player, |player| {
-            orchestrator::commit_seek(player, resolved_pts)
+            orchestrator::execute_seek(player, target_us)
         })
         .unwrap_or_else(|code| code)
     }) {
