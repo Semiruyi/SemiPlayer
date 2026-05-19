@@ -6,4 +6,3 @@ pub(crate) use decode_supply::{apply_decoded_output, poll_decoded_output_once};
 pub(crate) use playback_advance::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
-pub(crate) use render_supply::render_supply;

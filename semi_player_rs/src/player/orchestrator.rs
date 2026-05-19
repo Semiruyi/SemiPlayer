@@ -5,7 +5,6 @@ use crate::api::types::PlayerState;
 use crate::decode::session::MediaSession;
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::pipeline::PresentationTargetProfile;
-use crate::sync::video_sync::VideoSyncService;
 use crate::util::time::{ms_to_us, MediaTimeUs};
 
 fn reset_playback_domains_for_new_timeline(player: &mut SemiPlayerHandle) {
@@ -29,6 +28,12 @@ pub fn load_media_session(player: &mut SemiPlayerHandle, media_session: MediaSes
     player.notify_workers();
 }
 
+fn mark_video_sync_dirty(player: &mut SemiPlayerHandle) {
+    player.with_runtime_access(|mut runtime| {
+        runtime.mark_video_sync_dirty();
+    });
+}
+
 pub fn play(player: &mut SemiPlayerHandle) -> ResultCode {
     let control = player.control_access();
     let audio = player.audio_coord_access();
@@ -39,7 +44,7 @@ pub fn play(player: &mut SemiPlayerHandle) -> ResultCode {
     audio.play_clock();
     control.set_state(PlayerState::Playing);
     audio.sync_output_started_state(control.state());
-    VideoSyncService::mark_dirty(player);
+    mark_video_sync_dirty(player);
     player.notify_workers();
     SEMI_OK
 }
@@ -54,7 +59,7 @@ pub fn pause(player: &mut SemiPlayerHandle) -> ResultCode {
     audio.pause_clock();
     control.set_state(PlayerState::Paused);
     audio.sync_output_started_state(control.state());
-    VideoSyncService::mark_dirty(player);
+    mark_video_sync_dirty(player);
     player.notify_workers();
     SEMI_OK
 }
@@ -152,7 +157,7 @@ pub fn set_speed(player: &mut SemiPlayerHandle, speed: c_double) -> ResultCode {
 
     control.set_speed_value(speed);
     audio.set_clock_speed(speed);
-    VideoSyncService::mark_dirty(player);
+    mark_video_sync_dirty(player);
     player.notify_workers();
     SEMI_OK
 }
@@ -161,7 +166,7 @@ pub fn set_video_presentation_bias(player: &mut SemiPlayerHandle, bias_ms: i32) 
     player
         .control_access()
         .set_host_presentation_offset_us(ms_to_us(i64::from(bias_ms)));
-    VideoSyncService::mark_dirty(player);
+    mark_video_sync_dirty(player);
     player.notify_workers();
     SEMI_OK
 }
@@ -186,7 +191,7 @@ pub fn set_video_presentation_profile(
     }
 
     control.set_video_presentation_profile(profile);
-    VideoSyncService::mark_dirty(player);
+    mark_video_sync_dirty(player);
     player.notify_workers();
     SEMI_OK
 }

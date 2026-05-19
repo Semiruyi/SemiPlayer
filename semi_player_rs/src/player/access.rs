@@ -541,6 +541,27 @@ impl RuntimeAccess<'_> {
         self.runtime.push_audio_frame(frame);
     }
 
+    pub fn begin_render_stage(
+        &mut self,
+        generation: u64,
+    ) -> Option<Vec<crate::render::core::frame::DecodedVideoFrame>> {
+        self.runtime.begin_render_stage(generation)
+    }
+
+    pub fn commit_render_stage(
+        &mut self,
+        frames: Vec<crate::render::core::frame::PresentationFrame>,
+    ) {
+        self.runtime.commit_render_stage(frames);
+    }
+
+    pub fn cancel_render_stage(
+        &mut self,
+        frames: Vec<crate::render::core::frame::DecodedVideoFrame>,
+    ) {
+        self.runtime.cancel_render_stage(frames);
+    }
+
     pub fn mark_end_of_stream(&mut self) {
         self.runtime.mark_end_of_stream();
     }

@@ -148,10 +148,6 @@ impl VideoSyncState {
 }
 
 impl VideoSyncService {
-    pub fn mark_dirty(player: &mut SemiPlayerHandle) {
-        player.video_sync.mark_dirty();
-    }
-
     pub fn evaluate(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         Self::evaluate_from_inputs(
             VideoSyncInputs {

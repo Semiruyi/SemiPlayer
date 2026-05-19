@@ -2,9 +2,9 @@ use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE};
 use crate::api::types::PlayerState;
 use crate::decode::session::SharedMediaSession;
 use crate::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
-use crate::player::execution::render_supply;
+use crate::player::execution::render_supply::render_supply;
 use crate::player::handle::SemiPlayerHandle;
-use crate::sync::video_sync::VideoSyncService;
+use crate::render::core::frame::DecodedVideoFrame;
 
 pub(crate) const DECODE_POLL_PACKET_BUDGET: usize = 4;
 
@@ -25,26 +25,17 @@ pub(crate) struct DecodedOutputApplyResult {
     pub should_wake_sync: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct VideoOutputPrepare {
+    playback_time_us: i64,
+}
+
 pub(crate) fn apply_decoded_output(
     player: &mut SemiPlayerHandle,
     output: DecodedOutput,
 ) -> DecodedOutputApplyResult {
     match output {
-        DecodedOutput::Video(frame) => {
-            let playback_time_us = player.playback_position_us_snapshot();
-            player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
-            player.with_runtime_access(|mut runtime| {
-                runtime.push_decoded_video_frame(frame);
-            });
-            let render_result = render_supply(player);
-            if render_result.has_new_presentation_frames() {
-                VideoSyncService::mark_dirty(player);
-            }
-            DecodedOutputApplyResult {
-                reached_end: false,
-                should_wake_sync: render_result.has_new_presentation_frames(),
-            }
-        }
+        DecodedOutput::Video(frame) => apply_video_output(player, frame),
         DecodedOutput::SkippedVideo(frame) => {
             let playback_time_us = player.playback_position_us_snapshot();
             player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
@@ -91,6 +82,38 @@ pub(crate) fn apply_decoded_output(
     }
 }
 
+fn apply_video_output(
+    player: &mut SemiPlayerHandle,
+    frame: DecodedVideoFrame,
+) -> DecodedOutputApplyResult {
+    let prepared = prepare_video_output(player);
+    commit_video_prepare(player, prepared, frame);
+
+    let render_result = render_supply(player);
+
+    DecodedOutputApplyResult {
+        reached_end: false,
+        should_wake_sync: render_result.has_new_presentation_frames(),
+    }
+}
+
+fn prepare_video_output(player: &SemiPlayerHandle) -> VideoOutputPrepare {
+    VideoOutputPrepare {
+        playback_time_us: player.playback_position_us_snapshot(),
+    }
+}
+
+fn commit_video_prepare(
+    player: &mut SemiPlayerHandle,
+    prepared: VideoOutputPrepare,
+    frame: DecodedVideoFrame,
+) {
+    player.observe_seek_video_decoded_access(frame.pts_us, prepared.playback_time_us);
+    player.with_runtime_access(|mut runtime| {
+        runtime.push_decoded_video_frame(frame);
+    });
+}
+
 fn should_wake_sync_for_audio_enqueue(
     context: crate::player::access::DecodeAudioCommitContext,
 ) -> bool {
@@ -101,7 +124,10 @@ fn trim_audio_for_seek_recovery(
     decode_policy: DecodePolicy,
     frame: crate::audio::core::frame::AudioFrame,
 ) -> Option<crate::audio::core::frame::AudioFrame> {
-    let Some(target_us) = decode_policy.seek_recovery.map(|policy| policy.target_video_us) else {
+    let Some(target_us) = decode_policy
+        .seek_recovery
+        .map(|policy| policy.target_video_us)
+    else {
         return Some(frame);
     };
 

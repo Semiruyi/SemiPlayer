@@ -28,6 +28,7 @@ pub struct RuntimeSnapshot<'a> {
     pub end_of_stream: bool,
     pub last_audio_pts_us: Option<MediaTimeUs>,
     pub decode_supply: DecodeSupplyStatus,
+    pub render_staging: RenderStagingStatus,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -49,6 +50,7 @@ pub struct DecodeSupplyStatus {
     pub audio_queue_len: usize,
     pub decoded_video_queue_len: usize,
     pub presentation_video_queue_len: usize,
+    pub in_flight_decoded_video_queue_len: usize,
     pub ready_video_frame_count: usize,
     pub buffered_video_frame_count: usize,
     pub target_audio_queue_len: usize,
@@ -60,6 +62,19 @@ pub struct DecodeSupplyStatus {
     pub needs_decode_supply: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RenderStagingStatus {
+    pub in_flight_decoded_video_queue_len: usize,
+    pub has_in_flight_batch: bool,
+    pub in_flight_generation: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RenderInFlightState {
+    decoded_frame_count: usize,
+    generation: u64,
+}
+
 pub struct PlayerRuntime {
     queued_audio_frames: VecDeque<AudioFrame>,
     queued_audio_sample_offset: usize,
@@ -68,6 +83,7 @@ pub struct PlayerRuntime {
     current_presentation_video_frame: Option<PresentationFrame>,
     last_audio_frame: Option<AudioFrame>,
     end_of_stream: bool,
+    render_in_flight: Option<RenderInFlightState>,
 }
 
 impl PlayerRuntime {
@@ -80,6 +96,7 @@ impl PlayerRuntime {
             current_presentation_video_frame: None,
             last_audio_frame: None,
             end_of_stream: false,
+            render_in_flight: None,
         }
     }
 
@@ -91,6 +108,7 @@ impl PlayerRuntime {
         self.current_presentation_video_frame = None;
         self.last_audio_frame = None;
         self.end_of_stream = false;
+        self.render_in_flight = None;
     }
 
     pub fn push_audio_frame(&mut self, frame: AudioFrame) {
@@ -199,11 +217,13 @@ impl PlayerRuntime {
             end_of_stream: self.has_reached_end_of_stream(),
             last_audio_pts_us: self.last_audio_frame().map(|frame| frame.pts_us),
             decode_supply: self.decode_supply_status(),
+            render_staging: self.render_staging_status(),
         }
     }
 
     pub fn buffered_video_frame_count(&self) -> usize {
         self.queued_decoded_video_frames.len()
+            + self.in_flight_decoded_video_queue_len()
             + self.queued_presentation_video_frames.len()
             + usize::from(self.current_presentation_video_frame.is_some())
     }
@@ -218,6 +238,7 @@ impl PlayerRuntime {
         let audio_queue_len = self.audio_queue_len();
         let decoded_video_queue_len = self.queued_decoded_video_frames.len();
         let presentation_video_queue_len = self.queued_presentation_video_frames.len();
+        let in_flight_decoded_video_queue_len = self.in_flight_decoded_video_queue_len();
         let ready_video_frame_count = self.ready_video_frame_count();
         let buffered_video_frame_count = self.buffered_video_frame_count();
         let has_sufficient_presentation_buffer = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN
@@ -230,6 +251,7 @@ impl PlayerRuntime {
             audio_queue_len,
             decoded_video_queue_len,
             presentation_video_queue_len,
+            in_flight_decoded_video_queue_len,
             ready_video_frame_count,
             buffered_video_frame_count,
             target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
@@ -241,6 +263,54 @@ impl PlayerRuntime {
             needs_decode_supply: !end_of_stream
                 && (audio_queue_len < TARGET_AUDIO_QUEUE_LEN || !has_sufficient_total_video_buffer),
         }
+    }
+
+    pub fn render_staging_status(&self) -> RenderStagingStatus {
+        RenderStagingStatus {
+            in_flight_decoded_video_queue_len: self.in_flight_decoded_video_queue_len(),
+            has_in_flight_batch: self.render_in_flight.is_some(),
+            in_flight_generation: self.render_in_flight.map(|state| state.generation),
+        }
+    }
+
+    pub fn begin_render_stage(&mut self, generation: u64) -> Option<Vec<DecodedVideoFrame>> {
+        if self.queued_decoded_video_frames.is_empty() {
+            return None;
+        }
+
+        debug_assert!(
+            self.render_in_flight.is_none(),
+            "render stage already in flight"
+        );
+        if self.render_in_flight.is_some() {
+            return None;
+        }
+
+        let decoded_frames: Vec<_> = self.queued_decoded_video_frames.drain(..).collect();
+        self.render_in_flight = Some(RenderInFlightState {
+            decoded_frame_count: decoded_frames.len(),
+            generation,
+        });
+        Some(decoded_frames)
+    }
+
+    pub fn commit_render_stage(&mut self, frames: Vec<PresentationFrame>) {
+        self.render_in_flight = None;
+        self.queued_presentation_video_frames.extend(frames);
+    }
+
+    pub fn cancel_render_stage(&mut self, decoded_frames: Vec<DecodedVideoFrame>) {
+        debug_assert!(self.render_in_flight.is_some(), "missing render stage");
+        self.render_in_flight = None;
+        for frame in decoded_frames.into_iter().rev() {
+            self.queued_decoded_video_frames.push_front(frame);
+        }
+    }
+
+    fn in_flight_decoded_video_queue_len(&self) -> usize {
+        self.render_in_flight
+            .map(|state| state.decoded_frame_count)
+            .unwrap_or(0)
     }
 
     pub fn discard_consumed_audio_frames(
@@ -454,8 +524,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        DecodeSupplyStatus, PlayerRuntime, VideoSelectionStats, TARGET_AUDIO_QUEUE_LEN,
-        TARGET_FUTURE_VIDEO_QUEUE_LEN,
+        DecodeSupplyStatus, PlayerRuntime, RenderStagingStatus, VideoSelectionStats,
+        TARGET_AUDIO_QUEUE_LEN, TARGET_FUTURE_VIDEO_QUEUE_LEN,
     };
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
@@ -746,6 +816,7 @@ mod tests {
                 audio_queue_len: 0,
                 decoded_video_queue_len: 0,
                 presentation_video_queue_len: 0,
+                in_flight_decoded_video_queue_len: 0,
                 ready_video_frame_count: 0,
                 buffered_video_frame_count: 0,
                 target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
@@ -845,5 +916,100 @@ mod tests {
         assert!(status.has_sufficient_total_video_buffer);
         assert!(!status.has_sufficient_buffer);
         assert!(!status.needs_decode_supply);
+    }
+
+    #[test]
+    fn render_stage_keeps_in_flight_backlog_visible_to_decode_supply() {
+        let mut runtime = PlayerRuntime::new();
+
+        for index in 0..TARGET_AUDIO_QUEUE_LEN {
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(10_000);
+            runtime.push_audio_frame(AudioFrame {
+                pts_us,
+                duration_us: Some(10_000),
+                sample_rate: 48_000,
+                channels: 2,
+                sample_count: 480,
+                sample_format: AudioSampleFormatCategory::F32,
+                is_planar: false,
+                data: vec![0.0; 480 * 2],
+            });
+        }
+
+        for index in 0..=TARGET_FUTURE_VIDEO_QUEUE_LEN {
+            let pts_us = i64::try_from(index)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(33_000);
+            runtime.push_decoded_video_frame(VideoFrame {
+                pts_us,
+                duration_us: Some(33_000),
+                width: 1920,
+                height: 1080,
+                is_key_frame: false,
+                surface: video_surface(16),
+            });
+        }
+
+        let staged = runtime.begin_render_stage(7).expect("render stage");
+        let status = runtime.decode_supply_status();
+
+        assert_eq!(staged.len(), TARGET_FUTURE_VIDEO_QUEUE_LEN + 1);
+        assert_eq!(status.decoded_video_queue_len, 0);
+        assert_eq!(
+            status.in_flight_decoded_video_queue_len,
+            TARGET_FUTURE_VIDEO_QUEUE_LEN + 1
+        );
+        assert_eq!(runtime.render_staging_status().in_flight_generation, Some(7));
+        assert_eq!(
+            status.buffered_video_frame_count,
+            TARGET_FUTURE_VIDEO_QUEUE_LEN + 1
+        );
+        assert!(status.has_sufficient_total_video_buffer);
+        assert!(!status.needs_decode_supply);
+    }
+
+    #[test]
+    fn canceled_render_stage_restores_decoded_backlog_order() {
+        let mut runtime = PlayerRuntime::new();
+
+        runtime.push_decoded_video_frame(VideoFrame {
+            pts_us: 10_000,
+            duration_us: Some(33_000),
+            width: 1920,
+            height: 1080,
+            is_key_frame: false,
+            surface: video_surface(16),
+        });
+        runtime.push_decoded_video_frame(VideoFrame {
+            pts_us: 20_000,
+            duration_us: Some(33_000),
+            width: 1920,
+            height: 1080,
+            is_key_frame: false,
+            surface: video_surface(16),
+        });
+
+        let staged = runtime.begin_render_stage(11).expect("render stage");
+        runtime.cancel_render_stage(staged);
+
+        assert_eq!(runtime.decoded_video_queue_len(), 2);
+        assert_eq!(
+            runtime.pop_decoded_video_frame().map(|frame| frame.pts_us),
+            Some(10_000)
+        );
+        assert_eq!(
+            runtime.pop_decoded_video_frame().map(|frame| frame.pts_us),
+            Some(20_000)
+        );
+        assert_eq!(
+            runtime.render_staging_status(),
+            RenderStagingStatus {
+                in_flight_decoded_video_queue_len: 0,
+                has_in_flight_batch: false,
+                in_flight_generation: None,
+            }
+        );
     }
 }

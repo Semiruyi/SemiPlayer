@@ -507,22 +507,29 @@ Landed access helpers:
 - `sync_worker_plan_context()`
 - `playback_advance_plan_context()`
 - `playback_advance_observe_context()`
+- runtime render staging helpers via `PlayerRuntime::begin_render_stage()` /
+  `commit_render_stage()`
 
 Paths already migrated onto the skeleton:
 
 - Host control path in `src/player/orchestrator.rs`
 - Playback snapshot and read helpers in `src/player/access.rs` and `src/player/view.rs`
-- Pump scheduling reads in `src/player/pump.rs`
 - Decode worker plan reads in `src/player/worker/decode.rs`
 - Sync worker plan reads and playback advance plan/commit in
   `src/player/worker/sync.rs` and `src/player/execution/playback_advance.rs`
 - Decode audio / skipped-audio / EOS commit branches in
   `src/player/execution/decode_supply.rs`
+- Render backlog transfer now has an explicit runtime staging state in
+  `src/player/runtime.rs` and `src/player/execution/render_supply.rs`
+  with generation-tagged `plan / stage / execute / commit` steps
 
 Still intentionally conservative:
 
 - The decode video path still couples `push_decoded_video_frame -> render_supply -> mark_dirty`
-- `render_supply(...)` is still treated as one atomic backlog transfer
+- `render_supply(...)` is still executed synchronously, even though the runtime
+  now models decoded-video backlog as `queued` vs `in-flight render`
+- stale render executions are dropped by generation at commit, but execution is
+  still synchronous and still owned by the decode path
 - The outer `with_locked_ptr_as(...)` path still takes both `op_lock` and `runtime_lock`
 
 That means the project is currently in a hybrid stage:

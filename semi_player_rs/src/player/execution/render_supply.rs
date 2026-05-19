@@ -1,6 +1,26 @@
 use crate::player::handle::SemiPlayerHandle;
-use crate::render::core::frame::DecodedVideoFrame;
-use crate::render::core::pipeline::{VideoRenderRequest, VideoRenderStats};
+use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
+use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderRequest, VideoRenderStats};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RenderSupplyPlan {
+    request: VideoRenderRequest,
+    generation: u64,
+}
+
+#[derive(Debug)]
+struct RenderSupplyStage {
+    request: VideoRenderRequest,
+    generation: u64,
+    decoded_frames: Vec<DecodedVideoFrame>,
+}
+
+#[derive(Debug)]
+struct RenderSupplyExecution {
+    generation: u64,
+    rendered_frames: Vec<PresentationFrame>,
+    result: RenderSupplyResult,
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct RenderSupplyResult {
@@ -18,28 +38,82 @@ impl RenderSupplyResult {
 }
 
 pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult {
-    let request = default_render_request(player);
-    let mut decoded_frames = Vec::<DecodedVideoFrame>::new();
+    let plan = plan_render_supply(player);
+    let Some(stage) = stage_render_supply(player, plan) else {
+        return RenderSupplyResult::default();
+    };
+    let execution = execute_render_supply(player, stage);
+    commit_render_supply(player, execution)
+}
 
-    while let Some(frame) = player.runtime.pop_decoded_video_frame() {
-        decoded_frames.push(frame);
+fn plan_render_supply(player: &SemiPlayerHandle) -> RenderSupplyPlan {
+    RenderSupplyPlan {
+        request: default_render_request(player),
+        generation: player.media_generation(),
+    }
+}
+
+fn stage_render_supply(
+    player: &mut SemiPlayerHandle,
+    plan: RenderSupplyPlan,
+) -> Option<RenderSupplyStage> {
+    let decoded_frames =
+        player.with_runtime_access(|mut runtime| runtime.begin_render_stage(plan.generation))?;
+
+    Some(RenderSupplyStage {
+        request: plan.request,
+        generation: plan.generation,
+        decoded_frames,
+    })
+}
+
+fn execute_render_supply(
+    player: &mut SemiPlayerHandle,
+    stage: RenderSupplyStage,
+) -> RenderSupplyExecution {
+    let batch = player.with_render_access_mut(|render| {
+        render
+            .render
+            .render_frames(stage.request, stage.decoded_frames)
+    });
+    render_execution_from_batch(stage.generation, batch)
+}
+
+fn commit_render_supply(
+    player: &mut SemiPlayerHandle,
+    execution: RenderSupplyExecution,
+) -> RenderSupplyResult {
+    if execution.generation != player.media_generation() {
+        player.with_runtime_access(|mut runtime| {
+            runtime.commit_render_stage(Vec::new());
+        });
+        return RenderSupplyResult::default();
     }
 
-    let batch = player.render.render_frames(request, decoded_frames);
-    let result = render_stats_to_result(batch.stats);
-
-    for frame in batch.frames {
-        player.runtime.push_presentation_video_frame(frame);
-    }
+    let has_new_presentation_frames = execution.result.has_new_presentation_frames();
+    player.with_runtime_access(|mut runtime| {
+        runtime.commit_render_stage(execution.rendered_frames);
+        if has_new_presentation_frames {
+            runtime.mark_video_sync_dirty();
+        }
+    });
     player.observe_render_stats(
-        result.rendered_frames,
-        result.passthrough_frames,
-        result.passthrough_with_subtitle_intent_frames,
-        result.requires_transform_frames,
-        result.fallback_passthrough_frames,
+        execution.result.rendered_frames,
+        execution.result.passthrough_frames,
+        execution.result.passthrough_with_subtitle_intent_frames,
+        execution.result.requires_transform_frames,
+        execution.result.fallback_passthrough_frames,
     );
 
-    result
+    execution.result
+}
+
+fn render_execution_from_batch(generation: u64, batch: VideoRenderBatch) -> RenderSupplyExecution {
+    RenderSupplyExecution {
+        generation,
+        result: render_stats_to_result(batch.stats),
+        rendered_frames: batch.frames,
+    }
 }
 
 fn default_render_request(player: &SemiPlayerHandle) -> VideoRenderRequest {
@@ -63,7 +137,10 @@ fn render_stats_to_result(stats: VideoRenderStats) -> RenderSupplyResult {
 mod tests {
     use std::sync::Arc;
 
-    use super::{default_render_request, render_supply, RenderSupplyResult};
+    use super::{
+        commit_render_supply, default_render_request, execute_render_supply, plan_render_supply,
+        render_supply, stage_render_supply, RenderSupplyResult,
+    };
     use crate::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
     use crate::render::core::pipeline::VideoRenderRequest;
@@ -183,5 +260,71 @@ mod tests {
             }
         );
         assert_eq!(player.runtime.presentation_video_queue_len(), 1);
+    }
+
+    #[test]
+    fn staged_render_supply_keeps_runtime_in_flight_until_commit() {
+        let mut player = SemiPlayerHandle::new();
+        player.runtime.push_decoded_video_frame(decoded_frame(0));
+        player
+            .runtime
+            .push_decoded_video_frame(decoded_frame(33_000));
+
+        let plan = plan_render_supply(&player);
+        let stage = stage_render_supply(&mut player, plan).expect("render stage");
+
+        assert_eq!(player.runtime.decoded_video_queue_len(), 0);
+        assert_eq!(
+            player
+                .runtime
+                .render_staging_status()
+                .in_flight_decoded_video_queue_len,
+            2
+        );
+        assert_eq!(
+            player.runtime.render_staging_status().in_flight_generation,
+            Some(plan.generation)
+        );
+        assert!(!player.video_sync.is_dirty());
+
+        let execution = execute_render_supply(&mut player, stage);
+        let result = commit_render_supply(&mut player, execution);
+
+        assert!(result.has_new_presentation_frames());
+        assert_eq!(
+            player
+                .runtime
+                .render_staging_status()
+                .in_flight_decoded_video_queue_len,
+            0
+        );
+        assert_eq!(player.runtime.presentation_video_queue_len(), 2);
+        assert!(player.video_sync.is_dirty());
+    }
+
+    #[test]
+    fn stale_generation_render_execution_is_dropped_at_commit() {
+        let mut player = SemiPlayerHandle::new();
+        player.runtime.push_decoded_video_frame(decoded_frame(0));
+
+        let plan = plan_render_supply(&player);
+        let stage = stage_render_supply(&mut player, plan).expect("render stage");
+
+        let _ = player.bump_media_generation();
+        let execution = execute_render_supply(&mut player, stage);
+        let result = commit_render_supply(&mut player, execution);
+
+        assert_eq!(result, RenderSupplyResult::default());
+        assert_eq!(player.runtime.presentation_video_queue_len(), 0);
+        assert_eq!(player.runtime.decoded_video_queue_len(), 0);
+        assert_eq!(
+            player
+                .runtime
+                .render_staging_status()
+                .in_flight_decoded_video_queue_len,
+            0
+        );
+        assert_eq!(player.runtime.render_staging_status().in_flight_generation, None);
+        assert!(!player.video_sync.is_dirty());
     }
 }
