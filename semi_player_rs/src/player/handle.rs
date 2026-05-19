@@ -15,15 +15,13 @@ use crate::demux::{
     SeekDemuxDiagnosticsSnapshot,
 };
 use crate::player::diagnostics::{LockOwner, PlayerDiagnostics, PlayerDiagnosticsSnapshot};
-use crate::player::runtime::{AudioDiscardSummary, PlayerRuntime};
+use crate::player::runtime::AudioDiscardSummary;
 use crate::player::worker::{DecodeWorkerHandle, SyncWorkerHandle};
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
 use crate::sync::clock::AudioClock;
 use crate::sync::schedule::PlayerScheduleService;
-use crate::sync::video_scheduler::VideoScheduler;
-use crate::sync::video_sync::VideoSyncState;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -57,7 +55,6 @@ impl Default for ControlState {
 pub struct SemiPlayerHandle {
     state: AtomicU32,
     op_lock: Mutex<()>,
-    runtime_lock: Mutex<()>,
     playback_phase_lock: Arc<Mutex<()>>,
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
@@ -67,10 +64,8 @@ pub struct SemiPlayerHandle {
     media_session: RwLock<Option<SharedMediaSession>>,
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: SharedAudioOutputController,
-    pub(crate) video_scheduler: VideoScheduler,
-    pub(crate) render: RenderService,
-    pub(crate) runtime: Mutex<PlayerRuntime>,
-    pub(crate) video_sync: VideoSyncState,
+    pub(crate) runtime: Mutex<crate::player::runtime::RuntimeDomain>,
+    pub(crate) render: Mutex<RenderService>,
     pub(crate) gpu_device: Option<Arc<dyn GpuDevice>>,
 }
 
@@ -85,7 +80,6 @@ impl SemiPlayerHandle {
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
-            runtime_lock: Mutex::new(()),
             playback_phase_lock: Arc::new(Mutex::new(())),
             sync_worker: None,
             decode_worker: None,
@@ -95,10 +89,8 @@ impl SemiPlayerHandle {
             media_session: RwLock::new(None),
             audio_clock: AudioClock::new(),
             audio_output: SharedAudioOutputController::default(),
-            video_scheduler: VideoScheduler::new(),
-            render,
-            runtime: Mutex::new(PlayerRuntime::new()),
-            video_sync: VideoSyncState::default(),
+            runtime: Mutex::new(crate::player::runtime::RuntimeDomain::new()),
+            render: Mutex::new(render),
             gpu_device,
         }
     }
@@ -205,7 +197,6 @@ impl SemiPlayerHandle {
         let player_ref = &*player_ptr;
         let wait_start = Instant::now();
         let _guard = player_ref.op_lock.lock().unwrap();
-        let _runtime_guard = player_ref.runtime_lock.lock().unwrap();
         let wait_us = i64::try_from(wait_start.elapsed().as_micros()).unwrap_or(i64::MAX);
         player_ref.diagnostics.observe_lock_wait(owner, wait_us);
         f(&mut *player_ptr)
@@ -265,9 +256,7 @@ impl SemiPlayerHandle {
         self.audio_clock.reset();
         self.audio_output
             .with_mut(crate::audio::core::output_controller::AudioOutputController::stop);
-        self.video_scheduler = VideoScheduler::new();
         self.runtime.lock().unwrap().clear();
-        self.video_sync.reset();
     }
 
     pub fn clear_media(&mut self) {
@@ -294,7 +283,7 @@ impl SemiPlayerHandle {
     pub fn current_video_frame_snapshot(
         &self,
     ) -> Option<crate::render::core::frame::PresentationFrame> {
-        self.runtime.lock().unwrap().current_video_frame().cloned()
+        self.runtime.lock().unwrap().runtime.current_video_frame().cloned()
     }
 
     pub fn decode_policy(&self) -> DecodePolicy {

@@ -31,7 +31,7 @@ struct VideoOutputPrepare {
 }
 
 pub(crate) fn apply_decoded_output(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     output: DecodedOutput,
 ) -> DecodedOutputApplyResult {
     match output {
@@ -83,7 +83,7 @@ pub(crate) fn apply_decoded_output(
 }
 
 fn apply_video_output(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     frame: DecodedVideoFrame,
 ) -> DecodedOutputApplyResult {
     let prepared = prepare_video_output(player);
@@ -104,7 +104,7 @@ fn prepare_video_output(player: &SemiPlayerHandle) -> VideoOutputPrepare {
 }
 
 fn commit_video_prepare(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     prepared: VideoOutputPrepare,
     frame: DecodedVideoFrame,
 ) {
@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn queued_video_frames_count_toward_startup_buffer_target() {
         let mut player = SemiPlayerHandle::new();
-        let rt = player.runtime.get_mut().unwrap();
+        let rt = &mut player.runtime.get_mut().unwrap().runtime;
 
         for index in 0..8 {
             rt.push_audio_frame(audio_frame(index * 10_000));
@@ -194,7 +194,7 @@ mod tests {
     fn applying_video_output_requests_sync_wake() {
         let mut player = SemiPlayerHandle::new();
 
-        let result = apply_decoded_output(&mut player, DecodedOutput::Video(video_frame(0)));
+        let result = apply_decoded_output(&player, DecodedOutput::Video(video_frame(0)));
 
         assert_eq!(
             result,
@@ -203,7 +203,7 @@ mod tests {
                 should_wake_sync: true,
             }
         );
-        assert!(player.video_sync.is_dirty());
+        assert!(player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
             audio_output.sync_started_state(PlayerState::Playing);
         });
 
-        let result = apply_decoded_output(&mut player, DecodedOutput::Audio(audio_frame(0)));
+        let result = apply_decoded_output(&player, DecodedOutput::Audio(audio_frame(0)));
 
         assert_eq!(
             result,
@@ -240,7 +240,7 @@ mod tests {
             }));
         });
 
-        let result = apply_decoded_output(&mut player, DecodedOutput::Audio(audio_frame(0)));
+        let result = apply_decoded_output(&player, DecodedOutput::Audio(audio_frame(0)));
 
         assert_eq!(
             result,

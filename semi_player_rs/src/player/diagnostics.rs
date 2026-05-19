@@ -64,6 +64,7 @@ pub struct PlayerDiagnosticsSnapshot {
 pub(crate) enum LockOwner {
     Ffi,
     SyncWorker,
+    #[allow(dead_code)]
     DecodeWorker,
 }
 

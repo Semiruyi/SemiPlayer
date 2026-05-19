@@ -42,6 +42,16 @@ pub struct RuntimeAccess<'a> {
     pub video_sync: &'a mut VideoSyncState,
 }
 
+impl<'a> RuntimeAccess<'a> {
+    fn from_domain(domain: &'a mut crate::player::runtime::RuntimeDomain) -> Self {
+        Self {
+            runtime: &mut domain.runtime,
+            video_scheduler: &mut domain.video_scheduler,
+            video_sync: &mut domain.video_sync,
+        }
+    }
+}
+
 /// Audio coordination view skeleton.
 pub struct AudioCoordAccess<'a> {
     pub audio_clock: &'a AudioClock,
@@ -156,12 +166,8 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn with_runtime_access<T>(&mut self, f: impl FnOnce(RuntimeAccess<'_>) -> T) -> T {
-        f(RuntimeAccess {
-            runtime: &mut *self.runtime.lock().unwrap(),
-            video_scheduler: &mut self.video_scheduler,
-            video_sync: &mut self.video_sync,
-        })
+    pub fn with_runtime_access<T>(&self, f: impl FnOnce(RuntimeAccess<'_>) -> T) -> T {
+        f(RuntimeAccess::from_domain(&mut *self.runtime.lock().unwrap()))
     }
 
     pub fn audio_coord_access(&self) -> AudioCoordAccess<'_> {
@@ -201,7 +207,7 @@ impl SemiPlayerHandle {
     }
 
     pub fn runtime_snapshot(&self) -> RuntimeSnapshot {
-        self.runtime.lock().unwrap().snapshot()
+        self.runtime.lock().unwrap().runtime.snapshot()
     }
 
     pub fn seek_prepare_context(&self) -> SeekPrepareContext {
@@ -379,26 +385,21 @@ impl SemiPlayerHandle {
     }
 
     pub fn video_sync_dirty_snapshot(&self) -> bool {
-        self.video_sync.is_dirty()
+        self.runtime.lock().unwrap().video_sync.is_dirty()
     }
 
     pub fn video_sync_stats_snapshot(&self) -> VideoSyncStats {
-        self.video_sync.stats()
+        self.runtime.lock().unwrap().video_sync.stats()
     }
 
-    pub fn with_render_access<T>(&self, f: impl FnOnce(RenderAccess<'_>) -> T) -> T {
-        let _ = f;
-        unreachable!("with_render_access requires mutable player access in the current layout")
+    pub fn with_render_access_mut<T>(&self, f: impl FnOnce(RenderAccess<'_>) -> T) -> T {
+        f(RenderAccess {
+            render: &mut *self.render.lock().unwrap(),
+        })
     }
 
     pub fn playback_phase_handle(&self) -> PlaybackPhaseHandle {
         self.playback_phase_lock()
-    }
-
-    pub fn with_render_access_mut<T>(&mut self, f: impl FnOnce(RenderAccess<'_>) -> T) -> T {
-        f(RenderAccess {
-            render: &mut self.render,
-        })
     }
 }
 
@@ -576,11 +577,11 @@ impl RuntimeAccess<'_> {
 
 impl SemiPlayerHandle {
     pub fn current_video_pts_us_snapshot(&self) -> Option<MediaTimeUs> {
-        self.runtime.lock().unwrap().current_video_frame().map(|frame| frame.pts_us)
+        self.runtime.lock().unwrap().runtime.current_video_frame().map(|frame| frame.pts_us)
     }
 
     pub fn current_video_surface_info_snapshot(&self) -> (u32, u32) {
-        self.runtime.lock().unwrap().current_video_frame()
+        self.runtime.lock().unwrap().runtime.current_video_frame()
             .map(|frame| {
                 let kind = match &frame.surface.storage {
                     crate::render::core::frame::VideoSurfaceStorage::CpuPacked { .. } => 1u32,

@@ -4,7 +4,6 @@ use std::thread::{self, JoinHandle};
 use crate::decode::session::SharedMediaSession;
 use crate::decode::{DecodePolicy, DecodedOutputPoll};
 use crate::player::access::DecodePlanContext;
-use crate::player::diagnostics::LockOwner;
 use crate::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::PlayerScheduleService;
@@ -78,11 +77,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
                 let polled_output = poll_decoded_output_once(&opened_media, decode_policy);
                 let action = unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
-                    SemiPlayerHandle::with_locked_ptr_as(
-                        player_ptr,
-                        LockOwner::DecodeWorker,
-                        |player| complete_decode_action(player, generation, polled_output),
-                    )
+                    complete_decode_action(&*player_ptr, generation, polled_output)
                 };
 
                 match action {
@@ -133,7 +128,7 @@ fn plan_decode_action_from_context(
 }
 
 fn complete_decode_action(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     generation: u64,
     polled_output: Result<DecodedOutputPoll, i32>,
 ) -> DecodeWorkerAction {
@@ -242,7 +237,7 @@ mod tests {
         let _ = player.bump_media_generation();
 
         let action = complete_decode_action(
-            &mut player,
+            &player,
             stale_generation,
             Ok(DecodedOutputPoll::Output(DecodedOutput::Video(frame(
                 0,
@@ -251,8 +246,8 @@ mod tests {
         );
 
         assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
-        assert_eq!(player.runtime.get_mut().unwrap().video_queue_len(), 0);
-        assert!(!player.video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.video_queue_len(), 0);
+        assert!(!player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 
     #[test]
@@ -261,7 +256,7 @@ mod tests {
         let generation = player.media_generation();
 
         let action = complete_decode_action(
-            &mut player,
+            &player,
             generation,
             Ok(DecodedOutputPoll::Output(DecodedOutput::Video(frame(
                 0,
@@ -270,7 +265,7 @@ mod tests {
         );
 
         assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
-        assert_eq!(player.runtime.get_mut().unwrap().video_queue_len(), 1);
-        assert!(player.video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.video_queue_len(), 1);
+        assert!(player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 }

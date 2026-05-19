@@ -519,6 +519,34 @@ impl Default for PlayerRuntime {
     }
 }
 
+pub struct RuntimeDomain {
+    pub runtime: PlayerRuntime,
+    pub video_scheduler: crate::sync::video_scheduler::VideoScheduler,
+    pub video_sync: crate::sync::video_sync::VideoSyncState,
+}
+
+impl RuntimeDomain {
+    pub fn new() -> Self {
+        Self {
+            runtime: PlayerRuntime::new(),
+            video_scheduler: crate::sync::video_scheduler::VideoScheduler::new(),
+            video_sync: crate::sync::video_sync::VideoSyncState::default(),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.runtime.clear();
+        self.video_scheduler = crate::sync::video_scheduler::VideoScheduler::new();
+        self.video_sync.reset();
+    }
+}
+
+impl Default for RuntimeDomain {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

@@ -37,7 +37,7 @@ impl RenderSupplyResult {
     }
 }
 
-pub(crate) fn render_supply(player: &mut SemiPlayerHandle) -> RenderSupplyResult {
+pub(crate) fn render_supply(player: &SemiPlayerHandle) -> RenderSupplyResult {
     let plan = plan_render_supply(player);
     let Some(stage) = stage_render_supply(player, plan) else {
         return RenderSupplyResult::default();
@@ -54,7 +54,7 @@ fn plan_render_supply(player: &SemiPlayerHandle) -> RenderSupplyPlan {
 }
 
 fn stage_render_supply(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     plan: RenderSupplyPlan,
 ) -> Option<RenderSupplyStage> {
     let decoded_frames =
@@ -68,7 +68,7 @@ fn stage_render_supply(
 }
 
 fn execute_render_supply(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     stage: RenderSupplyStage,
 ) -> RenderSupplyExecution {
     let batch = player.with_render_access_mut(|render| {
@@ -80,7 +80,7 @@ fn execute_render_supply(
 }
 
 fn commit_render_supply(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     execution: RenderSupplyExecution,
 ) -> RenderSupplyResult {
     if execution.generation != player.media_generation() {
@@ -163,12 +163,12 @@ mod tests {
     #[test]
     fn synchronous_render_supply_promotes_all_decoded_frames() {
         let mut player = SemiPlayerHandle::new();
-        player.runtime.get_mut().unwrap().push_decoded_video_frame(decoded_frame(0));
+        player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(decoded_frame(0));
         player
-            .runtime.get_mut().unwrap()
+            .runtime.get_mut().unwrap().runtime
             .push_decoded_video_frame(decoded_frame(33_000));
 
-        let result = render_supply(&mut player);
+        let result = render_supply(&player);
 
         assert_eq!(
             result,
@@ -180,8 +180,8 @@ mod tests {
                 fallback_passthrough_frames: 0,
             }
         );
-        assert_eq!(player.runtime.get_mut().unwrap().decoded_video_queue_len(), 0);
-        assert_eq!(player.runtime.get_mut().unwrap().presentation_video_queue_len(), 2);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.decoded_video_queue_len(), 0);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 2);
         assert!(result.has_new_presentation_frames());
     }
 
@@ -189,9 +189,9 @@ mod tests {
     fn render_supply_reads_subtitle_visibility_from_player_state() {
         let mut player = SemiPlayerHandle::new();
         player.set_subtitles_visible(false);
-        player.runtime.get_mut().unwrap().push_decoded_video_frame(decoded_frame(0));
+        player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(decoded_frame(0));
 
-        let result = render_supply(&mut player);
+        let result = render_supply(&player);
 
         assert_eq!(
             result,
@@ -203,7 +203,7 @@ mod tests {
                 fallback_passthrough_frames: 0,
             }
         );
-        assert_eq!(player.runtime.get_mut().unwrap().presentation_video_queue_len(), 1);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 1);
     }
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
         player.set_video_presentation_profile(
             crate::render::core::pipeline::PresentationTargetProfile::Passthrough,
         );
-        player.runtime.get_mut().unwrap().push_decoded_video_frame(VideoFrame {
+        player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(VideoFrame {
             pts_us: 0,
             duration_us: Some(33_000),
             width: 1920,
@@ -247,7 +247,7 @@ mod tests {
             )),
         });
 
-        let result = render_supply(&mut player);
+        let result = render_supply(&player);
 
         assert_eq!(
             result,
@@ -259,72 +259,72 @@ mod tests {
                 fallback_passthrough_frames: 0,
             }
         );
-        assert_eq!(player.runtime.get_mut().unwrap().presentation_video_queue_len(), 1);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 1);
     }
 
     #[test]
     fn staged_render_supply_keeps_runtime_in_flight_until_commit() {
         let mut player = SemiPlayerHandle::new();
-        player.runtime.get_mut().unwrap().push_decoded_video_frame(decoded_frame(0));
+        player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(decoded_frame(0));
         player
-            .runtime.get_mut().unwrap()
+            .runtime.get_mut().unwrap().runtime
             .push_decoded_video_frame(decoded_frame(33_000));
 
         let plan = plan_render_supply(&player);
-        let stage = stage_render_supply(&mut player, plan).expect("render stage");
+        let stage = stage_render_supply(&player, plan).expect("render stage");
 
-        assert_eq!(player.runtime.get_mut().unwrap().decoded_video_queue_len(), 0);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.decoded_video_queue_len(), 0);
         assert_eq!(
             player
-                .runtime.get_mut().unwrap()
+                .runtime.get_mut().unwrap().runtime
                 .render_staging_status()
                 .in_flight_decoded_video_queue_len,
             2
         );
         assert_eq!(
-            player.runtime.get_mut().unwrap().render_staging_status().in_flight_generation,
+            player.runtime.get_mut().unwrap().runtime.render_staging_status().in_flight_generation,
             Some(plan.generation)
         );
-        assert!(!player.video_sync.is_dirty());
+        assert!(!player.runtime.get_mut().unwrap().video_sync.is_dirty());
 
-        let execution = execute_render_supply(&mut player, stage);
-        let result = commit_render_supply(&mut player, execution);
+        let execution = execute_render_supply(&player, stage);
+        let result = commit_render_supply(&player, execution);
 
         assert!(result.has_new_presentation_frames());
         assert_eq!(
             player
-                .runtime.get_mut().unwrap()
+                .runtime.get_mut().unwrap().runtime
                 .render_staging_status()
                 .in_flight_decoded_video_queue_len,
             0
         );
-        assert_eq!(player.runtime.get_mut().unwrap().presentation_video_queue_len(), 2);
-        assert!(player.video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 2);
+        assert!(player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 
     #[test]
     fn stale_generation_render_execution_is_dropped_at_commit() {
         let mut player = SemiPlayerHandle::new();
-        player.runtime.get_mut().unwrap().push_decoded_video_frame(decoded_frame(0));
+        player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(decoded_frame(0));
 
         let plan = plan_render_supply(&player);
-        let stage = stage_render_supply(&mut player, plan).expect("render stage");
+        let stage = stage_render_supply(&player, plan).expect("render stage");
 
         let _ = player.bump_media_generation();
-        let execution = execute_render_supply(&mut player, stage);
-        let result = commit_render_supply(&mut player, execution);
+        let execution = execute_render_supply(&player, stage);
+        let result = commit_render_supply(&player, execution);
 
         assert_eq!(result, RenderSupplyResult::default());
-        assert_eq!(player.runtime.get_mut().unwrap().presentation_video_queue_len(), 0);
-        assert_eq!(player.runtime.get_mut().unwrap().decoded_video_queue_len(), 0);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 0);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.decoded_video_queue_len(), 0);
         assert_eq!(
             player
-                .runtime.get_mut().unwrap()
+                .runtime.get_mut().unwrap().runtime
                 .render_staging_status()
                 .in_flight_decoded_video_queue_len,
             0
         );
-        assert_eq!(player.runtime.get_mut().unwrap().render_staging_status().in_flight_generation, None);
-        assert!(!player.video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.render_staging_status().in_flight_generation, None);
+        assert!(!player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 }

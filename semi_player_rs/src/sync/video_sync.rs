@@ -1,5 +1,6 @@
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::{RuntimeVideoSnapshot, VideoSelectionStats};
+use crate::sync::video_scheduler::VideoScheduler;
 use crate::util::time::add_media_time_us;
 
 pub struct VideoSyncService;
@@ -151,7 +152,7 @@ impl VideoSyncService {
         Self::evaluate_from_inputs(
             VideoSyncInputs {
                 host_presentation_offset_us: player.host_presentation_offset_us(),
-                runtime_video: player.runtime.lock().unwrap().video_snapshot(),
+                runtime_video: player.runtime.lock().unwrap().runtime.video_snapshot(),
             },
             playback_time_us,
         )
@@ -192,6 +193,9 @@ impl VideoSyncService {
 
     pub fn tick(player: &mut SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         if player
+            .runtime
+            .lock()
+            .unwrap()
             .video_sync
             .should_sync(playback_time_us, player.audio_clock.is_running())
         {
@@ -199,7 +203,7 @@ impl VideoSyncService {
         }
 
         let snapshot = Self::evaluate(player, playback_time_us);
-        player.video_sync.observe_tick(snapshot);
+        player.runtime.lock().unwrap().video_sync.observe_tick(snapshot);
         snapshot
     }
 
@@ -207,16 +211,26 @@ impl VideoSyncService {
         let target_video_time_us =
             add_media_time_us(playback_time_us, player.host_presentation_offset_us());
         let mut dropped_pts = Vec::new();
-        let selection = player.runtime.lock().unwrap().select_video_frame(
-            &player.video_scheduler,
-            target_video_time_us,
-            |frame| dropped_pts.push(frame.pts_us),
-        );
+        let (_selection, snapshot) = {
+            let mut domain = player.runtime.lock().unwrap();
+            let selection = domain.runtime.select_video_frame(
+                &VideoScheduler,
+                target_video_time_us,
+                |frame| dropped_pts.push(frame.pts_us),
+            );
+            let snapshot = Self::evaluate_from_inputs(
+                VideoSyncInputs {
+                    host_presentation_offset_us: player.host_presentation_offset_us(),
+                    runtime_video: domain.runtime.video_snapshot(),
+                },
+                playback_time_us,
+            );
+            domain.video_sync.observe_sync(snapshot, selection);
+            (selection, snapshot)
+        };
         for pts_us in dropped_pts {
             player.observe_seek_video_dropped(pts_us);
         }
-        let snapshot = Self::evaluate(player, playback_time_us);
-        player.video_sync.observe_sync(snapshot, selection);
         snapshot
     }
 }
@@ -301,9 +315,9 @@ mod tests {
     fn evaluate_uses_next_frame_pts_as_effective_end() {
         let mut player = SemiPlayerHandle::new();
         let rt = player.runtime.get_mut().unwrap();
-        rt.push_video_frame(frame(0, Some(33_000)));
-        rt.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = rt.select_video_frame(&player.video_scheduler, 0, |_| {});
+        rt.runtime.push_video_frame(frame(0, Some(33_000)));
+        rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = rt.runtime.select_video_frame(&rt.video_scheduler, 0, |_| {});
 
         let snapshot = VideoSyncService::evaluate(&player, 48_000);
 
@@ -314,9 +328,9 @@ mod tests {
     fn evaluate_reports_next_deadline_from_current_frame_end() {
         let mut player = SemiPlayerHandle::new();
         let rt = player.runtime.get_mut().unwrap();
-        rt.push_video_frame(frame(0, Some(33_000)));
-        rt.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = rt.select_video_frame(&player.video_scheduler, 0, |_| {});
+        rt.runtime.push_video_frame(frame(0, Some(33_000)));
+        rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = rt.runtime.select_video_frame(&rt.video_scheduler, 0, |_| {});
 
         let snapshot = VideoSyncService::evaluate(&player, 10_000);
 
@@ -328,9 +342,9 @@ mod tests {
     fn evaluate_prefers_next_pts_over_inflated_duration() {
         let mut player = SemiPlayerHandle::new();
         let rt = player.runtime.get_mut().unwrap();
-        rt.push_video_frame(frame(0, Some(83_000)));
-        rt.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = rt.select_video_frame(&player.video_scheduler, 0, |_| {});
+        rt.runtime.push_video_frame(frame(0, Some(83_000)));
+        rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = rt.runtime.select_video_frame(&rt.video_scheduler, 0, |_| {});
 
         let snapshot_before_boundary = VideoSyncService::evaluate(&player, 40_000);
         let snapshot_after_boundary = VideoSyncService::evaluate(&player, 41_000);
@@ -353,14 +367,14 @@ mod tests {
         let mut player = SemiPlayerHandle::new();
         player.audio_clock.play();
         let rt = player.runtime.get_mut().unwrap();
-        rt.push_video_frame(frame(0, Some(33_000)));
-        rt.push_video_frame(frame(41_000, Some(41_000)));
+        rt.runtime.push_video_frame(frame(0, Some(33_000)));
+        rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
 
         let first = VideoSyncService::tick(&mut player, 0);
-        let stats_after_first = player.video_sync.stats();
+        let stats_after_first = player.runtime.get_mut().unwrap().video_sync.stats();
 
         let second = VideoSyncService::tick(&mut player, 10_000);
-        let stats_after_second = player.video_sync.stats();
+        let stats_after_second = player.runtime.get_mut().unwrap().video_sync.stats();
 
         assert_eq!(first.next_wake_deadline_us, Some(41_000));
         assert_eq!(second.current_video_pts_us, 0);

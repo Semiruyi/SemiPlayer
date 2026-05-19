@@ -249,9 +249,9 @@ mod tests {
         player.set_state(PlayerState::Playing);
         player.audio_clock.play();
         let rt = player.runtime.get_mut().unwrap();
-        rt.push_video_frame(frame(0, Some(33_000)));
-        rt.push_video_frame(frame(41_000, Some(41_000)));
-        let _ = rt.select_video_frame(&player.video_scheduler, 0, |_| {});
+        rt.runtime.push_video_frame(frame(0, Some(33_000)));
+        rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
+        let _ = rt.runtime.select_video_frame(&rt.video_scheduler, 0, |_| {});
 
         let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn dirty_video_sync_forces_immediate_pump() {
         let mut player = SemiPlayerHandle::new();
-        player.video_sync.reset();
+        player.runtime.get_mut().unwrap().video_sync.reset();
 
         let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
