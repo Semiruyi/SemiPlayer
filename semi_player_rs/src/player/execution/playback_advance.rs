@@ -1,8 +1,8 @@
 use crate::api::types::PlayerState;
 use crate::audio::core::output::AudioOutputChunk;
 use crate::audio::core::output_controller::SharedAudioOutputController;
-use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::runtime::AudioDiscardSummary;
+use crate::player::handle::SemiPlayerHandle;
+use crate::player::runtime::AudioDiscardSummary;
 use crate::sync::video_sync::VideoSyncService;
 const AUDIO_SYNC_BATCH_CHUNK_LIMIT: usize = 4;
 

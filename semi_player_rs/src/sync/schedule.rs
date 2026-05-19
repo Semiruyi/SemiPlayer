@@ -1,7 +1,7 @@
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputSnapshot;
-use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
+use crate::player::handle::SemiPlayerHandle;
+use crate::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
 use crate::sync::video_sync::{VideoSyncService, VideoSyncSnapshot};
 use crate::util::time::MediaTimeUs;
 
@@ -214,8 +214,8 @@ mod tests {
     use super::{compute_decode_schedule_hint, PlayerScheduleService, PumpScheduleHint};
     use crate::api::types::PlayerState;
     use crate::audio::core::output::AudioOutputChunk;
-    use crate::core::player::handle::SemiPlayerHandle;
-    use crate::core::player::runtime::DecodeSupplyStatus;
+    use crate::player::handle::SemiPlayerHandle;
+    use crate::player::runtime::DecodeSupplyStatus;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {

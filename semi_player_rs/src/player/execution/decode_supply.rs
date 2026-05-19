@@ -1,9 +1,9 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
-use crate::core::media::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
-use crate::core::media::session::SharedMediaSession;
-use crate::core::player::execution::render_supply;
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::decode::session::SharedMediaSession;
+use crate::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
+use crate::player::execution::render_supply;
+use crate::player::handle::SemiPlayerHandle;
 use crate::sync::video_sync::VideoSyncService;
 
 const DEFAULT_PUMP_ITERATIONS: u32 = 256;
@@ -145,8 +145,8 @@ mod tests {
     use crate::api::types::PlayerState;
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
-    use crate::core::media::decode::DecodedOutput;
-    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::decode::DecodedOutput;
+    use crate::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn audio_frame(pts_us: i64) -> AudioFrame {

@@ -3,7 +3,7 @@ use std::fmt;
 
 use ffmpeg_next as ffmpeg;
 
-use super::probe::MediaProbeError;
+use crate::demux::MediaProbeError;
 
 #[derive(Debug)]
 pub enum MediaOpenError {

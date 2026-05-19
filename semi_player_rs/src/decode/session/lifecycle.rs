@@ -2,16 +2,16 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::ffi;
 use ffmpeg_next::Rescale;
 
-use crate::core::media::decoder::{
+use crate::decode::decoder::{
     OpenedAudioDecoder, OpenedVideoDecoder, open_audio_decoder, open_video_decoder,
 };
-use crate::core::media::demux_impl::SeekDemuxDiagnostics;
-use crate::core::media::error::MediaOpenError;
-use crate::core::media::keyframe_probe::probe_expected_left_keyframe_pts;
-use crate::core::media::probe::{MediaInfo, MediaProbeError, collect_media_info};
-use crate::core::media::session_decode::SessionDecodeState;
-use crate::core::media::session_impl::MediaSession;
-use crate::core::media::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::decode::error::MediaOpenError;
+use crate::decode::session_decode::SessionDecodeState;
+use crate::decode::session_impl::MediaSession;
+use crate::decode::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::demux::demux_impl::SeekDemuxDiagnostics;
+use crate::demux::keyframe_probe::probe_expected_left_keyframe_pts;
+use crate::demux::probe::{MediaInfo, MediaProbeError, collect_media_info};
 use crate::util::time::MediaTimeUs;
 
 pub(crate) fn open_media_with_hw_device_ctx(

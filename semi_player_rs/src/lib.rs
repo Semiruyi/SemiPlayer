@@ -1,7 +1,9 @@
 mod api;
 mod audio;
-mod core;
+mod decode;
+mod demux;
 mod platform;
+mod player;
 mod render;
 mod subtitle;
 mod sync;
@@ -15,16 +17,13 @@ use crate::api::types::{
     SemiAudioOutputSnapshot, SemiDecodedOutput, SemiMediaInfo, SemiPlaybackSnapshot,
     SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc,
 };
-use crate::core::media::decode::{
-    DecodedOutput,
-};
-use crate::core::media::demux::MediaProbeError;
-use crate::core::media::session::open_media_with_hw_device_ctx;
-use crate::core::media::MediaOpenError;
-use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::orchestrator;
-use crate::core::player::pump::pump_player;
-use crate::core::player::view::{
+use crate::decode::session::open_media_with_hw_device_ctx;
+use crate::decode::{DecodedOutput, MediaOpenError};
+use crate::demux::MediaProbeError;
+use crate::player::handle::SemiPlayerHandle;
+use crate::player::orchestrator;
+use crate::player::pump::pump_player;
+use crate::player::view::{
     build_audio_output_snapshot, build_decoded_output_view, build_media_info_view,
     build_playback_snapshot, build_video_frame_info, build_video_surface_desc,
 };

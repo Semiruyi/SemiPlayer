@@ -5,7 +5,7 @@ use ffmpeg_next::{format, frame, ChannelLayout};
 use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::util::time::MediaTimeUs;
 
-use crate::core::media::MediaOpenError;
+use crate::decode::MediaOpenError;
 
 pub struct NormalizedAudioResampler {
     context: Option<ResamplingContext>,

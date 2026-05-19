@@ -1,6 +1,6 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
-use crate::core::player::execution::{advance_playback, decode_supply};
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::player::execution::{advance_playback, decode_supply};
+use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::{PlayerScheduleService, ScheduledWork};
 
 pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
@@ -41,7 +41,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::service_scheduled_work;
-    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::player::handle::SemiPlayerHandle;
     use crate::sync::schedule::PlayerScheduleService;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 

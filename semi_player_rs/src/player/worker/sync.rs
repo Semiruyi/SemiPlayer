@@ -3,10 +3,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::api::types::PlayerState;
-use crate::core::player::execution::{
+use crate::player::diagnostics::LockOwner;
+use crate::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
-use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
+use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::PlayerScheduleService;
 use crate::util::time::MediaTimeUs;
 

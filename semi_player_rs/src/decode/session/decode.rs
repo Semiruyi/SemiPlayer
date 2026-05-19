@@ -3,15 +3,15 @@ use std::collections::VecDeque;
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::Packet;
 
-use crate::core::media::decoder::{
+use crate::decode::decoder::{
     DecoderDrainingState, MediaPacket, OpenedAudioDecoder, OpenedVideoDecoder,
     collect_audio_frames, collect_video_frames, decode_audio_packet, decode_video_packet,
     send_audio_decoder_eof, send_video_decoder_eof,
 };
-use crate::core::media::demux_impl::SeekDemuxDiagnostics;
-use crate::core::media::error::MediaOpenError;
-use crate::core::media::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
-use crate::core::media::probe::MediaInfo;
+use crate::decode::error::MediaOpenError;
+use crate::decode::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
+use crate::demux::demux_impl::SeekDemuxDiagnostics;
+use crate::demux::probe::MediaInfo;
 
 #[derive(Default)]
 pub(crate) struct SessionDecodeState {

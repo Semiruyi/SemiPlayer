@@ -1,5 +1,5 @@
-use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::runtime::VideoSelectionStats;
+use crate::player::handle::SemiPlayerHandle;
+use crate::player::runtime::VideoSelectionStats;
 use crate::render::core::frame::VideoFrame;
 use crate::util::time::add_media_time_us;
 
@@ -268,8 +268,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{VideoSyncService, VideoSyncSnapshot, VideoSyncState};
-    use crate::core::player::handle::SemiPlayerHandle;
-    use crate::core::player::runtime::VideoSelectionStats;
+    use crate::player::handle::SemiPlayerHandle;
+    use crate::player::runtime::VideoSelectionStats;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {

@@ -9,11 +9,11 @@ use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
-use crate::core::media::error::MediaOpenError;
-use crate::core::media::output::{
+use crate::decode::error::MediaOpenError;
+use crate::decode::output::{
     DecodePolicy, DecodedOutput, SkippedAudioFrame, SkippedVideoFrame,
 };
-use crate::core::media::video_decode::{
+use crate::decode::video_decode::{
     VideoDecodeBackend, VideoDecodeDiagnosticsSnapshot, VideoDecodeFallbackReason,
 };
 use crate::render::core::frame::{
@@ -22,7 +22,7 @@ use crate::render::core::frame::{
 };
 use crate::util::time::MediaTimeUs;
 
-use super::demux_impl::SeekDemuxDiagnostics;
+use crate::demux::demux_impl::SeekDemuxDiagnostics;
 
 pub(crate) struct OpenedVideoDecoder {
     pub(super) index: usize,
@@ -781,7 +781,7 @@ mod tests {
     use super::{
         should_skip_audio_frame_for_seek_recovery, should_skip_video_frame_for_seek_recovery,
     };
-    use crate::core::media::{DecodePolicy, SeekRecoveryPolicy};
+    use crate::decode::{DecodePolicy, SeekRecoveryPolicy};
 
     #[test]
     fn seek_recovery_skips_frame_that_ends_before_target() {

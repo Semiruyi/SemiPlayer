@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use crate::core::media::demux_impl::SeekDemuxDiagnosticsSnapshot;
-use crate::core::media::session_impl::MediaSession;
-use crate::core::media::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::decode::session_impl::MediaSession;
+use crate::decode::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::demux::demux_impl::SeekDemuxDiagnosticsSnapshot;
 
 #[derive(Clone)]
 #[allow(clippy::arc_with_non_send_sync)]

@@ -1,19 +1,19 @@
 use ffmpeg_next::ffi;
 
-use crate::core::media::decoder::{OpenedAudioDecoder, OpenedVideoDecoder};
-use crate::core::media::demux_impl::{SeekDemuxDiagnostics, SeekDemuxDiagnosticsSnapshot};
-use crate::core::media::error::MediaOpenError;
-use crate::core::media::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
-use crate::core::media::session_decode::SessionDecodeState;
-use crate::core::media::session_lifecycle::{
+use crate::decode::decoder::{OpenedAudioDecoder, OpenedVideoDecoder};
+use crate::decode::error::MediaOpenError;
+use crate::decode::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
+use crate::decode::session_decode::SessionDecodeState;
+use crate::decode::session_lifecycle::{
     build_media_session, open_media_with_hw_device_ctx as open_media_session_with_hw_device_ctx,
     seek_media_session, video_decode_diagnostics_snapshot,
 };
-use crate::core::media::session_shared::SharedMediaSession;
-use crate::core::media::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::decode::session_shared::SharedMediaSession;
+use crate::decode::video_decode::VideoDecodeDiagnosticsSnapshot;
+use crate::demux::demux_impl::{SeekDemuxDiagnostics, SeekDemuxDiagnosticsSnapshot};
 use crate::util::time::MediaTimeUs;
 
-use super::probe::MediaInfo;
+use crate::demux::probe::MediaInfo;
 
 pub struct MediaSession {
     pub(crate) path: String,

@@ -3,11 +3,11 @@ use crate::api::types::{
     SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
     SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
-use crate::core::media::decode::{
+use crate::decode::{
     DecodedOutput, VideoDecodeBackend, VideoDecodeFallbackReason,
 };
-use crate::core::media::demux::{MediaInfo, StreamKind};
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::demux::{MediaInfo, StreamKind};
+use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
 use crate::sync::schedule::PlayerScheduleService;
 use crate::sync::video_sync::VideoSyncService;

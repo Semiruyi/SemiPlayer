@@ -1,4 +1,4 @@
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::DecodedVideoFrame;
 use crate::render::core::pipeline::{VideoRenderRequest, VideoRenderStats};
 
@@ -64,7 +64,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{default_render_request, render_supply, RenderSupplyResult};
-    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
     use crate::render::core::pipeline::VideoRenderRequest;
 

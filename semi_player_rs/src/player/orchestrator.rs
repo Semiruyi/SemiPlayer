@@ -5,8 +5,8 @@ use crate::api::error::{
 };
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputController;
-use crate::core::media::session::MediaSession;
-use crate::core::player::handle::SemiPlayerHandle;
+use crate::decode::session::MediaSession;
+use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::sync::video_scheduler::VideoScheduler;
 use crate::sync::video_sync::VideoSyncService;

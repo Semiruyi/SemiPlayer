@@ -1,10 +1,11 @@
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 
-use crate::core::media::decode::{DecodePolicy, DecodedOutputPoll};
-use crate::core::media::session::SharedMediaSession;
-use crate::core::player::execution::{apply_decoded_output, poll_decoded_output_once};
-use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
+use crate::decode::session::SharedMediaSession;
+use crate::decode::{DecodePolicy, DecodedOutputPoll};
+use crate::player::diagnostics::LockOwner;
+use crate::player::execution::{apply_decoded_output, poll_decoded_output_once};
+use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::PlayerScheduleService;
 
 #[derive(Default)]
@@ -206,8 +207,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{complete_decode_action, DecodeWorkerAction};
-    use crate::core::media::decode::{DecodedOutput, DecodedOutputPoll};
-    use crate::core::player::handle::SemiPlayerHandle;
+    use crate::decode::{DecodedOutput, DecodedOutputPoll};
+    use crate::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
