@@ -78,7 +78,314 @@ Suggested domains:
 - Prefer plan/execute/commit for operations that do real work.
 - Keep diagnostics readable without waiting on playback work.
 
-## 4. Operation Contracts
+## 4. Threads And Resources
+
+This section is the practical concurrency map for the current player.
+
+The point is to answer:
+
+- which threads exist
+- which resources they touch
+- whether they read, write, or execute heavy work there
+- which lock interface should own that access
+
+### 4.1 Threads
+
+| Thread | Current Main Entry | Responsibility |
+| --- | --- | --- |
+| Host / FFI thread | `semi_player_*` in `src/lib.rs` | Control operations, synchronous queries, pump calls |
+| Decode worker | `src/player/worker/decode.rs` | Decode scheduling, media polling, decoded-output application |
+| Sync worker | `src/player/worker/sync.rs` | Playback scheduling, audio submission, video sync advancement |
+| Audio backend thread | internal to audio backend | Device timing progression; does not directly lock `SemiPlayerHandle` |
+
+### 4.2 Resource Domains
+
+| Domain | Main Contents | Current Home |
+| --- | --- | --- |
+| `control` | `state`, `speed`, `subtitles_visible`, `video_presentation_profile`, `host_presentation_offset_us`, `seek_recovery`, `media_generation` | `src/player/handle.rs` |
+| `runtime` | audio queue, decoded video queue, presentation video queue, current frame, end-of-stream | `src/player/runtime.rs` |
+| `playback_sync` | `video_scheduler`, `video_sync` | `src/sync/video_scheduler.rs`, `src/sync/video_sync.rs` |
+| `media` | `media_session` | `src/decode/session/shared.rs` |
+| `audio_coord` | `audio_clock`, `audio_output` | `src/sync/clock.rs`, `src/audio/core/output_controller.rs` |
+| `render` | `render` / `RenderService` | `src/render/service.rs` |
+| `diagnostics` | player metrics and seek telemetry | `src/player/diagnostics.rs` |
+| `worker_control` | decode/sync worker wake + shutdown state | `src/player/worker/decode.rs`, `src/player/worker/sync.rs` |
+
+### 4.3 Thread To Resource Matrix
+
+Legend:
+
+- `R`: read
+- `W`: write / mutate
+- `X`: heavy execution on that resource
+- `-`: no direct access
+
+| Thread | control | runtime | playback_sync | media | audio_coord | render | diagnostics | worker_control |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Host / FFI thread | `R/W` | `R/W` | `R/W` | `R/W/X` | `R/W` | `-` | `R` | `-` |
+| Decode worker | `R` | `R/W` | `W` | `R/W/X` | `R` | `X` | `W` | `W` |
+| Sync worker | `R` | `R/W` | `R/W` | `-` | `R/W/X` | `-` | `W` | `W` |
+| Audio backend thread | `-` | `-` | `-` | `-` | internal only | `-` | `-` | `-` |
+
+### 4.4 Current High-Risk Shared Paths
+
+These are the current shared paths where lock boundaries matter most:
+
+1. `Decode worker -> runtime -> render -> playback_sync dirty`
+2. `Sync worker -> runtime -> playback_sync -> audio_coord`
+3. `Seek/reset/open -> media -> runtime -> audio_coord -> playback_sync`
+4. `Playback snapshot -> control + runtime + playback_sync + audio_coord + diagnostics`
+
+The first and third are the current lock hot spots.
+
+## 5. Thread Phase Resource Tables
+
+This section turns the thread/resource matrix into phase-level tables.
+
+Legend:
+
+- `R`: read
+- `W`: write / mutate
+- `X`: heavy execution
+- `Atomic`: this phase should be treated as one short transaction over the listed domains
+
+### 5.1 Host / FFI Thread
+
+| Phase | Typical Entrypoints | Resources | Notes |
+| --- | --- | --- | --- |
+| Query | `get_state`, `get_position`, `get_duration`, `get_media_info`, `get_playback_snapshot`, current-frame queries | `control (R)`, `runtime (R)`, `playback_sync (R)`, `audio_coord (R)`, `media (R)`, `diagnostics (R)` | Should stay read-mostly and should not require `playback_phase` |
+| Control | `play`, `pause`, `set_speed`, `set_subtitle_visible`, `set_video_presentation_profile`, `set_video_presentation_bias_ms` | `control (W)`, `audio_coord (W)`, `playback_sync (W)`, sometimes `runtime (W)` | Short state transitions; usually no heavy media work |
+| Seek/Open/Reset Prepare | `open`, `seek`, `seek_prev_keyframe`, `seek_next_keyframe`, `reset` | `playback_phase`, `control (R/W)`, `runtime (R)`, `diagnostics (W)` | Short preflight / staging section |
+| Seek/Open/Reset Execute | `open`, `seek`, keyframe-relative seek | `media (X/W)` | Heavy FFmpeg/media work; should not hold wide player locks |
+| Seek/Open/Reset Commit | `open`, `seek`, `reset` | `playback_phase`, `control (W)`, `runtime (W)`, `audio_coord (W)`, `playback_sync (W)`, `diagnostics (W)` | Atomic player-state commit after media work finishes |
+| Pump | `semi_player_pump` | `playback_phase`, `control (R/W)`, `runtime (R/W)`, `playback_sync (R/W)`, `audio_coord (R/W)` | Synchronous single-threaded playback drive path |
+
+### 5.2 Decode Worker
+
+| Phase | Current Main Code | Resources | Notes |
+| --- | --- | --- | --- |
+| Wait | `wait_for_signal(...)` | `worker_control (W)` | Thread parking only |
+| Decode Plan | `plan_decode_action(...)` | `control (R)`, `runtime (R)`, `media` handle presence `(R)` | Decides whether decode supply is needed |
+| Decode Execute | `poll_decoded_output_once(...)` | `media (X/W)` | FFmpeg-facing poll/decode step |
+| Video Prepare | part of `apply_decoded_output(Video)` | `control (R)`, `runtime (W)`, `diagnostics (W)` | Records diagnostics, stages decoded video into player-owned state |
+| Render Execute | currently inside `render_supply(...)` | `render (X/W)` | Expensive transform / render path; should become independent from runtime commit |
+| Video Commit | tail of `render_supply(...)` + `mark_dirty` | `runtime (W)`, `playback_sync (W)`, `diagnostics (W)` | Atomic promotion from decoded backlog to presentation backlog |
+| Audio Commit | `apply_decoded_output(Audio)` | `control (R)`, `runtime (W)`, `audio_coord (R)`, `diagnostics (W)` | Trim for seek recovery, enqueue audio, decide whether sync worker needs waking |
+| EOS Commit | `apply_decoded_output(EndOfStream)` | `runtime (W)`, `playback_sync (W)` | Marks EOS and may trigger wake-up |
+
+### 5.3 Sync Worker
+
+| Phase | Current Main Code | Resources | Notes |
+| --- | --- | --- | --- |
+| Wait | `wait_for_signal(...)` | `worker_control (W)` | Thread parking only |
+| Playback Plan | `evaluate_worker_action(...)`, `plan_playback_advance(...)` | `control (R)`, `runtime (R/W)`, `playback_sync (R)`, `audio_coord (R)`, `diagnostics (W)` | Currently not purely read-only because it may discard/pull audio while planning |
+| Playback Execute | `execute_playback_plan(...)` | `audio_coord (X/W)` | Audio backend submission / backend-format alignment |
+| Playback Commit | `finish_playback_advance(...)` | `playback_phase`, `runtime (W)`, `playback_sync (W)`, `audio_coord (R/W)`, `control (R/W)`, `diagnostics (W)` | Atomic playback-state advancement and seek-recovery update |
+
+### 5.4 Audio Backend Thread
+
+| Phase | Current Main Code | Resources | Notes |
+| --- | --- | --- | --- |
+| Device Timing Progression | internal backend thread / callback | `audio_coord` internal only | Does not directly lock `SemiPlayerHandle`; exposes timing through snapshots |
+
+### 5.5 Current Atomicity Boundaries To Preserve
+
+These are the phase boundaries where intermediate state is currently dangerous:
+
+1. Decode video prepare -> render execute -> video commit
+2. Playback plan pull/discard decisions -> playback execute -> playback commit
+3. Seek/open/reset prepare -> media execute -> commit
+
+If these are split further, the design must explicitly represent any "in flight" state that other schedulers might otherwise misread.
+
+## 6. Decode Worker Gap Analysis
+
+This section compares the current decode worker structure against the target phase model.
+
+### 6.1 Current Decode Worker Shape
+
+Current main path:
+
+1. `plan_decode_action(...)`
+2. `poll_decoded_output_once(...)`
+3. `complete_decode_action(...)`
+4. `apply_decoded_output(...)`
+5. for video: immediate `render_supply(...)`
+
+That means the current code already has one good split:
+
+- decode polling happens outside the outer player operation lock
+
+But it still has one large coupled commit:
+
+- `Video(frame)` apply and `render_supply(...)` are treated as one combined player-state transaction
+
+### 6.2 Current Phase Mapping
+
+| Target Phase | Current Implementation | Status | Notes |
+| --- | --- | --- | --- |
+| Wait | `wait_for_signal(...)` | Good | Already isolated to worker-control state |
+| Decode Plan | `plan_decode_action(...)` | Mixed | Reasonably small, but still reads runtime and control through the broad player access path |
+| Decode Execute | `poll_decoded_output_once(...)` | Good | Already isolated to `media_session` |
+| Video Prepare | first half of `apply_decoded_output(Video)` | Coupled | Diagnostics + decoded-queue mutation are bundled with downstream render work |
+| Render Execute | inside `render_supply(...)` | Coupled | Heavy render work still happens inside the broad video apply transaction |
+| Video Commit | second half of `render_supply(...)` + `mark_dirty` | Coupled | Presentation queue commit and sync dirtying are not explicitly separated from render execution |
+| Audio Commit | `apply_decoded_output(Audio)` | Acceptable first pass | Much simpler than video; can stay coupled longer |
+| EOS Commit | `apply_decoded_output(EndOfStream)` | Good | Short and clear |
+
+### 6.3 Why Video Is The Hard Part
+
+The dangerous part is not only "rendering is heavy".
+
+The real issue is that current video apply owns a backlog transaction:
+
+1. push decoded frame into decoded-video queue
+2. drain decoded-video queue in `render_supply(...)`
+3. render the entire drained batch
+4. push rendered frames into presentation queue
+5. mark video sync dirty
+
+This means the current logic does not treat video apply as a single-frame commit.
+It treats it as:
+
+- a decoded backlog transfer
+- plus render execution
+- plus presentation backlog commit
+
+If that sequence is split without an explicit in-flight model, schedulers may observe a false intermediate state such as:
+
+- decoded queue already empty
+- presentation queue not yet filled
+- sync not yet dirtied
+
+That is exactly the kind of state that can produce startup white-screen or stalled playback behavior.
+
+### 6.4 What Is Already Safe To Separate
+
+These decode worker boundaries are already safe or mostly safe:
+
+1. wait vs decode plan
+2. decode plan vs decode execute
+3. decode execute vs audio commit
+4. decode execute vs EOS commit
+
+The main unsafe split is:
+
+- video prepare vs render execute vs video commit
+
+unless the player first gains an explicit "render in flight" representation.
+
+### 6.5 What The First Safe Decode Refactor Should Aim For
+
+The first safe decode-worker refactor should not start by moving `render_supply(...)` out of the lock by itself.
+
+It should first establish one of these models:
+
+1. Keep decoded backlog ownership inside one atomic runtime transaction until rendered results are committed
+2. Or introduce an explicit render-staging / in-flight domain that schedulers understand
+
+Until one of those exists, the current video path should be treated as preserving an important atomicity boundary.
+
+### 6.6 Practical Decode Worker Refactor Order
+
+Recommended order:
+
+1. Narrow decode plan reads behind `with_control(...)` and `with_runtime(...)`
+2. Keep decode execute on `media_session`
+3. Leave audio commit and EOS commit mostly as they are
+4. Introduce an explicit render staging model for video backlog transfer
+5. Only then split video prepare / render execute / video commit across separate lock regions
+
+That order keeps the current startup and scheduling assumptions intact while still shrinking broad player locking around simpler decode phases first.
+
+## 7. Suggested Lock Interfaces
+
+The first stable interface set should be small and explicit.
+
+### 5.1 `with_control(...)`
+
+Owns:
+
+- `control`
+
+Used by:
+
+- host control operations
+- decode plan reads
+- sync plan reads
+- seek prepare and commit
+
+### 5.2 `with_runtime(...)`
+
+Owns:
+
+- `runtime`
+- first-pass `playback_sync` if they remain coupled
+
+Used by:
+
+- decode output commit
+- render result commit
+- sync worker playback advancement
+- host current-frame queries
+
+### 5.3 `with_media_session(...)`
+
+Owns:
+
+- `media`
+
+Used by:
+
+- decode polling
+- seek execute
+- debug decode access
+
+This already exists in practice through `SharedMediaSession`.
+
+### 5.4 `with_audio_coord(...)`
+
+Owns, at least conceptually:
+
+- `audio_clock`
+- `audio_output`
+
+Used by:
+
+- play / pause / seek / reset
+- playback advance plan and commit
+- audio output snapshot reads
+
+The first pass does not have to physically merge these into one mutex, but higher-level code should stop assembling them ad hoc.
+
+### 5.5 `with_render(...)`
+
+Owns:
+
+- `render`
+
+Used by:
+
+- render execution
+
+This should be independent from `runtime` so render execution can happen outside the runtime commit section.
+
+### 5.6 `with_playback_phase(...)`
+
+Owns:
+
+- operation-level playback coordination only
+
+Used by:
+
+- seek
+- reset
+- open/load
+- sync worker playback commit window
+
+This is not a data lock. It is a transaction fence.
+
+## 8. Operation Contracts
 
 ### 4.1 Diagnostics Read
 
@@ -162,7 +469,7 @@ Needs by stage:
 
 The seek path should not hold a wide player mutex across FFmpeg seek.
 
-## 5. Recommended Lock Order
+## 9. Recommended Lock Order
 
 Use one consistent order for the player-owned domains:
 
@@ -176,13 +483,30 @@ Important rule:
 - no path should do diagnostics work under the playback critical section
 - no path should re-enter the player through a different lock order
 
-## 6. Migration Plan
+## 10. Migration Plan
 
 ### Phase 1
 
 - Add this document.
 - Split the outer lock model into named domains in `SemiPlayerHandle`.
 - Keep the old outer API as a temporary compatibility layer if needed.
+- Add access-layer skeleton helpers first, without rerouting behavior yet.
+
+### Phase 1a Skeleton Goal
+
+Before large behavior changes, establish a small access-layer skeleton in code:
+
+- `with_control(...)` or `control_snapshot()`
+- `with_runtime_access(...)`
+- `audio_coord_access()`
+- `with_render_access(...)`
+- `with_playback_phase(...)`
+
+The purpose of that skeleton is:
+
+- give new code a place to target
+- let old code continue to run unchanged
+- migrate one call path at a time instead of forcing a lock rewrite in one jump
 
 ### Phase 2
 
@@ -201,7 +525,7 @@ Important rule:
 - Remove the old whole-object lock path.
 - Tighten helper APIs so new code cannot silently reintroduce the big lock.
 
-## 7. Success Criteria
+## 11. Success Criteria
 
 The refactor is working when:
 
@@ -211,7 +535,7 @@ The refactor is working when:
 - lock ownership is obvious from the API surface
 - new call sites must choose a domain instead of receiving the whole player
 
-## 8. Open Questions
+## 12. Open Questions
 
 - Should `seek_recovery` live in `control` or get its own small domain?
 - Should `runtime` and `video_sync` stay together for the first pass?
@@ -222,4 +546,3 @@ The recommended answer for the first pass is:
 - keep `runtime` and `video_sync` together
 - keep `seek_recovery` with `control`
 - rename only if the code change stays small and mechanical
-
