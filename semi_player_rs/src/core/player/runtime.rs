@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use crate::audio::core::frame::{AudioFrame, NORMALIZED_AUDIO_FORMAT};
 use crate::audio::core::output::AudioOutputChunk;
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
-use crate::render::core::scheduler::{VideoScheduleDecision, VideoScheduler};
+use crate::sync::video_scheduler::{VideoScheduleDecision, VideoScheduler};
 use crate::util::time::MediaTimeUs;
 
 pub const TARGET_AUDIO_QUEUE_LEN: usize = 8;
@@ -439,7 +439,7 @@ mod tests {
     use crate::audio::core::frame::{AudioFrame, AudioSampleFormatCategory};
     use crate::audio::core::output::AudioStreamFormat;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
-    use crate::render::core::scheduler::VideoScheduler;
+    use crate::sync::video_scheduler::VideoScheduler;
 
     fn video_surface(byte_len: usize) -> Arc<VideoSurface> {
         Arc::new(VideoSurface::new_cpu_packed(

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::types::PlayerState;
 use crate::audio::backends::{AudioBackendTiming, AudioOutputBackend, CpalAudioOutputBackend};
-use crate::audio::core::clock::DevicePlaybackTiming;
+use crate::sync::clock::DevicePlaybackTiming;
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
 use crate::util::time::MediaTimeUs;
 

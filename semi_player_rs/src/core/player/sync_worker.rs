@@ -7,7 +7,7 @@ use crate::core::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
-use crate::core::player::schedule::PlayerScheduleService;
+use crate::sync::schedule::PlayerScheduleService;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]

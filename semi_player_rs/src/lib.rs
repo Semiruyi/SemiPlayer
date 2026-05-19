@@ -4,6 +4,7 @@ mod core;
 mod platform;
 mod render;
 mod subtitle;
+mod sync;
 mod util;
 
 use crate::api::error::{
@@ -22,8 +23,8 @@ use crate::core::media::{
 };
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::pump::pump_player;
-use crate::core::player::schedule::PlayerScheduleService;
-use crate::core::player::video_sync::VideoSyncService;
+use crate::sync::schedule::PlayerScheduleService;
+use crate::sync::video_sync::VideoSyncService;
 use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
 use crate::util::time::{ms_to_us, us_to_ms, MediaTimeUs};
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
@@ -658,7 +659,7 @@ pub unsafe extern "C" fn semi_player_seek(
         if player.state() == PlayerState::Playing {
             player.audio_clock.pause();
         }
-        player.video_scheduler = crate::render::core::scheduler::VideoScheduler;
+        player.video_scheduler = crate::sync::video_scheduler::VideoScheduler;
         player.video_sync.reset();
         player.begin_seek_recovery(keyframe_pts);
         player.observe_seek_reset_finished();
@@ -766,7 +767,7 @@ fn execute_keyframe_seek(
     if player.state() == PlayerState::Playing {
         player.audio_clock.pause();
     }
-    player.video_scheduler = crate::render::core::scheduler::VideoScheduler;
+    player.video_scheduler = crate::sync::video_scheduler::VideoScheduler;
     player.video_sync.reset();
     player.begin_seek_recovery(resolved_pts);
     player.observe_seek_reset_finished();

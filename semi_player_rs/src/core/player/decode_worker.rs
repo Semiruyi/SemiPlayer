@@ -4,7 +4,7 @@ use std::thread::{self, JoinHandle};
 use crate::core::media::{DecodePolicy, DecodedOutputPoll, SharedOpenedMedia};
 use crate::core::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::core::player::handle::{LockOwner, SemiPlayerHandle};
-use crate::core::player::schedule::PlayerScheduleService;
+use crate::sync::schedule::PlayerScheduleService;
 
 #[derive(Default)]
 struct DecodeWorkerControl {

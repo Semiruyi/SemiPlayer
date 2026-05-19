@@ -4,18 +4,18 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::api::types::PlayerState;
-use crate::audio::core::clock::AudioClock;
 use crate::audio::core::output_controller::SharedAudioOutputController;
 use crate::core::media::{DecodePolicy, SeekRecoveryPolicy, SharedOpenedMedia};
 use crate::core::player::decode_worker::DecodeWorkerHandle;
 use crate::core::player::runtime::{AudioDiscardSummary, PlayerRuntime};
-use crate::core::player::schedule::PlayerScheduleService;
 use crate::core::player::sync_worker::SyncWorkerHandle;
-use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::pipeline::PresentationTargetProfile;
-use crate::render::core::scheduler::VideoScheduler;
 use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
+use crate::sync::clock::AudioClock;
+use crate::sync::schedule::PlayerScheduleService;
+use crate::sync::video_scheduler::VideoScheduler;
+use crate::sync::video_sync::VideoSyncState;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Clone, Copy, Debug, Default)]

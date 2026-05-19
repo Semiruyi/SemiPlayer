@@ -1,7 +1,7 @@
 use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::core::player::execution::{advance_playback, decode_supply};
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::schedule::{PlayerScheduleService, ScheduledWork};
+use crate::sync::schedule::{PlayerScheduleService, ScheduledWork};
 
 pub fn pump_player(player: &mut SemiPlayerHandle, max_iterations: u32) -> ResultCode {
     if !player.is_media_loaded() || player.opened_media.is_none() {
@@ -42,7 +42,7 @@ mod tests {
 
     use super::service_scheduled_work;
     use crate::core::player::handle::SemiPlayerHandle;
-    use crate::core::player::schedule::PlayerScheduleService;
+    use crate::sync::schedule::PlayerScheduleService;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
@@ -93,7 +93,7 @@ mod tests {
         let _ = player
             .runtime
             .select_video_frame(&player.video_scheduler, 0, |_| {});
-        let _ = crate::core::player::video_sync::VideoSyncService::tick(&mut player, 0);
+        let _ = crate::sync::video_sync::VideoSyncService::tick(&mut player, 0);
 
         let scheduled_work = PlayerScheduleService::evaluate(&player).scheduled_work();
         assert!(!scheduled_work.should_advance_playback);

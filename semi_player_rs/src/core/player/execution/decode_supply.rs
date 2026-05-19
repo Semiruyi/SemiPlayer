@@ -3,7 +3,7 @@ use crate::api::types::PlayerState;
 use crate::core::media::{DecodePolicy, DecodedOutput, DecodedOutputPoll, SharedOpenedMedia};
 use crate::core::player::execution::render_supply;
 use crate::core::player::handle::SemiPlayerHandle;
-use crate::core::player::video_sync::VideoSyncService;
+use crate::sync::video_sync::VideoSyncService;
 
 const DEFAULT_PUMP_ITERATIONS: u32 = 256;
 pub(crate) const DECODE_POLL_PACKET_BUDGET: usize = 4;

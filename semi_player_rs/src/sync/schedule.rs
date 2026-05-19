@@ -2,7 +2,7 @@ use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputSnapshot;
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
-use crate::core::player::video_sync::{VideoSyncService, VideoSyncSnapshot};
+use crate::sync::video_sync::{VideoSyncService, VideoSyncSnapshot};
 use crate::util::time::MediaTimeUs;
 
 const MIN_PUMP_INTERVAL_US: MediaTimeUs = 1_000;

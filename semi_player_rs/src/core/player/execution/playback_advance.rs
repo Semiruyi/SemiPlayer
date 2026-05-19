@@ -3,7 +3,7 @@ use crate::audio::core::output::AudioOutputChunk;
 use crate::audio::core::output_controller::SharedAudioOutputController;
 use crate::core::player::handle::SemiPlayerHandle;
 use crate::core::player::runtime::AudioDiscardSummary;
-use crate::core::player::video_sync::VideoSyncService;
+use crate::sync::video_sync::VideoSyncService;
 const AUDIO_SYNC_BATCH_CHUNK_LIMIT: usize = 4;
 
 pub fn advance_playback(player: &mut SemiPlayerHandle) {
