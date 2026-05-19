@@ -63,6 +63,7 @@ pub struct PlayerDiagnosticsSnapshot {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum LockOwner {
     Ffi,
+    #[allow(dead_code)]
     SyncWorker,
     #[allow(dead_code)]
     DecodeWorker,

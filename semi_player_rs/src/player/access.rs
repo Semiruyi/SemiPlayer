@@ -288,7 +288,7 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn playback_advance_plan_context(&mut self) -> PlaybackAdvancePlanContext {
+    pub fn playback_advance_plan_context(&self) -> PlaybackAdvancePlanContext {
         let initial_playback_time_us = self.playback_position_us_snapshot();
         let state = self.control_access().state();
         let audio_output = self.audio_output.clone();

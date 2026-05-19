@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use crate::api::types::PlayerState;
 use crate::player::access::SyncWorkerPlanContext;
-use crate::player::diagnostics::LockOwner;
 use crate::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
@@ -66,11 +65,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     loop {
         let action = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
-            SemiPlayerHandle::with_locked_ptr_as(
-                player_ptr,
-                LockOwner::SyncWorker,
-                evaluate_worker_action,
-            )
+            evaluate_worker_action(&*player_ptr)
         };
 
         match action {
@@ -78,17 +73,12 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                 let _phase_guard = phase_lock.lock().unwrap();
                 let plan = unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
-                    SemiPlayerHandle::with_locked_ptr_as(
-                        player_ptr,
-                        LockOwner::SyncWorker,
-                        |player| {
-                            if player.control_access().is_media_loaded() {
-                                Some(plan_playback_advance(player))
-                            } else {
-                                None
-                            }
-                        },
-                    )
+                    let player = &*player_ptr;
+                    if player.control_access().is_media_loaded() {
+                        Some(plan_playback_advance(player))
+                    } else {
+                        None
+                    }
                 };
 
                 let Some(plan) = plan else {
@@ -98,13 +88,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
                 let result = execute_playback_plan(&plan);
                 unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
-                    SemiPlayerHandle::with_locked_ptr_as(
-                        player_ptr,
-                        LockOwner::SyncWorker,
-                        |player| {
-                            finish_playback_advance(player, plan, result);
-                        },
-                    );
+                    finish_playback_advance(&*player_ptr, plan, result);
                 }
             }
             WorkerAction::WaitFor(duration) => {
@@ -121,7 +105,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
     }
 }
 
-fn evaluate_worker_action(player: &mut SemiPlayerHandle) -> WorkerAction {
+fn evaluate_worker_action(player: &SemiPlayerHandle) -> WorkerAction {
     let context = player.sync_worker_plan_context();
     if !context.media_loaded {
         return WorkerAction::WaitIndefinitely;
@@ -137,7 +121,7 @@ fn evaluate_worker_action(player: &mut SemiPlayerHandle) -> WorkerAction {
 }
 
 fn execute_worker_step(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     context: SyncWorkerPlanContext,
     mode: WorkerMode,
 ) -> WorkerAction {

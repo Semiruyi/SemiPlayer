@@ -19,7 +19,7 @@ pub(crate) struct PlaybackAdvanceResult {
     audio_chunks_submitted: bool,
 }
 
-pub(crate) fn plan_playback_advance(player: &mut SemiPlayerHandle) -> PlaybackAdvancePlan {
+pub(crate) fn plan_playback_advance(player: &SemiPlayerHandle) -> PlaybackAdvancePlan {
     let context = player.playback_advance_plan_context();
     build_playback_advance_plan(context)
 }
@@ -99,7 +99,7 @@ pub(crate) fn execute_playback_plan(plan: &PlaybackAdvancePlan) -> PlaybackAdvan
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn finish_playback_advance(
-    player: &mut SemiPlayerHandle,
+    player: &SemiPlayerHandle,
     plan: PlaybackAdvancePlan,
     result: PlaybackAdvanceResult,
 ) {

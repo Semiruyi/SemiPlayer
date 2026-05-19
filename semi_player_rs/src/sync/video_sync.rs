@@ -191,7 +191,7 @@ impl VideoSyncService {
         }
     }
 
-    pub fn tick(player: &mut SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
+    pub fn tick(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         if player
             .runtime
             .lock()
@@ -207,7 +207,7 @@ impl VideoSyncService {
         snapshot
     }
 
-    pub fn sync(player: &mut SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
+    pub fn sync(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
         let target_video_time_us =
             add_media_time_us(playback_time_us, player.host_presentation_offset_us());
         let mut dropped_pts = Vec::new();
@@ -370,10 +370,10 @@ mod tests {
         rt.runtime.push_video_frame(frame(0, Some(33_000)));
         rt.runtime.push_video_frame(frame(41_000, Some(41_000)));
 
-        let first = VideoSyncService::tick(&mut player, 0);
+        let first = VideoSyncService::tick(&player, 0);
         let stats_after_first = player.runtime.get_mut().unwrap().video_sync.stats();
 
-        let second = VideoSyncService::tick(&mut player, 10_000);
+        let second = VideoSyncService::tick(&player, 10_000);
         let stats_after_second = player.runtime.get_mut().unwrap().video_sync.stats();
 
         assert_eq!(first.next_wake_deadline_us, Some(41_000));
