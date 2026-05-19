@@ -2,8 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::api::types::PlayerState;
 use crate::audio::backends::{AudioBackendTiming, AudioOutputBackend, CpalAudioOutputBackend};
-use crate::sync::clock::DevicePlaybackTiming;
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
+use crate::sync::clock::DevicePlaybackTiming;
 use crate::util::time::MediaTimeUs;
 
 const TARGET_DEVICE_BUFFER_FRAMES: usize = 4_096;

@@ -83,10 +83,7 @@ pub enum VideoSurfaceKind {
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum VideoSurfaceStorage {
-    CpuPacked {
-        stride: usize,
-        data: Vec<u8>,
-    },
+    CpuPacked { stride: usize, data: Vec<u8> },
     GpuTexture(GpuTextureData),
 }
 
@@ -106,10 +103,7 @@ impl VideoSurface {
         }
     }
 
-    pub fn new_gpu_texture(
-        pixel_format: PixelFormatCategory,
-        gpu_data: GpuTextureData,
-    ) -> Self {
+    pub fn new_gpu_texture(pixel_format: PixelFormatCategory, gpu_data: GpuTextureData) -> Self {
         Self {
             pixel_format,
             color_info: VideoColorInfo::default(),

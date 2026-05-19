@@ -5,15 +5,15 @@ use std::time::Instant;
 
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::SharedAudioOutputController;
+use crate::decode::session::{MediaSession, SharedMediaSession};
+use crate::decode::MediaOpenError;
 use crate::decode::{
     DecodePolicy, DecodedOutput, SeekRecoveryPolicy, VideoDecodeDiagnosticsSnapshot,
 };
-use crate::decode::session::{MediaSession, SharedMediaSession};
 use crate::demux::{
     probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts, MediaInfo,
     SeekDemuxDiagnosticsSnapshot,
 };
-use crate::decode::MediaOpenError;
 use crate::player::diagnostics::{LockOwner, PlayerDiagnostics, PlayerDiagnosticsSnapshot};
 use crate::player::runtime::{AudioDiscardSummary, PlayerRuntime};
 use crate::player::worker::{DecodeWorkerHandle, SyncWorkerHandle};
@@ -36,6 +36,7 @@ struct SeekRecoveryState {
 pub struct SemiPlayerHandle {
     state: AtomicU32,
     op_lock: Mutex<()>,
+    runtime_lock: Mutex<()>,
     playback_phase_lock: Arc<Mutex<()>>,
     sync_worker: Option<SyncWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
@@ -67,6 +68,7 @@ impl SemiPlayerHandle {
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             op_lock: Mutex::new(()),
+            runtime_lock: Mutex::new(()),
             playback_phase_lock: Arc::new(Mutex::new(())),
             sync_worker: None,
             decode_worker: None,
@@ -178,6 +180,7 @@ impl SemiPlayerHandle {
         let player_ref = &*player_ptr;
         let wait_start = Instant::now();
         let _guard = player_ref.op_lock.lock().unwrap();
+        let _runtime_guard = player_ref.runtime_lock.lock().unwrap();
         let wait_us = i64::try_from(wait_start.elapsed().as_micros()).unwrap_or(i64::MAX);
         player_ref.diagnostics.observe_lock_wait(owner, wait_us);
         f(&mut *player_ptr)
@@ -260,6 +263,13 @@ impl SemiPlayerHandle {
 
     pub fn diagnostics_snapshot(&self) -> PlayerDiagnosticsSnapshot {
         self.diagnostics.snapshot()
+    }
+
+    pub fn current_video_frame_snapshot(
+        &self,
+    ) -> Option<crate::render::core::frame::PresentationFrame> {
+        let _guard = self.runtime_lock.lock().unwrap();
+        self.runtime.current_video_frame().cloned()
     }
 
     pub fn decode_policy(&self) -> DecodePolicy {

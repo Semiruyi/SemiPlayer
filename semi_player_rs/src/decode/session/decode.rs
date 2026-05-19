@@ -4,9 +4,9 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::Packet;
 
 use crate::decode::decoder::{
-    DecoderDrainingState, MediaPacket, OpenedAudioDecoder, OpenedVideoDecoder,
     collect_audio_frames, collect_video_frames, decode_audio_packet, decode_video_packet,
-    send_audio_decoder_eof, send_video_decoder_eof,
+    send_audio_decoder_eof, send_video_decoder_eof, DecoderDrainingState, MediaPacket,
+    OpenedAudioDecoder, OpenedVideoDecoder,
 };
 use crate::decode::error::MediaOpenError;
 use crate::decode::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};

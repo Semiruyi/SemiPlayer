@@ -3,7 +3,7 @@ use ffmpeg_next::ffi;
 use ffmpeg_next::Rescale;
 
 use crate::decode::decoder::{
-    OpenedAudioDecoder, OpenedVideoDecoder, open_audio_decoder, open_video_decoder,
+    open_audio_decoder, open_video_decoder, OpenedAudioDecoder, OpenedVideoDecoder,
 };
 use crate::decode::error::MediaOpenError;
 use crate::decode::session_decode::SessionDecodeState;
@@ -11,7 +11,7 @@ use crate::decode::session_impl::MediaSession;
 use crate::decode::video_decode::VideoDecodeDiagnosticsSnapshot;
 use crate::demux::demux_impl::SeekDemuxDiagnostics;
 use crate::demux::keyframe_probe::probe_expected_left_keyframe_pts;
-use crate::demux::probe::{MediaInfo, MediaProbeError, collect_media_info};
+use crate::demux::probe::{collect_media_info, MediaInfo, MediaProbeError};
 use crate::util::time::MediaTimeUs;
 
 pub(crate) fn open_media_with_hw_device_ctx(
@@ -68,7 +68,9 @@ pub(crate) fn seek_media_session(
         return Err(MediaOpenError::Seek(error));
     }
     session.flush_decoders();
-    Ok(probed_keyframe_pts.map(|(pts, _)| pts).unwrap_or(position_us))
+    Ok(probed_keyframe_pts
+        .map(|(pts, _)| pts)
+        .unwrap_or(position_us))
 }
 
 pub(crate) fn video_decode_diagnostics_snapshot(

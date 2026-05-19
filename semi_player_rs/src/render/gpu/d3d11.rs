@@ -3,8 +3,8 @@ use std::ptr;
 use std::sync::Arc;
 
 use crate::render::core::frame::{
-    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame,
-    VideoSurface, VideoSurfaceStorage,
+    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame, VideoSurface,
+    VideoSurfaceStorage,
 };
 use crate::render::gpu::{
     GpuBackendKind, GpuDevice, GpuDeviceError, GpuRenderError, GpuRenderer, GpuRendererSnapshot,
@@ -31,8 +31,7 @@ impl D3d11GpuDevice {
         use windows::Win32::Foundation::HMODULE;
         use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
         use windows::Win32::Graphics::Direct3D11::{
-            D3D11CreateDevice, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, ID3D11Device,
-            ID3D11DeviceContext,
+            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
         };
 
         let mut device: Option<ID3D11Device> = None;
@@ -84,12 +83,13 @@ impl GpuDevice for D3d11GpuDevice {
         &self,
     ) -> Result<*mut ffmpeg_next::ffi::AVBufferRef, GpuDeviceError> {
         use ffmpeg_next::ffi::{
-            av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init,
-            AVHWDeviceContext, AVHWDeviceType,
+            av_buffer_unref, av_hwdevice_ctx_alloc, av_hwdevice_ctx_init, AVHWDeviceContext,
+            AVHWDeviceType,
         };
         use windows::core::Interface;
 
-        let hw_device_ref = unsafe { av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA) };
+        let hw_device_ref =
+            unsafe { av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA) };
         if hw_device_ref.is_null() {
             return Err(GpuDeviceError::HwContextAllocFailed);
         }
@@ -239,8 +239,8 @@ impl D3d11GpuRenderer {
     ) -> Result<PresentationFrame, GpuRenderError> {
         use windows::core::Interface;
         use windows::Win32::Graphics::Direct3D11::{
-            D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_TEXTURE2D_DESC,
-            D3D11_USAGE_STAGING, ID3D11Resource, ID3D11Texture2D,
+            ID3D11Resource, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+            D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
         };
         use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 
@@ -306,13 +306,7 @@ impl D3d11GpuRenderer {
                 .cast()
                 .map_err(|_| GpuRenderError::BackendUnavailable)?;
             self.device_context
-                .Map(
-                    &staging_resource,
-                    0,
-                    D3D11_MAP_READ,
-                    0,
-                    Some(&mut mapped),
-                )
+                .Map(&staging_resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
                 .map_err(|_| GpuRenderError::BackendUnavailable)?;
         }
 

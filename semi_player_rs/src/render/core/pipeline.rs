@@ -162,8 +162,7 @@ impl VideoRenderPipeline {
                 }
             }
 
-            let (rendered_frame, fell_back) =
-                self.execute_render_plan(&plan, frame, renderer);
+            let (rendered_frame, fell_back) = self.execute_render_plan(&plan, frame, renderer);
             if fell_back {
                 batch.stats.fallback_passthrough_frames =
                     batch.stats.fallback_passthrough_frames.saturating_add(1);

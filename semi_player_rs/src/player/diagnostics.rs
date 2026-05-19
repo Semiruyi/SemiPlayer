@@ -1,5 +1,5 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::player::runtime::AudioDiscardSummary;

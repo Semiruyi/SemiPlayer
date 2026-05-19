@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::ptr;
+use std::sync::Arc;
 
 use ffmpeg_next as ffmpeg;
 use ffmpeg_next::ffi;
@@ -10,9 +10,7 @@ use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
 use crate::decode::error::MediaOpenError;
-use crate::decode::output::{
-    DecodePolicy, DecodedOutput, SkippedAudioFrame, SkippedVideoFrame,
-};
+use crate::decode::output::{DecodePolicy, DecodedOutput, SkippedAudioFrame, SkippedVideoFrame};
 use crate::decode::video_decode::{
     VideoDecodeBackend, VideoDecodeDiagnosticsSnapshot, VideoDecodeFallbackReason,
 };

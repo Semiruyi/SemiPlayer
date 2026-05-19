@@ -14,11 +14,11 @@ pub(crate) mod video_decode;
 
 pub mod session {
     #[allow(unused_imports)]
+    pub use super::session_impl::SharedOpenedMedia;
+    #[allow(unused_imports)]
     pub use super::session_impl::{open_media_with_hw_device_ctx, MediaSession, OpenedMedia};
     #[allow(unused_imports)]
     pub use super::session_shared::SharedMediaSession;
-    #[allow(unused_imports)]
-    pub use super::session_impl::SharedOpenedMedia;
 }
 
 pub use error::MediaOpenError;

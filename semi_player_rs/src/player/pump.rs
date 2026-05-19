@@ -42,8 +42,8 @@ mod tests {
 
     use super::service_scheduled_work;
     use crate::player::handle::SemiPlayerHandle;
-    use crate::sync::schedule::PlayerScheduleService;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
+    use crate::sync::schedule::PlayerScheduleService;
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
         VideoFrame {
