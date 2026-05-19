@@ -1,8 +1,8 @@
-use crate::render::backends::d3d11::D3d11Renderer;
 use crate::render::core::frame::{
     DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoSurfaceKind,
 };
-use crate::render::pipelines::{cpu_bgra, d3d11_presenter};
+use crate::render::gpu::GpuRenderer;
+use crate::render::pipelines::cpu_bgra;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +36,7 @@ impl Default for PresentationTargetProfile {
 pub enum PresentationSurfaceKindPreference {
     PreserveInput,
     CpuPacked,
-    D3d11Texture2D,
+    GpuTexture,
 }
 
 impl Default for PresentationSurfaceKindPreference {
@@ -94,7 +94,7 @@ impl VideoRenderRequest {
         Self {
             target_profile: PresentationTargetProfile::D3d11BgraPresenter,
             presentation_pixel_format: PresentationPixelFormatPreference::Bgra8,
-            presentation_surface_kind: PresentationSurfaceKindPreference::D3d11Texture2D,
+            presentation_surface_kind: PresentationSurfaceKindPreference::GpuTexture,
             subtitles_visible,
         }
     }
@@ -129,36 +129,17 @@ impl VideoRenderPipeline {
         &self,
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
-    ) -> PresentationFrame {
-        let mut d3d11_renderer = D3d11Renderer::new();
-        self.render_frame_with_d3d11_renderer(request, frame, &mut d3d11_renderer)
-    }
-
-    pub fn render_frame_with_d3d11_renderer(
-        &self,
-        request: VideoRenderRequest,
-        frame: DecodedVideoFrame,
-        d3d11_renderer: &mut D3d11Renderer,
+        renderer: &mut Box<dyn GpuRenderer>,
     ) -> PresentationFrame {
         let plan = self.plan_render(request, &frame);
-        self.execute_render_plan(&plan, frame, d3d11_renderer).0
+        self.execute_render_plan(&plan, frame, renderer).0
     }
 
-    #[allow(dead_code)]
     pub fn render_frames(
         &self,
         request: VideoRenderRequest,
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
-    ) -> VideoRenderBatch {
-        let mut d3d11_renderer = D3d11Renderer::new();
-        self.render_frames_with_d3d11_renderer(request, frames, &mut d3d11_renderer)
-    }
-
-    pub fn render_frames_with_d3d11_renderer(
-        &self,
-        request: VideoRenderRequest,
-        frames: impl IntoIterator<Item = DecodedVideoFrame>,
-        d3d11_renderer: &mut D3d11Renderer,
+        renderer: &mut Box<dyn GpuRenderer>,
     ) -> VideoRenderBatch {
         let mut batch = VideoRenderBatch::default();
 
@@ -182,7 +163,7 @@ impl VideoRenderPipeline {
             }
 
             let (rendered_frame, fell_back) =
-                self.execute_render_plan(&plan, frame, d3d11_renderer);
+                self.execute_render_plan(&plan, frame, renderer);
             if fell_back {
                 batch.stats.fallback_passthrough_frames =
                     batch.stats.fallback_passthrough_frames.saturating_add(1);
@@ -226,10 +207,8 @@ impl VideoRenderPipeline {
             PresentationTargetProfile::Passthrough => {
                 PresentationPixelFormatPreference::PreserveInput
             }
-            PresentationTargetProfile::CpuBgraCompatibility => {
-                PresentationPixelFormatPreference::Bgra8
-            }
-            PresentationTargetProfile::D3d11BgraPresenter => {
+            PresentationTargetProfile::CpuBgraCompatibility
+            | PresentationTargetProfile::D3d11BgraPresenter => {
                 PresentationPixelFormatPreference::Bgra8
             }
         };
@@ -241,7 +220,7 @@ impl VideoRenderPipeline {
                 PresentationSurfaceKindPreference::CpuPacked
             }
             PresentationTargetProfile::D3d11BgraPresenter => {
-                PresentationSurfaceKindPreference::D3d11Texture2D
+                PresentationSurfaceKindPreference::GpuTexture
             }
         };
         let pixel_format_preference =
@@ -257,9 +236,7 @@ impl VideoRenderPipeline {
             presentation_surface_kind: match surface_kind_preference {
                 PresentationSurfaceKindPreference::PreserveInput => frame.surface_kind(),
                 PresentationSurfaceKindPreference::CpuPacked => VideoSurfaceKind::CpuPacked,
-                PresentationSurfaceKindPreference::D3d11Texture2D => {
-                    VideoSurfaceKind::D3d11Texture2D
-                }
+                PresentationSurfaceKindPreference::GpuTexture => VideoSurfaceKind::GpuTexture,
             },
         }
     }
@@ -268,21 +245,27 @@ impl VideoRenderPipeline {
         &self,
         plan: &VideoRenderPlan,
         frame: DecodedVideoFrame,
-        d3d11_renderer: &mut D3d11Renderer,
+        renderer: &mut Box<dyn GpuRenderer>,
     ) -> Result<PresentationFrame, DecodedVideoFrame> {
         match (
             plan.target.presentation_surface_kind,
             plan.target.presentation_pixel_format,
         ) {
             (VideoSurfaceKind::CpuPacked, PixelFormatCategory::Bgra8) => {
-                if frame.surface_kind() == VideoSurfaceKind::D3d11Texture2D {
-                    d3d11_presenter::try_render(frame, d3d11_renderer)
+                if frame.surface_kind() == VideoSurfaceKind::GpuTexture {
+                    match renderer.render_frame(&frame) {
+                        Ok(rendered) => Ok(rendered),
+                        Err(_) => Err(frame),
+                    }
                 } else {
                     cpu_bgra::try_render(frame)
                 }
             }
-            (VideoSurfaceKind::D3d11Texture2D, PixelFormatCategory::Bgra8) => {
-                d3d11_presenter::try_render(frame, d3d11_renderer)
+            (VideoSurfaceKind::GpuTexture, PixelFormatCategory::Bgra8) => {
+                match renderer.render_frame(&frame) {
+                    Ok(rendered) => Ok(rendered),
+                    Err(_) => Err(frame),
+                }
             }
             _ => Err(frame),
         }
@@ -292,14 +275,14 @@ impl VideoRenderPipeline {
         &self,
         plan: &VideoRenderPlan,
         frame: DecodedVideoFrame,
-        d3d11_renderer: &mut D3d11Renderer,
+        renderer: &mut Box<dyn GpuRenderer>,
     ) -> (PresentationFrame, bool) {
         match plan.path {
             VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => {
                 (frame, false)
             }
             VideoRenderPath::RequiresTransform => {
-                match self.try_render_transform(plan, frame, d3d11_renderer) {
+                match self.try_render_transform(plan, frame, renderer) {
                     Ok(transformed_frame) => (transformed_frame, false),
                     Err(frame) => {
                         let _target_pixel_format = plan.target.presentation_pixel_format;
@@ -399,7 +382,11 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(33_000);
 
-        let output = pipeline.render_frame(VideoRenderRequest::default(), input.clone());
+        let output = pipeline.render_frame(
+            VideoRenderRequest::default(),
+            input.clone(),
+            &mut crate::render::gpu::create_noop_renderer(),
+        );
 
         assert_eq!(output.pts_us, input.pts_us);
         assert_eq!(output.duration_us, input.duration_us);
@@ -434,6 +421,7 @@ mod tests {
                 subtitles_visible: true,
             },
             input.clone(),
+            &mut crate::render::gpu::create_noop_renderer(),
         );
 
         assert_eq!(output.pts_us, input.pts_us);
@@ -441,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn request_can_express_d3d11_surface_preference_without_changing_current_passthrough() {
+    fn request_can_express_gpu_surface_preference_without_changing_current_passthrough() {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(99_000);
 
@@ -449,10 +437,11 @@ mod tests {
             VideoRenderRequest {
                 target_profile: PresentationTargetProfile::Passthrough,
                 presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
-                presentation_surface_kind: PresentationSurfaceKindPreference::D3d11Texture2D,
+                presentation_surface_kind: PresentationSurfaceKindPreference::GpuTexture,
                 subtitles_visible: false,
             },
             input.clone(),
+            &mut crate::render::gpu::create_noop_renderer(),
         );
 
         assert_eq!(output.pts_us, input.pts_us);
@@ -492,8 +481,11 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = rgba_frame(123_000);
 
-        let output =
-            pipeline.render_frame(VideoRenderRequest::cpu_bgra_compatibility(false), input);
+        let output = pipeline.render_frame(
+            VideoRenderRequest::cpu_bgra_compatibility(false),
+            input,
+            &mut crate::render::gpu::create_noop_renderer(),
+        );
 
         assert_eq!(output.pixel_format(), PixelFormatCategory::Bgra8);
         assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
@@ -504,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn d3d11_presenter_profile_resolves_to_d3d11_bgra_targets() {
+    fn d3d11_presenter_profile_resolves_to_gpu_bgra_targets() {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(123_000);
 
@@ -517,7 +509,7 @@ mod tests {
         );
         assert_eq!(
             resolved.presentation_surface_kind,
-            VideoSurfaceKind::D3d11Texture2D
+            VideoSurfaceKind::GpuTexture
         );
     }
 
@@ -561,7 +553,11 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let frames = vec![decoded_frame(0), decoded_frame(33_000)];
 
-        let batch = pipeline.render_frames(VideoRenderRequest::d3d11_bgra_presenter(false), frames);
+        let batch = pipeline.render_frames(
+            VideoRenderRequest::d3d11_bgra_presenter(false),
+            frames,
+            &mut crate::render::gpu::create_noop_renderer(),
+        );
 
         assert_eq!(batch.frames.len(), 2);
         assert_eq!(
@@ -581,8 +577,11 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let frames = vec![rgba_frame(0)];
 
-        let batch =
-            pipeline.render_frames(VideoRenderRequest::cpu_bgra_compatibility(false), frames);
+        let batch = pipeline.render_frames(
+            VideoRenderRequest::cpu_bgra_compatibility(false),
+            frames,
+            &mut crate::render::gpu::create_noop_renderer(),
+        );
 
         assert_eq!(batch.frames.len(), 1);
         assert_eq!(batch.frames[0].pixel_format(), PixelFormatCategory::Bgra8);

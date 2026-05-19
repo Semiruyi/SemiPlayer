@@ -14,6 +14,7 @@ use crate::core::player::sync_worker::SyncWorkerHandle;
 use crate::core::player::video_sync::VideoSyncState;
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::core::scheduler::VideoScheduler;
+use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
 use crate::util::time::MediaTimeUs;
 
@@ -198,25 +199,16 @@ pub struct SemiPlayerHandle {
     pub(crate) render: RenderService,
     pub(crate) runtime: PlayerRuntime,
     pub(crate) video_sync: VideoSyncState,
-    #[cfg(windows)]
-    pub(crate) d3d11_device: Option<crate::platform::windows::D3d11SharedDevice>,
+    pub(crate) gpu_device: Option<Arc<dyn GpuDevice>>,
 }
 
 impl SemiPlayerHandle {
     pub fn new() -> Self {
-        #[cfg(windows)]
-        let d3d11_device = crate::platform::windows::D3d11SharedDevice::new().ok();
-
-        #[cfg(windows)]
-        let render = match &d3d11_device {
-            Some(d3d11) => RenderService::with_d3d11_device(
-                d3d11.device().clone(),
-                d3d11.device_context().clone(),
-            ),
+        let gpu_device = crate::render::gpu::create_default_device().ok();
+        let render = match &gpu_device {
+            Some(device) => RenderService::from_device(device.as_ref()),
             None => RenderService::new(),
         };
-        #[cfg(not(windows))]
-        let render = RenderService::new();
 
         Self {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
@@ -238,8 +230,7 @@ impl SemiPlayerHandle {
             render,
             runtime: PlayerRuntime::new(),
             video_sync: VideoSyncState::default(),
-            #[cfg(windows)]
-            d3d11_device,
+            gpu_device,
         }
     }
 

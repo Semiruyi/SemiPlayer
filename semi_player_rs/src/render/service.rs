@@ -1,17 +1,26 @@
-use crate::render::backends::d3d11::{D3d11Renderer, D3d11RendererStateSnapshot};
-use crate::render::core::frame::{DecodedVideoFrame, VideoFrame};
+use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
 use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPipeline, VideoRenderRequest};
+use crate::render::gpu::{GpuDevice, GpuRenderer, GpuRendererSnapshot, NoopGpuRenderer};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(dead_code)]
 pub struct RenderServiceSnapshot {
-    pub d3d11_renderer: D3d11RendererStateSnapshot,
+    pub renderer: GpuRendererSnapshot,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct RenderService {
     pipeline: VideoRenderPipeline,
-    d3d11_renderer: D3d11Renderer,
+    renderer: Box<dyn GpuRenderer>,
+}
+
+impl Default for RenderService {
+    fn default() -> Self {
+        Self {
+            pipeline: VideoRenderPipeline::new(),
+            renderer: Box::new(NoopGpuRenderer),
+        }
+    }
 }
 
 impl RenderService {
@@ -19,19 +28,10 @@ impl RenderService {
         Self::default()
     }
 
-    #[cfg(windows)]
-    pub fn with_d3d11_device(
-        device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
-        device_context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
-    ) -> Self {
-        use crate::render::backends::d3d11::D3d11RendererConfig;
+    pub fn from_device(device: &dyn GpuDevice) -> Self {
         Self {
             pipeline: VideoRenderPipeline::new(),
-            d3d11_renderer: D3d11Renderer::with_device(
-                D3d11RendererConfig::default(),
-                device,
-                device_context,
-            ),
+            renderer: device.create_renderer(),
         }
     }
 
@@ -41,7 +41,7 @@ impl RenderService {
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
     ) -> VideoRenderBatch {
         self.pipeline
-            .render_frames_with_d3d11_renderer(request, frames, &mut self.d3d11_renderer)
+            .render_frames(request, frames, &mut self.renderer)
     }
 
     #[allow(dead_code)]
@@ -49,15 +49,15 @@ impl RenderService {
         &mut self,
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
-    ) -> VideoFrame {
+    ) -> PresentationFrame {
         self.pipeline
-            .render_frame_with_d3d11_renderer(request, frame, &mut self.d3d11_renderer)
+            .render_frame(request, frame, &mut self.renderer)
     }
 
     #[allow(dead_code)]
     pub fn snapshot(&self) -> RenderServiceSnapshot {
         RenderServiceSnapshot {
-            d3d11_renderer: self.d3d11_renderer.snapshot(),
+            renderer: self.renderer.snapshot(),
         }
     }
 }
@@ -71,8 +71,9 @@ mod tests {
         PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
     };
     use crate::render::core::pipeline::VideoRenderRequest;
+    use crate::render::gpu::GpuTextureData;
 
-    fn d3d11_frame(pixel_format: PixelFormatCategory) -> VideoFrame {
+    fn gpu_frame(pixel_format: PixelFormatCategory) -> VideoFrame {
         VideoFrame {
             pts_us: 0,
             duration_us: Some(33_000),
@@ -80,8 +81,15 @@ mod tests {
             height: 1080,
             is_key_frame: false,
             surface: Arc::new(
-                VideoSurface::new_d3d11_texture_2d(pixel_format, 0x1234, None, 0)
-                    .with_color_info(VideoColorInfo::default()),
+                VideoSurface::new_gpu_texture(
+                    pixel_format,
+                    GpuTextureData::D3d11 {
+                        texture_ptr: 0x1234,
+                        shared_handle: None,
+                        array_slice: 0,
+                    },
+                )
+                .with_color_info(VideoColorInfo::default()),
             ),
         }
     }
@@ -98,12 +106,12 @@ mod tests {
     }
 
     #[test]
-    fn render_service_keeps_d3d11_renderer_state_across_calls() {
+    fn render_service_uses_noop_renderer_without_device() {
         let mut render = RenderService::new();
 
         let _ = render.render_frame(
             VideoRenderRequest::d3d11_bgra_presenter(false),
-            d3d11_frame(PixelFormatCategory::Nv12),
+            gpu_frame(PixelFormatCategory::Nv12),
         );
         let _ = render.render_frame(
             VideoRenderRequest::d3d11_bgra_presenter(false),
@@ -113,11 +121,10 @@ mod tests {
         assert_eq!(
             render.snapshot(),
             RenderServiceSnapshot {
-                d3d11_renderer: crate::render::backends::d3d11::D3d11RendererStateSnapshot {
-                    render_attempts: 2,
+                renderer: crate::render::gpu::GpuRendererSnapshot {
+                    render_attempts: 0,
                     successful_renders: 0,
-                    backend_unavailable_errors: 1,
-                    output_pool_hint: 0,
+                    backend_unavailable_errors: 0,
                 },
             }
         );

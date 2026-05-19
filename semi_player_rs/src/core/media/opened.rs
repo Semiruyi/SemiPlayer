@@ -11,7 +11,6 @@ use ffmpeg_next::{format, frame, Packet, Rational, Rescale};
 
 use crate::audio::core::frame::AudioFrame;
 use crate::audio::core::resampler::NormalizedAudioResampler;
-use crate::render::backends::d3d11::D3d11TextureSurfaceDesc;
 use crate::render::core::frame::{
     DecodedVideoFrame, PixelFormatCategory, VideoColorInfo, VideoColorPrimaries, VideoColorRange,
     VideoFrame, VideoMatrixCoefficients, VideoSurface, VideoTransferCharacteristic,
@@ -1082,13 +1081,7 @@ fn map_d3d11_video_frame(
 
     let array_slice = unsafe { (*av_frame).data[1] as usize as u32 };
     let pixel_format = d3d11_hw_sw_format(av_frame).unwrap_or(PixelFormatCategory::Nv12);
-    let desc = D3d11TextureSurfaceDesc {
-        texture_ptr,
-        shared_handle: None,
-        array_slice,
-        pixel_format,
-        color_info: video_color_info_from_av_frame(av_frame),
-    };
+    let color_info = video_color_info_from_av_frame(av_frame);
 
     Some(VideoFrame {
         pts_us,
@@ -1096,7 +1089,17 @@ fn map_d3d11_video_frame(
         width: frame.width(),
         height: frame.height(),
         is_key_frame: frame.is_key(),
-        surface: Arc::new(desc.into_surface()),
+        surface: Arc::new(
+            VideoSurface::new_gpu_texture(
+                pixel_format,
+                crate::render::gpu::GpuTextureData::D3d11 {
+                    texture_ptr,
+                    shared_handle: None,
+                    array_slice,
+                },
+            )
+            .with_color_info(color_info),
+        ),
     })
 }
 

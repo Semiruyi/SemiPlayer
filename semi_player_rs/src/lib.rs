@@ -213,7 +213,7 @@ fn build_playback_snapshot(player: &SemiPlayerHandle) -> SemiPlaybackSnapshot {
         .map(|frame| {
             let surface_kind = match &frame.surface.storage {
                 VideoSurfaceStorage::CpuPacked { .. } => SemiVideoSurfaceKind::CpuPacked,
-                VideoSurfaceStorage::D3d11Texture2D { .. } => SemiVideoSurfaceKind::D3d11Texture2D,
+                VideoSurfaceStorage::GpuTexture(_) => SemiVideoSurfaceKind::D3d11Texture2D,
             };
             (surface_kind.as_raw(), frame.pixel_format().as_raw())
         })
@@ -413,18 +413,21 @@ fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
 }
 
 fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
+    use crate::render::gpu::GpuTextureData;
     let (kind, texture_ptr, shared_handle, array_slice) = match &frame.surface.storage {
         VideoSurfaceStorage::CpuPacked { .. } => (SemiVideoSurfaceKind::CpuPacked, 0, 0, 0),
-        VideoSurfaceStorage::D3d11Texture2D {
-            texture_ptr,
-            shared_handle,
-            array_slice,
-        } => (
-            SemiVideoSurfaceKind::D3d11Texture2D,
-            *texture_ptr,
-            shared_handle.unwrap_or(0),
-            *array_slice,
-        ),
+        VideoSurfaceStorage::GpuTexture(data) => match data {
+            GpuTextureData::D3d11 {
+                texture_ptr,
+                shared_handle,
+                array_slice,
+            } => (
+                SemiVideoSurfaceKind::D3d11Texture2D,
+                *texture_ptr,
+                shared_handle.unwrap_or(0),
+                *array_slice,
+            ),
+        },
     };
 
     SemiVideoSurfaceDesc {
@@ -523,17 +526,10 @@ pub extern "C" fn semi_player_open(
     };
 
     let hw_device_ctx = with_player_locked(player, |player| {
-        #[cfg(windows)]
-        {
-            player
-                .d3d11_device
-                .as_ref()
-                .and_then(|device| device.create_ffmpeg_hw_device_ctx().ok())
-        }
-        #[cfg(not(windows))]
-        {
-            None
-        }
+        player
+            .gpu_device
+            .as_ref()
+            .and_then(|device| device.create_ffmpeg_hw_device_ctx().ok())
     })
     .unwrap_or(None);
 

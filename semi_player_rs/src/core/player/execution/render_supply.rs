@@ -151,8 +151,11 @@ mod tests {
     }
 
     #[test]
-    fn cpu_bgra_compatibility_marks_transform_need_for_d3d11_input() {
+    fn gpu_texture_with_passthrough_profile_does_not_attempt_transform() {
         let mut player = SemiPlayerHandle::new();
+        player.set_video_presentation_profile(
+            crate::render::core::pipeline::PresentationTargetProfile::Passthrough,
+        );
         player.runtime.push_decoded_video_frame(VideoFrame {
             pts_us: 0,
             duration_us: Some(33_000),
@@ -174,9 +177,9 @@ mod tests {
             RenderSupplyResult {
                 rendered_frames: 1,
                 passthrough_frames: 0,
-                passthrough_with_subtitle_intent_frames: 0,
-                requires_transform_frames: 1,
-                fallback_passthrough_frames: 1,
+                passthrough_with_subtitle_intent_frames: 1,
+                requires_transform_frames: 0,
+                fallback_passthrough_frames: 0,
             }
         );
         assert_eq!(player.runtime.presentation_video_queue_len(), 1);

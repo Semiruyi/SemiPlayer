@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::render::gpu::GpuTextureData;
 use crate::util::time::MediaTimeUs;
 
 #[repr(u32)]
@@ -76,7 +77,7 @@ pub struct VideoColorInfo {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VideoSurfaceKind {
     CpuPacked,
-    D3d11Texture2D,
+    GpuTexture,
 }
 
 #[derive(Clone, Debug)]
@@ -86,15 +87,7 @@ pub enum VideoSurfaceStorage {
         stride: usize,
         data: Vec<u8>,
     },
-    // `texture_ptr` stores a raw `ID3D11Texture2D*`.
-    // The decode or render backend owns that resource and must keep it alive for the lifetime
-    // of the `VideoFrame` carrying this surface.
-    // `array_slice` identifies the texture slice/subresource that contains the video frame.
-    D3d11Texture2D {
-        texture_ptr: u64,
-        shared_handle: Option<u64>,
-        array_slice: u32,
-    },
+    GpuTexture(GpuTextureData),
 }
 
 #[derive(Clone, Debug)]
@@ -113,6 +106,17 @@ impl VideoSurface {
         }
     }
 
+    pub fn new_gpu_texture(
+        pixel_format: PixelFormatCategory,
+        gpu_data: GpuTextureData,
+    ) -> Self {
+        Self {
+            pixel_format,
+            color_info: VideoColorInfo::default(),
+            storage: VideoSurfaceStorage::GpuTexture(gpu_data),
+        }
+    }
+
     #[allow(dead_code)]
     pub fn new_d3d11_texture_2d(
         pixel_format: PixelFormatCategory,
@@ -123,11 +127,11 @@ impl VideoSurface {
         Self {
             pixel_format,
             color_info: VideoColorInfo::default(),
-            storage: VideoSurfaceStorage::D3d11Texture2D {
+            storage: VideoSurfaceStorage::GpuTexture(GpuTextureData::D3d11 {
                 texture_ptr,
                 shared_handle,
                 array_slice,
-            },
+            }),
         }
     }
 
@@ -139,28 +143,35 @@ impl VideoSurface {
     pub fn stride(&self) -> usize {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { stride, .. } => *stride,
-            VideoSurfaceStorage::D3d11Texture2D { .. } => 0,
+            VideoSurfaceStorage::GpuTexture(_) => 0,
         }
     }
 
     pub fn kind(&self) -> VideoSurfaceKind {
         match self.storage {
             VideoSurfaceStorage::CpuPacked { .. } => VideoSurfaceKind::CpuPacked,
-            VideoSurfaceStorage::D3d11Texture2D { .. } => VideoSurfaceKind::D3d11Texture2D,
+            VideoSurfaceStorage::GpuTexture(_) => VideoSurfaceKind::GpuTexture,
         }
     }
 
     pub fn byte_len(&self) -> usize {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { data, .. } => data.len(),
-            VideoSurfaceStorage::D3d11Texture2D { .. } => 0,
+            VideoSurfaceStorage::GpuTexture(_) => 0,
         }
     }
 
     pub fn cpu_packed_data(&self) -> Option<&[u8]> {
         match &self.storage {
             VideoSurfaceStorage::CpuPacked { data, .. } => Some(data.as_slice()),
-            VideoSurfaceStorage::D3d11Texture2D { .. } => None,
+            VideoSurfaceStorage::GpuTexture(_) => None,
+        }
+    }
+
+    pub fn gpu_texture_data(&self) -> Option<&GpuTextureData> {
+        match &self.storage {
+            VideoSurfaceStorage::CpuPacked { .. } => None,
+            VideoSurfaceStorage::GpuTexture(data) => Some(data),
         }
     }
 
