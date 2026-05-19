@@ -125,15 +125,13 @@ pub(crate) fn finish_playback_advance(
             player
                 .audio_coord_access()
                 .sync_output_started_state(plan.state);
+            player.audio_coord_access().play_clock();
 
             let device_timing = player.audio_coord_access().playback_timing_snapshot();
-            if device_timing.is_some() {
-                player.audio_coord_access().play_clock();
-                player
-                    .audio_coord_access()
-                    .update_clock_from_device(device_timing);
-                let _ = player.release_audio_gate_for_seek_recovery_access();
+            if let Some(timing) = device_timing {
+                player.audio_coord_access().update_clock_from_device(Some(timing));
             }
+            let _ = player.release_audio_gate_for_seek_recovery_access();
         }
     } else {
         player
