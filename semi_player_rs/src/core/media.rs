@@ -12,6 +12,12 @@ mod output;
 mod probe;
 #[path = "media/session.rs"]
 mod session_impl;
+#[path = "media/session_decode.rs"]
+mod session_decode;
+#[path = "media/session_lifecycle.rs"]
+mod session_lifecycle;
+#[path = "media/session_shared.rs"]
+mod session_shared;
 #[path = "media/video_decode.rs"]
 mod video_decode;
 
@@ -35,10 +41,10 @@ pub mod decode {
 
 pub mod session {
     #[allow(unused_imports)]
-    pub use super::session_impl::{
-        open_media_with_hw_device_ctx, MediaSession, OpenedMedia, SharedMediaSession,
-        SharedOpenedMedia,
-    };
+    pub use super::session_impl::{open_media_with_hw_device_ctx, MediaSession, OpenedMedia};
+    #[allow(unused_imports)]
+    pub use super::session_shared::SharedMediaSession;
+    pub use super::session_impl::SharedOpenedMedia;
 }
 
 #[allow(unused_imports)]
