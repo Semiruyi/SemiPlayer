@@ -699,6 +699,8 @@ Target:
 - `player` or a lower capability provider asks platform/render/decode capability layers for media-open requirements
 - API just says "open this media"
 
+Status: mostly done. FFI no longer assembles backend-specific media-open wiring. Player-side open request assembly exists.
+
 ## 2. Split decode into requirements, planner, executor, mapper
 
 Current smell:
@@ -711,6 +713,8 @@ Target:
 - concrete backends become local
 - frame mapping becomes separate from open/pump logic
 
+Status: done. Decode is now split into `policy.rs`, `decoder/planner.rs`, `decoder/open.rs`, `decoder/pump.rs`, `decoder/map.rs`.
+
 ## 3. Split D3D11 backend into device, interop, renderer
 
 Current smell:
@@ -721,6 +725,8 @@ Target:
 
 - easier future backend growth
 - clearer decode/render boundary
+
+Status: done. D3D11 backend is now `render/gpu/d3d11/device.rs`, `interop.rs`, `renderer.rs`.
 
 ## 4. Reduce backend detail in player aggregate
 
@@ -733,6 +739,8 @@ Target:
 - `player` owns preferences and services
 - lower layers own backend resolution
 
+Status: in progress. Player aggregate still owns some backend-aware wiring, but render and decode backends are increasingly behind trait boundaries.
+
 ## 5. Keep scheduler as the only global wake-policy owner
 
 Current smell:
@@ -743,6 +751,8 @@ Target:
 
 - workers execute bounded stage work
 - scheduler owns wake reasoning
+
+Status: in progress. Workers are increasingly bounded, but some local scheduling flavor remains.
 
 ## Refactor Sequence
 
@@ -762,8 +772,13 @@ The codebase has already completed a meaningful part of the target shape.
   - decode policy, planner, open, pump, and frame mapping are no longer fused into one implementation body
   - session code now has a real directory boundary
 - Phase 3 render backend split:
-  - D3D11 device, interop, and renderer responsibilities now live in separate files
+  - D3D11 device, interop, and renderer responsibilities live in separate files
   - top-level render code talks in `RenderBackend`
+  - D3D11VA hardware decode is live with NV12/P010 GPU surface output
+  - NV12 to BGRA conversion works via GPU staging + CPU swscale
+  - render service with pipeline planning is functional (passthrough, passthrough with subtitle intent, requires transform)
+  - NV12 decoded frames are copied to player-owned GPU textures before entering runtime
+  - render worker thread exists
 
 ### In progress
 
@@ -776,6 +791,7 @@ The codebase has already completed a meaningful part of the target shape.
 
 - Phase 4 is not fully done until more of the remaining open-path assembly and compatibility wrappers collapse onto the request-shaped path.
 - Phase 5 preference unification is still a cleanup and naming pass, not yet a finished sweep.
+- GPU-native NV12→BGRA conversion via `libplacebo` is the next concrete render milestone (replacing the current CPU swscale path).
 
 ## Phase 1: Model cleanup without behavior changes
 

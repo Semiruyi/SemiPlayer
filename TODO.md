@@ -21,7 +21,6 @@ Already done:
 - `.NET` smoke host loads Rust and FFmpeg DLLs successfully
 - media open / probe / decode path is real
 - normalized media time is in microseconds
-- video frames are normalized to BGRA for current host copy-out
 - audio output path exists through `cpal`
 - audio clock uses backend playback timing when available
 - video scheduler decisions exist
@@ -34,15 +33,21 @@ Already done:
 - decode-to-sync wake behavior has started tightening to avoid unnecessary sync wakeups on steady audio refill
 - FFI and worker mutations are serialized through the player handle
 - current seek diagnostics are strong enough to justify starting the video hardware-decode track
+- D3D11VA hardware video decode is live with NV12/P010 GPU surface output
+- D3D11 render backend split into device, interop, and renderer submodules
+- render service with pipeline planning distinguishes passthrough vs transform
+- NV12 decoded frames are copied to player-owned GPU textures before entering runtime
+- NV12 to BGRA conversion works via GPU staging + CPU swscale path
+- render worker thread exists and runs render supply
+- `VideoSurface` abstraction supports both `GpuTexture` and `CpuPacked` storage
+- decode output flows through explicit render-service entry point before entering presentation queue
 
 Not done yet:
 
 - lock-independent decode pipeline beyond the shared player handle lock
-- real render backend / output surface abstraction
-- D3D11 hardware video decode and decoder-native surface delivery
-- player-owned video-render stage for decoder-surface to presentation-surface conversion
-- presentation-oriented host ABI
-- WPF presenter adapter for presentation-friendly GPU video frames
+- GPU-native NV12 to BGRA conversion (currently GPU staging + CPU swscale; next step is libplacebo GPU render)
+- presentation-oriented host ABI for GPU-native presentation surfaces
+- WPF presenter adapter for presentation-friendly GPU video frames without CPU readback
 - subtitle pipeline and libass integration
 - real host adapter projects beyond the smoke app
 - finer-grained worker/locking model
@@ -178,106 +183,78 @@ Current conclusion:
 
 ### P1.1 Define render output surface abstraction
 
-Status: in progress; `VideoSurface` now backs `VideoFrame`
+Status: done
 
-Tasks:
+Completed:
 
-- split timed video-frame metadata from pixel/surface storage
-- define portable render surface concepts in `render/core/`
-- support at least:
-  - CPU BGRA fallback surfaces
-  - D3D11 texture surfaces
-- keep runtime scheduling based on timed frames, not a naked "latest texture"
-- define what the core hands to the host/backend
-- avoid making BGRA copy-out the only long-term model
+- timed video-frame metadata is split from pixel/surface storage in `VideoFrame` / `VideoSurface`
+- portable render surface concepts exist in `render/core/`
+- `VideoSurfaceStorage` supports `GpuTexture` and `CpuPacked` variants
+- `PixelFormatCategory` covers NV12, P010, Bgra8, and others
+- runtime scheduling is based on timed frames, not a naked "latest texture"
 
 ### P1.2 Refit the current software path onto the new surface model
 
-Status: in progress; CPU BGRA path now runs through `VideoSurface`
+Status: done
 
-Tasks:
+Completed:
 
-- keep the current software decode path working under the new `VideoSurface` model
-- keep `semi_player_copy_current_video_frame_bgra(...)` as a compatibility/debug path
-- limit BGRA copy-out to CPU-backed surfaces instead of treating it as the universal output path
-- preserve current sync, seek-recovery, and drop/present scheduling behavior while the frame type changes
+- the current software decode path works under the `VideoSurface` model
+- `semi_player_copy_current_video_frame_bgra(...)` exists as a compatibility/debug path
+- BGRA copy-out is limited to CPU-backed surfaces
+- sync, seek-recovery, and drop/present scheduling work with the new frame type
 
 ### P1.3 Implement first real Windows video backend
 
-Status: started at the type/ABI layer; render-stage split now needs to be made explicit
+Status: hardware decode and GPU surface delivery working; next step is GPU-native color conversion
 
-Tasks:
+Completed:
 
-- establish `render/backends/d3d11/`
-- create device/resources for hardware video decode
-- configure FFmpeg hardware decode against D3D11
-- output decoder-native GPU video surfaces
-- prefer native hardware formats such as:
-  - `NV12`
-  - `P010`
-- keep a software decode fallback for unsupported media/devices
-- keep backend details out of portable core contracts
-- keep the current D3D11 render backend skeleton growing around explicit:
-  - input request extraction
-  - output target description
-  - render-plan selection
-  - renderer/context ownership
+- `render/gpu/d3d11/` is established with device, interop, and renderer submodules
+- D3D11 device and device context creation work
+- FFmpeg D3D11VA hardware decode is configured and active
+- decoder-native GPU video surfaces are produced (NV12, P010)
+- software decode fallback works for unsupported media/devices
+- backend details stay behind the `RenderBackend` trait
+- interop module wraps D3D11 device for FFmpeg and copies frames to owned textures
+
+Remaining for GPU-native conversion:
+
+- integrate `libplacebo` for GPU-side NV12/P010 to BGRA conversion
+- replace the current GPU staging + CPU swscale path with a GPU render path
+- keep CPU BGRA as fallback
 
 ### P1.4 Add a real player-owned video-render stage
 
-Status: in progress; explicit render-service boundary is now landed, first implementation remains synchronous passthrough
+Status: render service and pipeline planning are landed and functional; current NV12 to BGRA conversion uses GPU staging + CPU swscale
 
-Tasks:
+Completed:
 
-- introduce explicit `DecodedVideoFrame` / `DecoderSurface` concepts where needed
-- introduce explicit `PresentationFrame` / `RenderSurface` concepts where needed
-- keep runtime scheduling and sync centered on presentation frames
-- keep the first render-service implementation synchronous passthrough for stability
-- keep decode-buffer accounting distinct from presentation-ready buffer accounting
-- move frame transformation responsibility into render supply instead of runtime queue helpers
-- move actual frame transformation ownership into `render/core/` pipeline code
-- route render-context inputs such as output preference and subtitle visibility through the pipeline
-- route presentation-surface policy through the pipeline instead of leaving it implicit in callers
-- define stable presentation target profiles for current host paths before real conversion lands
-- make transform-required requests explicit so real conversion work can land branch by branch
-- keep render-stage passthrough-vs-transform demand visible in diagnostics while implementation catches up
-- keep the current default render target aligned with the existing CPU-BGRA compatibility path until
-  a GPU presenter contract takes over
-- keep presentation target selection player-owned so hosts can switch contracts explicitly
-- keep smoke able to switch presentation profiles for render-path diagnostics
-- distinguish true passthrough from temporary fallback-passthrough in render diagnostics
-- keep the D3D11 presenter branch on an explicit backend execution path while real GPU work lands
-- keep color conversion inside the player, not the host
-- make the first D3D11 render path handle:
-  - decoder-native input such as `NV12`
-  - presentation-friendly RGB output such as `BGRA`
-- move toward explicit ownership:
+- `DecodedVideoFrame` and `PresentationFrame` type roles exist in the codebase
+- runtime scheduling and sync are centered on presentation frames
+- decode-buffer accounting is distinct from presentation-ready buffer accounting
+- frame transformation responsibility is in render supply and render service
+- render-context inputs (output preference, subtitle visibility) route through the pipeline
+- presentation-surface policy routes through the pipeline
+- presentation target profiles exist (e.g., `gpu_bgra_presenter`, `cpu_bgra_copy`)
+- render-core planning distinguishes passthrough, passthrough with subtitle intent, and requires transform
+- render-stage passthrough-vs-transform demand is visible in diagnostics
+- presentation target selection is player-owned
+- the D3D11 render path handles:
+  - decoder-native NV12 input from D3D11VA
+  - BGRA output via GPU staging texture + CPU swscale conversion
+- ownership is explicit:
   - player owns render
   - render owns pipeline selection and render-context state
   - pipelines use backend execution
-- make render service the owner of future multi-step render orchestration:
-  - video render
-  - subtitle render
-  - composition
-  - overlays / OSD
-- keep the ownership split explicit:
-  - player/sync chooses the playback time
-  - render service decides how that time becomes a final presentation frame
-- treat process-global renderer state as transitional scaffolding, not the target architecture
-- reserve the same stage for future:
-  - scaling
-  - subtitle composition
-  - OSD / overlays
-- follow the first-phase integration sequence documented in:
+
+Remaining:
+
+- replace CPU swscale with `libplacebo` GPU NV12→BGRA conversion
+- output D3D11 BGRA presentation surfaces that stay on GPU until host readback or direct presentation
+- follow the integration plan documented in:
   - [docs/dev/d3d11-libplacebo-render.md](c:/y-s/project/Semi/docs/dev/d3d11-libplacebo-render.md)
   - [docs/dev/d3d11-libplacebo-integration-plan.md](c:/y-s/project/Semi/docs/dev/d3d11-libplacebo-integration-plan.md)
-- before downloading or wiring `libplacebo`, first:
-  - pin D3D11 texture lifetime and ownership rules
-  - define where future video color metadata lives
-  - make the D3D11 backend stateful instead of per-frame scratch construction
-- only after that:
-  - choose and document the Windows `libplacebo` acquisition/link strategy
-  - implement the first narrow `D3D11 NV12 -> D3D11 BGRA` execution path
 
 ### P1.5 Define the presentation-oriented host ABI
 
@@ -424,11 +401,11 @@ Do these next, in order:
 1. keep worker-vs-host sync measurement as a regression tool
 2. finish the current round of sync/decode wake-policy tightening
 3. improve seek responsiveness and reduce seek-path cost
-4. start the timed video-surface abstraction
-5. refit the current software path onto that abstraction
-6. split decoder-native surfaces from presentation-friendly render surfaces
-7. replace synchronous decoded-to-presentation promotion with an explicit render-service boundary
-8. keep that first render stage synchronous, then move sync diagnostics fully onto presentation semantics
-9. start the first real Windows D3D11 video backend and presentation-oriented host ABI
+4. integrate `libplacebo` for GPU-native NV12/P010 to BGRA conversion (replacing CPU swscale path)
+5. pin D3D11 texture lifetime and ownership rules for `libplacebo` integration
+6. choose and document the Windows `libplacebo` acquisition/link strategy
+7. implement the first narrow `D3D11 NV12 -> D3D11 BGRA` GPU render path
+8. define presentation-oriented host ABI for GPU-native presentation surfaces
+9. build the first WPF GPU presenter adapter
 10. reduce seek-related coupling to the shared player lock
 11. integrate subtitle timing into the worker-owned playback/render model

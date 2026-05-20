@@ -44,26 +44,31 @@ CPU BGRA when compatibility requires it.
 
 Relevant current files:
 
-- [`semi_player_rs/src/core/media/opened.rs`](../../semi_player_rs/src/core/media/opened.rs)
+- [`semi_player_rs/src/decode/session/mod.rs`](../../semi_player_rs/src/decode/session/mod.rs)
 - [`semi_player_rs/src/render/core/frame.rs`](../../semi_player_rs/src/render/core/frame.rs)
 - [`semi_player_rs/src/render/core/pipeline.rs`](../../semi_player_rs/src/render/core/pipeline.rs)
-- [`semi_player_rs/src/render/backends/d3d11.rs`](../../semi_player_rs/src/render/backends/d3d11.rs)
-- [`semi_player_rs/src/core/player/execution/render_supply.rs`](../../semi_player_rs/src/core/player/execution/render_supply.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/mod.rs`](../../semi_player_rs/src/render/gpu/d3d11.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/device.rs`](../../semi_player_rs/src/render/gpu/d3d11/device.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/interop.rs`](../../semi_player_rs/src/render/gpu/d3d11/interop.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/renderer.rs`](../../semi_player_rs/src/render/gpu/d3d11/renderer.rs)
+- [`semi_player_rs/src/render/service.rs`](../../semi_player_rs/src/render/service.rs)
+- [`semi_player_rs/src/player/execution/render_supply.rs`](../../semi_player_rs/src/player/execution/render_supply.rs)
 
 Important current implementation facts:
 
-- FFmpeg D3D11VA decode probing is already present
-- decoded hardware frames can already be classified as `PixelFormatCategory::Nv12`
-- the core frame model already supports `VideoSurfaceStorage::D3d11Texture2D`
-- render requests already express a `D3d11BgraPresenter` target profile
-- render-core planning already distinguishes:
+- FFmpeg D3D11VA hardware decode is live and produces NV12/P010 GPU surfaces
+- decoded hardware frames are classified as `PixelFormatCategory::Nv12` or `PixelFormatCategory::P010`
+- the core frame model supports `VideoSurfaceStorage::GpuTexture` and `VideoSurfaceStorage::CpuPacked`
+- render requests express target profiles such as `gpu_bgra_presenter` and `cpu_bgra_copy`
+- render-core planning distinguishes:
   - passthrough
   - passthrough with subtitle intent
   - requires transform
-- the D3D11 backend already has an explicit `Nv12ToBgraTexture` render-plan kind
-- that D3D11 transform path is still a skeleton and currently reports backend unavailable
+- the D3D11 backend executes real NV12 to BGRA conversion via GPU staging + CPU swscale
+- interop module wraps the D3D11 device for FFmpeg and copies frames to player-owned textures
+- a render worker thread runs render supply
 
-So the architecture seam for a real GPU render stage already exists in code.
+The architecture seam for GPU render is real and functional. The next step is replacing CPU swscale with `libplacebo` GPU-side conversion.
 
 ## 3. Why `libplacebo`
 
@@ -332,17 +337,14 @@ Recommended implementation order:
 
 The next code changes should likely touch:
 
-- `semi_player_rs/src/render/backends/d3d11.rs`
-  - real backend state
-  - `libplacebo` binding/integration
-  - NV12 to BGRA execution
+- `semi_player_rs/src/render/gpu/d3d11/renderer.rs`
+  - replace CPU swscale with `libplacebo` GPU NV12→BGRA execution
+- `semi_player_rs/src/render/gpu/d3d11/interop.rs`
+  - may need `libplacebo` interop with existing D3D11 device
 - `semi_player_rs/src/render/core/frame.rs`
   - optional future color metadata extension
-- `semi_player_rs/src/core/media/opened.rs`
-  - preserve decode-native D3D11 outputs
-  - expose enough metadata for render
-- `semi_player_rs/src/core/player/execution/render_supply.rs`
-  - continue owning decoded-to-presentation promotion
+- `semi_player_rs/src/player/execution/render_supply.rs`
+  - continues owning decoded-to-presentation promotion
 
 The current synchronous `render_supply()` step is still a good place to land the first real render
 implementation before deciding whether the render stage needs its own worker.

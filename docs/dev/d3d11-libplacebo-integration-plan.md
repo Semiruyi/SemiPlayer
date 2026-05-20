@@ -69,8 +69,9 @@ Decide and document:
 Touch these files first:
 
 - [`semi_player_rs/src/render/core/frame.rs`](../../semi_player_rs/src/render/core/frame.rs)
-- [`semi_player_rs/src/render/backends/d3d11.rs`](../../semi_player_rs/src/render/backends/d3d11.rs)
-- [`semi_player_rs/src/core/media/opened.rs`](../../semi_player_rs/src/core/media/opened.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/renderer.rs`](../../semi_player_rs/src/render/gpu/d3d11/renderer.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/interop.rs`](../../semi_player_rs/src/render/gpu/d3d11/interop.rs)
+- [`semi_player_rs/src/decode/session/mod.rs`](../../semi_player_rs/src/decode/session/mod.rs)
 
 Recommended prep items:
 
@@ -111,8 +112,8 @@ Preferred long-lived state:
 
 ### 5.3 Files to shape
 
-- [`semi_player_rs/src/render/backends/d3d11.rs`](../../semi_player_rs/src/render/backends/d3d11.rs)
-- [`semi_player_rs/src/core/player/execution/render_supply.rs`](../../semi_player_rs/src/core/player/execution/render_supply.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/renderer.rs`](../../semi_player_rs/src/render/gpu/d3d11/renderer.rs)
+- [`semi_player_rs/src/player/execution/render_supply.rs`](../../semi_player_rs/src/player/execution/render_supply.rs)
 
 ### 5.4 Acceptance criteria
 
@@ -190,9 +191,9 @@ Keep other paths unchanged:
 
 ### 7.2 Files most likely to change
 
-- [`semi_player_rs/src/render/backends/d3d11.rs`](../../semi_player_rs/src/render/backends/d3d11.rs)
+- [`semi_player_rs/src/render/gpu/d3d11/renderer.rs`](../../semi_player_rs/src/render/gpu/d3d11/renderer.rs)
 - [`semi_player_rs/src/render/core/pipeline.rs`](../../semi_player_rs/src/render/core/pipeline.rs)
-- [`semi_player_rs/src/core/player/execution/render_supply.rs`](../../semi_player_rs/src/core/player/execution/render_supply.rs)
+- [`semi_player_rs/src/player/execution/render_supply.rs`](../../semi_player_rs/src/player/execution/render_supply.rs)
 
 ### 7.3 Success behavior
 

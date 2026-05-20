@@ -61,9 +61,13 @@ Already verified:
 - Rust build in `semi_player_rs`
 - C ABI interop through `.NET`
 - decoded audio/video queueing
-- BGRA frame copy-out to host
+- D3D11VA hardware video decode with NV12/P010 GPU surface output
+- NV12 to BGRA conversion via GPU staging + CPU swscale
+- CPU BGRA frame copy-out to host
 - CPAL-based audio output timing feedback
 - player-owned sync worker driving playback progression
+- player-owned decode worker and render worker
+- render service with pipeline planning (passthrough vs transform)
 - seek recovery now explicitly identifies software video decode as the dominant remaining seek cost
 
 Reference:
@@ -156,25 +160,34 @@ Current important areas:
 semi_player_rs/src/
   lib.rs                 C ABI shim
   api/                   public ABI-facing types and errors
-  core/
-    media/               FFmpeg-facing decode/probe/open logic
-    player/              runtime, sync, worker, scheduling
-  audio/                 audio clock, output control, backend glue
-  render/                frame types and scheduling decisions
-  subtitle/              reserved growth area
-  platform/              reserved platform-specific growth area
+  player/                runtime, sync, worker, scheduling, orchestration
+    orchestrator.rs      control plane (open/play/pause/seek)
+    handle.rs            aggregate root
+    runtime.rs           runtime queues and current frame state
+    execution/           decode supply, render supply, playback advance
+    worker/              decode worker, sync worker, render worker
+    diagnostics.rs       lock timing, seek instrumentation
+    access.rs            media-open request assembly
+    view.rs              read-only snapshots and FFI views
+  decode/                decode policy, planner, backends, session
+    policy.rs            decode preference and requirements
+    output.rs            decoded output model
+    decoder/             decoder open, pump, frame mapping, planner
+    session/             media session lifecycle, decode loop, shared access
+    video.rs             video decode backend and diagnostics
+  demux/                 media probing, packet reads, seek positioning, keyframe
+  render/                frame types, pipeline planning, backend execution
+    core/                portable frame/surface/scheduling contracts
+    pipelines/           render transformation strategies
+    gpu/                 GPU device abstraction and D3D11 backend
+      d3d11/             device, interop, renderer
+    service.rs           player-owned render subsystem entry point
+  audio/                 audio clock, output control, resampler, backend glue
+  sync/                  audio clock, video sync, video scheduler, scheduling hints
+  scheduler/             central scheduling decisions
+  subtitle/              subtitle model and ASS parsing
+  platform/              platform-specific capability providers
   util/                  shared helpers
-```
-
-Planned growth around rendering:
-
-```text
-render/
-  service/               player-owned render subsystem entry point
-  core/                  portable frame/surface/scheduling contracts
-  pipelines/             render transformation strategies
-  backends/
-    d3d11/               first Windows hardware video backend
 ```
 
 ## 8. Current Playback Lifecycle
@@ -260,19 +273,20 @@ Current incremental state of that split:
   - decoded-video queue
   - presentation-video queue
   - current presentation frame
-- decode output now flows through an explicit render-service entry point
-- the first render-service implementation is still synchronous passthrough:
+- decode output flows through an explicit render-service entry point
+- the render service is functional:
   - decode output is queued as decoded video
   - render supply forwards frames through a render-core pipeline entry point
-  - render supply now passes an explicit render request into that pipeline
+  - render supply passes an explicit render request into that pipeline
   - that request carries both pixel-format and presentation-surface preferences
-  - higher-level presentation target profiles can now map host intent onto those preferences
-  - render-core planning can now tell whether the request is true passthrough or already needs a
-    real transform step
-  - the current render-core pipeline still returns the same surface unchanged
+  - higher-level presentation target profiles map host intent onto those preferences
+  - render-core planning distinguishes passthrough, passthrough with subtitle intent, and requires transform
+  - the D3D11 backend executes real NV12 to BGRA conversion via GPU staging + CPU swscale
+  - the D3D11 backend also handles BGRA texture passthrough
+- a render worker thread exists and runs render supply
 
-That means the architecture boundary is now visible in code, even though the first render stage is
-not yet an independently scheduled service or worker lane.
+The architecture boundary is now visible and functional in code. The next step is replacing
+CPU swscale with `libplacebo` GPU-side NV12→BGRA conversion.
 
 ## 11. What Is Still Transitional
 
@@ -281,9 +295,9 @@ The current architecture is real, but not final.
 Transitional parts:
 
 - decode supply has been split logically from playback advancement, but still runs synchronously on the same execution lane
+- NV12 to BGRA conversion currently uses GPU staging + CPU swscale; `libplacebo` GPU-side conversion is the next step
 - CPU BGRA copy is still the main host frame-delivery path
-- render supply now exists as an explicit service boundary, but it still runs as synchronous passthrough
-- seek recovery is now explicit and keyframe-anchored diagnostics are in place, but reset/rebuild cost and post-target recovery cost are still being reduced
+- seek recovery is explicit and keyframe-anchored diagnostics are in place, but reset/rebuild cost and post-target recovery cost are still being reduced
 - subtitles are not yet integrated into the same playback worker model
 - one coarse lock still protects most mutable player state
 
@@ -299,7 +313,14 @@ This is treated as backend detail, not core architecture.
 
 ### Rendering
 
-Rendering backend design is still ahead of implementation.
+Rendering backend is now active with a D3D11 implementation.
+
+Current state:
+
+- D3D11VA hardware decode produces GPU NV12/P010 surfaces
+- D3D11 render backend handles NV12→BGRA via GPU staging + CPU swscale
+- render service with pipeline planning is functional
+- BGRA texture passthrough works for already-decoded BGRA input
 
 Long-term rule:
 
@@ -559,13 +580,12 @@ still allowing low-level diagnostics where needed.
 
 The next architectural steps should focus on:
 
-1. separating decode supply into a real dedicated execution path
-2. measuring worker-driven sync behavior objectively
-3. improving seek responsiveness with a real recovery-oriented seek model and hardware-backed video path
-4. defining the decode-surface / video-render / presenter split explicitly
-5. adding a real player-owned video-render stage
-6. integrating subtitle timing into that worker-owned playback/render model
-7. reducing coarse locking where safe
+1. integrating `libplacebo` for GPU-native NV12/P010 to BGRA color conversion
+2. replacing the CPU swscale conversion path with GPU render output
+3. defining the presentation-oriented host ABI for GPU-native surfaces
+4. building the first WPF GPU presenter adapter without CPU readback
+5. integrating subtitle timing into the worker-owned playback/render model
+6. reducing coarse locking where safe
 
 Reference:
 
