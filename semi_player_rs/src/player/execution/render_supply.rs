@@ -1,6 +1,6 @@
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
-use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderRequest, VideoRenderStats};
+use crate::render::core::planner::{VideoRenderBatch, VideoRenderRequest, VideoRenderStats};
 use crate::util::debug_trace::append_trace_line;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -146,7 +146,7 @@ mod tests {
     };
     use crate::player::handle::SemiPlayerHandle;
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
-    use crate::render::core::pipeline::VideoRenderRequest;
+    use crate::render::core::planner::VideoRenderRequest;
 
     fn decoded_frame(pts_us: i64) -> VideoFrame {
         VideoFrame {
@@ -222,7 +222,7 @@ mod tests {
     fn default_render_request_follows_player_profile() {
         let player = SemiPlayerHandle::new();
         player.set_video_presentation_intent(
-            crate::render::core::pipeline::PresentationIntent::GpuBgraPresenter,
+            crate::render::core::planner::PresentationIntent::GpuBgraPresenter,
         );
 
         let request = default_render_request(&player);
@@ -234,7 +234,7 @@ mod tests {
     fn gpu_texture_with_passthrough_profile_does_not_attempt_transform() {
         let mut player = SemiPlayerHandle::new();
         player.set_video_presentation_intent(
-            crate::render::core::pipeline::PresentationIntent::Passthrough,
+            crate::render::core::planner::PresentationIntent::Passthrough,
         );
         player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(VideoFrame {
             pts_us: 0,

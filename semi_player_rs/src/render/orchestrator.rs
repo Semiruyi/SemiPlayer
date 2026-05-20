@@ -4,26 +4,26 @@ use crate::render::core::converter::{
     ConversionRequest, FrameConverter, FrameConverterSnapshot, NoopFrameConverter,
 };
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
-use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPath, VideoRenderPipeline, VideoRenderRequest};
+use crate::render::core::planner::{VideoRenderBatch, VideoRenderPath, RenderPlanner, VideoRenderRequest};
 use crate::render::gpu::{RenderBackend, RenderBackendCapabilities};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(dead_code)]
-pub struct RenderServiceSnapshot {
+pub struct RenderOrchestratorSnapshot {
     pub converter: FrameConverterSnapshot,
     pub backend_capabilities: RenderBackendCapabilities,
 }
 
-pub struct RenderService {
-    pipeline: VideoRenderPipeline,
+pub struct RenderOrchestrator {
+    pipeline: RenderPlanner,
     converter: Box<dyn FrameConverter>,
     backend_capabilities: RenderBackendCapabilities,
     backend: Option<Arc<dyn RenderBackend>>,
 }
 
-impl std::fmt::Debug for RenderService {
+impl std::fmt::Debug for RenderOrchestrator {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderService")
+        f.debug_struct("RenderOrchestrator")
             .field("pipeline", &self.pipeline)
             .field("converter", &self.converter)
             .field("backend_capabilities", &self.backend_capabilities)
@@ -32,10 +32,10 @@ impl std::fmt::Debug for RenderService {
     }
 }
 
-impl Default for RenderService {
+impl Default for RenderOrchestrator {
     fn default() -> Self {
         Self {
-            pipeline: VideoRenderPipeline::new(),
+            pipeline: RenderPlanner::new(),
             converter: Box::new(NoopFrameConverter),
             backend_capabilities: RenderBackendCapabilities::default(),
             backend: None,
@@ -43,14 +43,14 @@ impl Default for RenderService {
     }
 }
 
-impl RenderService {
+impl RenderOrchestrator {
     pub fn new() -> Self {
         Self::default()
     }
 
     pub fn from_backend(backend: Arc<dyn RenderBackend>) -> Self {
         Self {
-            pipeline: VideoRenderPipeline::new(),
+            pipeline: RenderPlanner::new(),
             converter: backend.create_converter(),
             backend_capabilities: backend.capabilities(),
             backend: Some(backend),
@@ -130,8 +130,8 @@ impl RenderService {
     }
 
     #[allow(dead_code)]
-    pub fn snapshot(&self) -> RenderServiceSnapshot {
-        RenderServiceSnapshot {
+    pub fn snapshot(&self) -> RenderOrchestratorSnapshot {
+        RenderOrchestratorSnapshot {
             converter: self.converter.snapshot(),
             backend_capabilities: self.backend_capabilities,
         }
@@ -142,12 +142,12 @@ impl RenderService {
 mod tests {
     use std::sync::Arc;
 
-    use super::{RenderService, RenderServiceSnapshot};
+    use super::{RenderOrchestrator, RenderOrchestratorSnapshot};
     use crate::render::core::converter::FrameConverterSnapshot;
     use crate::render::core::frame::{
         PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
     };
-    use crate::render::core::pipeline::VideoRenderRequest;
+    use crate::render::core::planner::VideoRenderRequest;
     use crate::render::gpu::{GpuBackendKind, GpuTextureData, RenderBackendCapabilities};
 
     fn gpu_frame(pixel_format: PixelFormatCategory) -> VideoFrame {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn render_service_uses_noop_converter_without_device() {
-        let mut render = RenderService::new();
+        let mut render = RenderOrchestrator::new();
 
         let _ = render.render_frame(
             VideoRenderRequest::gpu_bgra_presenter(false),
@@ -193,7 +193,7 @@ mod tests {
 
         assert_eq!(
             render.snapshot(),
-            RenderServiceSnapshot {
+            RenderOrchestratorSnapshot {
                 converter: FrameConverterSnapshot::default(),
                 backend_capabilities: RenderBackendCapabilities::default(),
             }
@@ -204,7 +204,7 @@ mod tests {
     fn render_service_converts_rgba_to_bgra_via_noop_converter() {
         use crate::render::core::frame::VideoSurfaceKind;
 
-        let mut render = RenderService::new();
+        let mut render = RenderOrchestrator::new();
 
         let output = render.render_frame(
             VideoRenderRequest::cpu_bgra_compatibility(false),

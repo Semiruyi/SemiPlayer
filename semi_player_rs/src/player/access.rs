@@ -14,7 +14,7 @@ use crate::player::runtime::{
     RenderSupplyStatus, RuntimeSnapshot,
 };
 use crate::render::core::frame::PresentationFrame;
-use crate::render::service::RenderService;
+use crate::render::orchestrator::RenderOrchestrator;
 use crate::scheduler::snapshot::{LegacySchedulerInputs, SchedulerSnapshot};
 use crate::scheduler::types::StageId;
 use crate::sync::clock::AudioClock;
@@ -76,7 +76,7 @@ pub struct ControlAccess<'a> {
 
 /// Render-domain guard skeleton.
 pub struct RenderAccess<'a> {
-    pub render: &'a mut RenderService,
+    pub render: &'a mut RenderOrchestrator,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -538,7 +538,7 @@ impl ControlAccess<'_> {
 
     pub fn set_video_presentation_intent(
         &self,
-        intent: crate::render::core::pipeline::PresentationIntent,
+        intent: crate::render::core::planner::PresentationIntent,
     ) {
         self.player.set_video_presentation_intent(intent);
     }

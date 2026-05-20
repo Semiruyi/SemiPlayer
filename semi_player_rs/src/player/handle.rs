@@ -17,9 +17,9 @@ use crate::demux::{
 use crate::player::diagnostics::{PlayerDiagnostics, PlayerDiagnosticsSnapshot};
 use crate::player::runtime::AudioDiscardSummary;
 use crate::player::worker::{DecodeWorkerHandle, RenderWorkerHandle, SyncWorkerHandle};
-use crate::render::core::pipeline::PresentationIntent;
+use crate::render::core::planner::PresentationIntent;
 use crate::render::gpu::RenderBackend;
-use crate::render::service::RenderService;
+use crate::render::orchestrator::RenderOrchestrator;
 use crate::scheduler::snapshot::StageMap;
 use crate::scheduler::decision::evaluate_scheduler_decision;
 use crate::scheduler::state::SchedulerState;
@@ -73,7 +73,7 @@ pub struct SemiPlayerHandle {
     pub(crate) audio_clock: AudioClock,
     pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) runtime: Mutex<crate::player::runtime::RuntimeDomain>,
-    pub(crate) render: Mutex<RenderService>,
+    pub(crate) render: Mutex<RenderOrchestrator>,
     pub(crate) render_backend: Option<Arc<dyn RenderBackend>>,
 }
 
@@ -81,8 +81,8 @@ impl SemiPlayerHandle {
     pub fn new() -> Self {
         let render_backend = crate::render::gpu::create_default_backend().ok();
         let render = match &render_backend {
-            Some(backend) => RenderService::from_backend(Arc::clone(backend)),
-            None => RenderService::new(),
+            Some(backend) => RenderOrchestrator::from_backend(Arc::clone(backend)),
+            None => RenderOrchestrator::new(),
         };
 
         Self {

@@ -280,13 +280,13 @@ pub extern "C" fn semi_player_set_video_presentation_profile(
     with_playback_coordinated_player_ref(player, |player| {
         let profile = match profile {
             SemiVideoPresentationProfile::Passthrough => {
-                crate::render::core::pipeline::PresentationIntent::Passthrough
+                crate::render::core::planner::PresentationIntent::Passthrough
             }
             SemiVideoPresentationProfile::CpuBgraCompatibility => {
-                crate::render::core::pipeline::PresentationIntent::CpuBgraCompatibility
+                crate::render::core::planner::PresentationIntent::CpuBgraCompatibility
             }
             SemiVideoPresentationProfile::GpuBgraPresenter => {
-                crate::render::core::pipeline::PresentationIntent::GpuBgraPresenter
+                crate::render::core::planner::PresentationIntent::GpuBgraPresenter
             }
         };
         orchestrator::set_video_presentation_intent(player, profile)

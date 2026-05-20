@@ -5,7 +5,7 @@ use crate::api::types::PlayerState;
 use crate::decode::DecodePreference;
 use crate::decode::session::MediaSession;
 use crate::player::handle::SemiPlayerHandle;
-use crate::render::core::pipeline::PresentationIntent;
+use crate::render::core::planner::PresentationIntent;
 use crate::scheduler::types::SchedulerEvent;
 use crate::util::time::{ms_to_us, MediaTimeUs};
 

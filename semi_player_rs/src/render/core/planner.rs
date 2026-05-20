@@ -101,7 +101,7 @@ impl VideoRenderRequest {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct VideoRenderPipeline;
+pub struct RenderPlanner;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct VideoRenderStats {
@@ -118,7 +118,7 @@ pub struct VideoRenderBatch {
     pub stats: VideoRenderStats,
 }
 
-impl VideoRenderPipeline {
+impl RenderPlanner {
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self
@@ -279,7 +279,7 @@ mod tests {
 
     use super::{
         ConversionRequest, PresentationPixelFormatPreference, PresentationSurfaceKindPreference,
-        PresentationIntent, VideoRenderPath, VideoRenderPipeline, VideoRenderRequest,
+        PresentationIntent, VideoRenderPath, RenderPlanner, VideoRenderRequest,
     };
     use crate::render::core::frame::{
         PixelFormatCategory, VideoFrame, VideoSurface, VideoSurfaceKind,
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn passthrough_request_plans_passthrough_path() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(10_000);
 
         let plan = pipeline.plan_render(
@@ -337,7 +337,7 @@ mod tests {
 
     #[test]
     fn request_can_express_bgra_output_preference_without_changing_current_passthrough() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(66_000);
 
         // Passthrough intent + Bgra8 preference on already-BGRA CPU input →
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn request_can_express_gpu_surface_preference_without_changing_current_passthrough() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(99_000);
 
         // Passthrough intent + GpuTexture preference, but input is CpuPacked and
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn cpu_bgra_compatibility_stays_passthrough_for_cpu_bgra_input() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(123_000);
 
         let plan = pipeline.plan_render(
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn cpu_bgra_compatibility_plans_convert_for_mismatched_format() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = rgba_frame(123_000);
 
         let plan = pipeline.plan_render(
@@ -416,7 +416,7 @@ mod tests {
 
     #[test]
     fn gpu_presenter_profile_marks_transform_requirement_for_cpu_input() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(123_000);
 
         let plan = pipeline.plan_render(
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn explicit_surface_preference_can_override_profile_default() {
-        let pipeline = VideoRenderPipeline::new();
+        let pipeline = RenderPlanner::new();
         let input = decoded_frame(123_000);
 
         let resolved = pipeline.resolve_request(
