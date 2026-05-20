@@ -184,7 +184,7 @@ Current limitation:
 
 - the first render-supply implementation is still synchronous passthrough
 - render-core now has a pipeline entry point, but it still returns the decoded frame unchanged
-- no independent render worker exists yet
+- no independent render worker exists yet; decoded-video to presentation-video work still runs inline on the decode lane
 
 Planned ownership refinement:
 
@@ -218,6 +218,24 @@ This is the biggest current architectural change.
 
 The player now starts an internal sync worker when the handle is created.
 It also starts a dedicated decode worker.
+
+The next worker split should introduce a dedicated render worker between sync and decode.
+The intended demand direction is:
+
+```text
+sync
+  -> presentation demand
+render
+  -> decoded demand
+decode
+```
+
+In that target shape:
+
+- sync does not inspect decoded backlog directly
+- render owns decoded-to-presentation supply policy
+- decode owns media polling and decoded-frame production
+- worker-to-worker wakeups use `Condvar`, not cross-worker task channels
 
 Worker loop:
 
@@ -255,6 +273,25 @@ lock player
 repeat
 ```
 
+Target render worker loop:
+
+```text
+wait for wake
+  -> snapshot presentation demand and decoded backlog
+  -> if presentation supply is healthy:
+       sleep
+  -> if decoded backlog is available:
+       stage decoded batch under runtime lock
+       unlock runtime
+       execute render transform
+       lock runtime
+       commit presentation frames if generation is still current
+       wake sync if new presentation frames arrived
+  -> if decoded backlog is insufficient:
+       request decode worker wake
+repeat
+```
+
 Current worker modes:
 
 - `Playing`
@@ -281,26 +318,34 @@ Current scheduling input combines:
 
 - next video sync deadline
 - next audio refill deadline
-- decode-supply-needed state
-- a dedicated decode-schedule hint used by:
-  - decode worker
-  - internal decode wake requests
+- presentation-readiness state
+- render-supply-needed state
 - immediate wake conditions such as:
   - dirty sync state
   - stale current video frame
   - unstarted audio backend while playing
 
+Target wake chain:
+
+- sync wakes render when presentation-ready supply needs attention
+- render wakes decode when decoded-video supply is insufficient
+- decode wakes render when new decoded video arrives
+- render wakes sync when new presentation frames arrive
+
 Execution ownership is now split more explicitly:
 
 - `schedule.rs`
-  - decides playback-facing work and timing deadlines
+  - decides playback-facing work and timing deadlines from presentation-ready state
 - `execution.rs`
-  - execution facade
-  - coordinates playback advancement and decode supply
+  - execution facade for worker-owned playback operations
 - `execution/playback_advance.rs`
   - advances audio/video playback state
+- `execution/render_supply.rs`
+  - owns decoded-to-presentation render execution and render-stage commit rules
 - `execution/decode_supply.rs`
-  - runs synchronous decode supply
+  - owns decoded-output application into audio/decoded queues
+- `render_worker.rs`
+  - should own render refill wake/sleep policy and decode-demand coordination
 - `decode_worker.rs`
   - owns decode refill wake/sleep policy
 
@@ -682,16 +727,18 @@ Immediate next sub-steps:
 
 1. keep the first render-service implementation synchronous passthrough while the interface settles
 2. make sync/error diagnostics explicitly presentation-frame-oriented
-3. teach render supply to own real color conversion / surface transformation
-4. only then decide whether render needs asynchronous execution
+3. introduce the render worker and move decoded-to-presentation execution behind a `Condvar`-woken render lane
+4. teach render supply to own real color conversion / surface transformation
+5. keep worker-to-worker communication as wake signals over shared state, not task channels
 
 ## 12. Near-Term Direction
 
 The most likely next architecture steps are:
 
-1. reduce coupling between decode worker and the serialized player lock
-2. tighten notification flow between decode enqueue and sync wake-up
-3. add worker-vs-host diagnostic modes for objective sync measurement
-4. introduce the decoded-surface / presentation-surface split
-5. introduce the player-owned video-render stage and Windows D3D11 decode path
-6. add subtitle timing and host overlay composition boundaries, then move composition into the render stage
+1. introduce the dedicated render worker between sync and decode
+2. reduce coupling between decode worker and the serialized player lock
+3. tighten notification flow along `sync -> render -> decode -> render -> sync`
+4. add worker-vs-host diagnostic modes for objective sync measurement
+5. introduce the decoded-surface / presentation-surface split
+6. introduce the player-owned video-render stage and Windows D3D11 decode path
+7. add subtitle timing and host overlay composition boundaries, then move composition into the render stage

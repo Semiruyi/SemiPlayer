@@ -81,8 +81,20 @@ Owns:
 - waking on control-path notifications
 - choosing between:
   - playback advancement
-  - decode supply
-  - combined advancement + decode when both are due
+  - render wakeups when presentation-ready supply needs attention
+
+### `RenderWorker`
+
+Planned file:
+
+- [`semi_player_rs/src/player/worker/render.rs`](../../semi_player_rs/src/player/worker/render.rs)
+
+Should own:
+
+- decoded-to-presentation supply policy
+- render-stage staging / execute / commit flow
+- decode-demand coordination
+- waking sync when new presentation frames arrive
 
 ## 3. Current Execution Model
 
@@ -93,16 +105,34 @@ playback command
   -> wake worker
   -> worker evaluates schedule
   -> worker advances playback when due
-  -> worker runs decode supply when buffers are insufficient
+  -> worker wakes render when presentation-ready supply needs attention
   -> worker sleeps until next deadline
 ```
 
 This is intentionally still conservative:
 
-- decode supply is still synchronous on the same execution lane
+- render worker does not exist yet
+- decoded-video to presentation-video work is still synchronous on the decode lane
 - one operation lock currently serializes worker activity and FFI activity
 
 That is acceptable for the first worker-backed stage.
+
+Target execution model:
+
+```text
+playback command
+  -> wake sync
+  -> sync evaluates playback schedule from presentation-ready state
+  -> sync advances playback when due
+  -> sync wakes render if presentation supply needs attention
+  -> render either stages and renders decoded frames or wakes decode
+  -> decode polls media and enqueues decoded frames
+  -> decode wakes render
+  -> render commits presentation frames
+  -> render wakes sync
+```
+
+Worker-to-worker wakeups should use `Condvar` signals over shared state snapshots, not task channels.
 
 ## 4. Wake Conditions
 
@@ -163,8 +193,8 @@ This is not yet the final playback architecture.
 
 Still missing:
 
-- decode worker and render work with finer-grained ownership boundaries
-- explicit queue-to-worker notifications from decode enqueue
+- dedicated render worker ownership between sync and decode
+- explicit `sync -> render -> decode -> render -> sync` wake flow
 - subtitle timing integration into the same worker-owned progression model
 - richer worker diagnostics over FFI
 - finer-grained locking / ownership than the current single operation lock
@@ -175,14 +205,15 @@ Known current risks:
 
 - decode, sync, and FFI reads still share one coarse serialization boundary
 - heavy host frame-copy paths can still interfere with worker responsiveness
-- decode supply still shares the worker lane, so future separation will matter for scalability
+- decoded-video to presentation-video work still shares the decode lane, so future separation will matter for scalability
 
 ## 9. Next Steps
 
 The most useful next implementation steps are:
 
 1. measure worker-driven sync quality directly
-2. turn the logical decode split into a real dedicated execution path
-3. reduce coarse lock scope where safe
-4. integrate subtitle timing into the same worker-owned timeline
-5. prepare real render backend ownership boundaries
+2. introduce the dedicated render worker and `Condvar` wake flow
+3. turn the logical decode split into a real dedicated execution path behind render-owned demand
+4. reduce coarse lock scope where safe
+5. integrate subtitle timing into the same worker-owned timeline
+6. prepare real render backend ownership boundaries

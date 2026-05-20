@@ -15,7 +15,7 @@ use crate::demux::{
 };
 use crate::player::diagnostics::{PlayerDiagnostics, PlayerDiagnosticsSnapshot};
 use crate::player::runtime::AudioDiscardSummary;
-use crate::player::worker::{DecodeWorkerHandle, SyncWorkerHandle};
+use crate::player::worker::{DecodeWorkerHandle, RenderWorkerHandle, SyncWorkerHandle};
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
@@ -55,6 +55,7 @@ pub struct SemiPlayerHandle {
     state: AtomicU32,
     playback_phase_lock: Arc<Mutex<()>>,
     sync_worker: Option<SyncWorkerHandle>,
+    render_worker: Option<RenderWorkerHandle>,
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
     control: Mutex<ControlState>,
@@ -79,6 +80,7 @@ impl SemiPlayerHandle {
             state: AtomicU32::new(PlayerState::Idle.as_raw()),
             playback_phase_lock: Arc::new(Mutex::new(())),
             sync_worker: None,
+            render_worker: None,
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
             control: Mutex::new(ControlState::default()),
@@ -185,6 +187,7 @@ impl SemiPlayerHandle {
         }
 
         self.sync_worker = Some(SyncWorkerHandle::start(player_ptr));
+        self.render_worker = Some(RenderWorkerHandle::start(player_ptr));
         self.decode_worker = Some(DecodeWorkerHandle::start(player_ptr));
     }
 
@@ -193,12 +196,20 @@ impl SemiPlayerHandle {
             sync_worker.notify();
         }
 
+        if let Some(render_worker) = self.render_worker.as_ref() {
+            render_worker.request_render();
+        }
+
         self.request_decode_if_needed();
     }
 
     pub fn stop_workers(&mut self) {
         if let Some(mut sync_worker) = self.sync_worker.take() {
             sync_worker.stop();
+        }
+
+        if let Some(mut render_worker) = self.render_worker.take() {
+            render_worker.stop();
         }
 
         if let Some(mut decode_worker) = self.decode_worker.take() {
@@ -214,6 +225,12 @@ impl SemiPlayerHandle {
 
     pub fn notify_decode_worker(&self) {
         self.request_decode_if_needed();
+    }
+
+    pub fn notify_render_worker(&self) {
+        if let Some(render_worker) = self.render_worker.as_ref() {
+            render_worker.request_render();
+        }
     }
 
     pub fn request_decode_if_needed(&self) {
