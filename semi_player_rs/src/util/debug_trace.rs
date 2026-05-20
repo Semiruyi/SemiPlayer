@@ -1,7 +1,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn trace_path() -> &'static PathBuf {
@@ -11,11 +11,18 @@ fn trace_path() -> &'static PathBuf {
     })
 }
 
+fn trace_lock() -> &'static Mutex<()> {
+    static TRACE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    TRACE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 pub fn reset_trace_file() {
+    let _guard = trace_lock().lock().unwrap();
     let _ = fs::write(trace_path(), []);
 }
 
 pub fn append_trace_line(message: &str) {
+    let _guard = trace_lock().lock().unwrap();
     let timestamp_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())

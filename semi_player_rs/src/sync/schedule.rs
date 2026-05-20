@@ -1,6 +1,6 @@
 use crate::api::types::PlayerState;
 use crate::audio::core::output_controller::AudioOutputSnapshot;
-use crate::player::runtime::{DecodeSupplyStatus, RuntimeVideoSnapshot};
+use crate::player::runtime::{DecodeDemandStatus, PlaybackSupplyStatus, RuntimeVideoSnapshot};
 use crate::sync::video_sync::VideoSyncSnapshot;
 use crate::util::time::MediaTimeUs;
 
@@ -12,7 +12,7 @@ const AUDIO_REFILL_HEADROOM_FRAMES: usize = 2_048;
 pub struct PumpScheduleHint {
     pub playback_time_us: MediaTimeUs,
     pub playback_due_now: bool,
-    pub decode_supply_needed: bool,
+    pub playback_supply_needed: bool,
     pub next_video_deadline_us: Option<MediaTimeUs>,
     pub next_audio_refill_deadline_us: Option<MediaTimeUs>,
     pub next_pump_deadline_us: Option<MediaTimeUs>,
@@ -32,13 +32,13 @@ pub struct DecodeScheduleHint {
 pub struct DecodeScheduleInputs {
     pub media_loaded: bool,
     pub state: PlayerState,
-    pub decode_supply: DecodeSupplyStatus,
+    pub decode_demand: DecodeDemandStatus,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ScheduledWork {
     pub should_advance_playback: bool,
-    pub should_request_decode: bool,
+    pub should_request_render: bool,
     pub deadline_us: Option<MediaTimeUs>,
     pub wait_us: MediaTimeUs,
 }
@@ -47,7 +47,7 @@ impl PumpScheduleHint {
     pub fn scheduled_work(self) -> ScheduledWork {
         ScheduledWork {
             should_advance_playback: self.playback_due_now,
-            should_request_decode: self.decode_supply_needed,
+            should_request_render: self.playback_supply_needed,
             deadline_us: self.next_pump_deadline_us,
             wait_us: self.suggested_wait_us.max(1),
         }
@@ -61,7 +61,7 @@ pub struct ScheduleInputs {
     pub state: PlayerState,
     pub playback_time_us: MediaTimeUs,
     pub gating_audio_for_seek_recovery: bool,
-    pub decode_supply: DecodeSupplyStatus,
+    pub playback_supply: PlaybackSupplyStatus,
     pub video_sync_dirty: bool,
     pub runtime_video: RuntimeVideoSnapshot,
     pub video_snapshot: VideoSyncSnapshot,
@@ -82,7 +82,7 @@ impl PlayerScheduleService {
         PumpScheduleHint {
             playback_time_us: context.playback_time_us,
             playback_due_now,
-            decode_supply_needed: context.decode_supply.needs_decode_supply,
+            playback_supply_needed: context.playback_supply.needs_presentation_supply,
             next_video_deadline_us,
             next_audio_refill_deadline_us,
             next_pump_deadline_us,
@@ -91,7 +91,7 @@ impl PlayerScheduleService {
     }
 
     pub fn evaluate_decode_from_inputs(inputs: DecodeScheduleInputs) -> DecodeScheduleHint {
-        compute_decode_schedule_hint(inputs.media_loaded, inputs.state, inputs.decode_supply)
+        compute_decode_schedule_hint(inputs.media_loaded, inputs.state, inputs.decode_demand)
     }
 }
 
@@ -100,7 +100,7 @@ struct ScheduleContext {
     state: PlayerState,
     playback_time_us: MediaTimeUs,
     gating_audio_for_seek_recovery: bool,
-    decode_supply: DecodeSupplyStatus,
+    playback_supply: PlaybackSupplyStatus,
     video_sync_dirty: bool,
     runtime_video: RuntimeVideoSnapshot,
     video_snapshot: VideoSyncSnapshot,
@@ -113,7 +113,7 @@ impl ScheduleContext {
             state: inputs.state,
             playback_time_us: inputs.playback_time_us,
             gating_audio_for_seek_recovery: inputs.gating_audio_for_seek_recovery,
-            decode_supply: inputs.decode_supply,
+            playback_supply: inputs.playback_supply,
             video_sync_dirty: inputs.video_sync_dirty,
             runtime_video: inputs.runtime_video,
             video_snapshot: inputs.video_snapshot,
@@ -184,15 +184,15 @@ fn compute_suggested_wait_us(
 fn compute_decode_schedule_hint(
     media_loaded: bool,
     state: PlayerState,
-    decode_supply: DecodeSupplyStatus,
+    decode_demand: DecodeDemandStatus,
 ) -> DecodeScheduleHint {
     let worker_active = media_loaded && state != PlayerState::Idle;
-    let should_decode_now = worker_active && decode_supply.needs_decode_supply;
+    let should_decode_now = worker_active && decode_demand.should_decode;
 
     DecodeScheduleHint {
         media_loaded,
         worker_active,
-        needs_decode_supply: decode_supply.needs_decode_supply,
+        needs_decode_supply: decode_demand.should_decode,
         should_decode_now,
     }
 }
@@ -221,12 +221,16 @@ fn min_optional_time(lhs: Option<MediaTimeUs>, rhs: Option<MediaTimeUs>) -> Opti
 mod tests {
     use std::sync::Arc;
 
-    use super::{compute_decode_schedule_hint, PlayerScheduleService, PumpScheduleHint};
+    use super::{
+        compute_decode_schedule_hint, PlayerScheduleService, PumpScheduleHint, ScheduleInputs,
+    };
     use crate::api::types::PlayerState;
+    use crate::audio::core::output_controller::AudioOutputSnapshot;
     use crate::audio::core::output::AudioOutputChunk;
     use crate::player::handle::SemiPlayerHandle;
-    use crate::player::runtime::DecodeSupplyStatus;
+    use crate::player::runtime::{DecodeDemandStatus, PlaybackSupplyStatus, RuntimeVideoSnapshot};
     use crate::render::core::frame::{PixelFormatCategory, VideoFrame, VideoSurface};
+    use crate::sync::video_sync::VideoSyncSnapshot;
 
     fn frame(pts_us: i64, duration_us: Option<i64>) -> VideoFrame {
         VideoFrame {
@@ -335,19 +339,19 @@ mod tests {
     }
 
     #[test]
-    fn insufficient_buffers_report_decode_supply_needed() {
+    fn insufficient_buffers_report_playback_supply_needed() {
         let player = SemiPlayerHandle::new();
 
         let hint = PlayerScheduleService::evaluate_from_inputs(player.schedule_inputs());
 
-        assert!(hint.decode_supply_needed);
+        assert!(hint.playback_supply_needed);
     }
 
     #[test]
-    fn scheduled_work_separates_playback_and_decode_axes() {
+    fn scheduled_work_separates_playback_and_render_axes() {
         let work = PumpScheduleHint {
             playback_due_now: true,
-            decode_supply_needed: true,
+            playback_supply_needed: true,
             next_pump_deadline_us: Some(12_345),
             suggested_wait_us: 7_000,
             ..PumpScheduleHint::default()
@@ -355,7 +359,7 @@ mod tests {
         .scheduled_work();
 
         assert!(work.should_advance_playback);
-        assert!(work.should_request_decode);
+        assert!(work.should_request_render);
         assert_eq!(work.deadline_us, Some(12_345));
         assert_eq!(work.wait_us, 7_000);
     }
@@ -365,9 +369,9 @@ mod tests {
         let hint = compute_decode_schedule_hint(
             false,
             PlayerState::Ready,
-            DecodeSupplyStatus {
-                needs_decode_supply: true,
-                ..DecodeSupplyStatus::default()
+            DecodeDemandStatus {
+                should_decode: true,
+                ..DecodeDemandStatus::default()
             },
         );
 
@@ -379,9 +383,9 @@ mod tests {
 
     #[test]
     fn decode_hint_runs_only_for_active_non_idle_states() {
-        let status = DecodeSupplyStatus {
-            needs_decode_supply: true,
-            ..DecodeSupplyStatus::default()
+        let status = DecodeDemandStatus {
+            should_decode: true,
+            ..DecodeDemandStatus::default()
         };
 
         let idle_hint = compute_decode_schedule_hint(true, PlayerState::Idle, status);
@@ -389,5 +393,24 @@ mod tests {
 
         assert!(!idle_hint.should_decode_now);
         assert!(playing_hint.should_decode_now);
+    }
+
+    #[test]
+    fn schedule_uses_playback_supply_without_decode_state() {
+        let hint = PlayerScheduleService::evaluate_from_inputs(ScheduleInputs {
+            state: PlayerState::Ready,
+            playback_time_us: 0,
+            gating_audio_for_seek_recovery: false,
+            playback_supply: PlaybackSupplyStatus {
+                needs_presentation_supply: true,
+                ..PlaybackSupplyStatus::default()
+            },
+            video_sync_dirty: false,
+            runtime_video: RuntimeVideoSnapshot::default(),
+            video_snapshot: VideoSyncSnapshot::default(),
+            audio_output: AudioOutputSnapshot::default(),
+        });
+
+        assert!(hint.playback_supply_needed);
     }
 }

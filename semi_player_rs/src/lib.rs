@@ -5,6 +5,7 @@ mod demux;
 mod platform;
 mod player;
 mod render;
+pub mod scheduler;
 mod subtitle;
 mod sync;
 mod util;

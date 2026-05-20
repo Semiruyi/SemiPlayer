@@ -19,6 +19,10 @@ use crate::player::worker::{DecodeWorkerHandle, RenderWorkerHandle, SyncWorkerHa
 use crate::render::core::pipeline::PresentationTargetProfile;
 use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
+use crate::scheduler::snapshot::StageMap;
+use crate::scheduler::decision::evaluate_scheduler_decision;
+use crate::scheduler::state::SchedulerState;
+use crate::scheduler::types::{SchedulerEvent, StageId};
 use crate::sync::clock::AudioClock;
 use crate::sync::schedule::PlayerScheduleService;
 use crate::util::debug_trace::append_trace_line;
@@ -60,6 +64,7 @@ pub struct SemiPlayerHandle {
     decode_worker: Option<DecodeWorkerHandle>,
     diagnostics: PlayerDiagnostics,
     control: Mutex<ControlState>,
+    scheduler: Mutex<SchedulerState>,
     media_generation: AtomicU64,
     media_session: RwLock<Option<SharedMediaSession>>,
     pub(crate) audio_clock: AudioClock,
@@ -85,6 +90,7 @@ impl SemiPlayerHandle {
             decode_worker: None,
             diagnostics: PlayerDiagnostics::default(),
             control: Mutex::new(ControlState::default()),
+            scheduler: Mutex::new(SchedulerState::default()),
             media_generation: AtomicU64::new(0),
             media_session: RwLock::new(None),
             audio_clock: AudioClock::new(),
@@ -193,13 +199,14 @@ impl SemiPlayerHandle {
     }
 
     pub fn notify_workers(&self) {
-        if let Some(sync_worker) = self.sync_worker.as_ref() {
-            sync_worker.notify();
-        }
-
-        if let Some(render_worker) = self.render_worker.as_ref() {
-            render_worker.request_render();
-        }
+        append_trace_line(&format!(
+            "player:notify_workers state={:?} runtime={:?} audio_output={:?}",
+            self.state(),
+            self.runtime_snapshot(),
+            self.audio_output_snapshot()
+        ));
+        self.wake_sync_worker_direct();
+        self.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     }
 
     pub fn stop_workers(&mut self) {
@@ -219,35 +226,150 @@ impl SemiPlayerHandle {
     }
 
     pub fn notify_sync_worker(&self) {
+        append_trace_line("player:notify_sync_worker");
+        self.wake_sync_worker_direct();
+    }
+
+    pub fn dispatch_scheduler_event(&self, event: SchedulerEvent) {
+        let should_process = {
+            let mut scheduler = self.scheduler.lock().unwrap();
+            scheduler.enqueue(event.clone());
+            let trace = scheduler.trace_snapshot();
+            append_trace_line(&format!(
+                "scheduler:enqueue event={:?} state={:?}",
+                event, trace
+            ));
+            scheduler.try_begin_dispatch()
+        };
+
+        if !should_process {
+            return;
+        }
+
+        loop {
+            let (next_event, trace_after_apply) = {
+                let mut scheduler = self.scheduler.lock().unwrap();
+                let next_event = scheduler.pop_next_event();
+                let trace_after_apply = next_event.as_ref().map(|event| {
+                    scheduler.apply_event(event);
+                    scheduler.trace_snapshot()
+                });
+                (next_event, trace_after_apply)
+            };
+
+            let Some(next_event) = next_event else {
+                let mut scheduler = self.scheduler.lock().unwrap();
+                scheduler.end_dispatch();
+                append_trace_line(&format!(
+                    "scheduler:idle state={:?}",
+                    scheduler.trace_snapshot()
+                ));
+                break;
+            };
+
+            if let Some(trace_after_apply) = trace_after_apply {
+                append_trace_line(&format!(
+                    "scheduler:apply event={:?} state={:?}",
+                    next_event, trace_after_apply
+                ));
+            }
+
+            let snapshot = self.scheduler_snapshot();
+            let decision = evaluate_scheduler_decision(&snapshot, &next_event);
+            append_trace_line(&format!(
+                "scheduler:dispatch event={:?} snapshot={:?} decision={:?}",
+                next_event, snapshot, decision
+            ));
+            self.apply_scheduler_decision(&decision);
+            let mut scheduler = self.scheduler.lock().unwrap();
+            scheduler.finish_event(next_event, decision);
+        }
+    }
+
+    fn apply_scheduler_decision(&self, decision: &crate::scheduler::types::SchedulerDecision) {
+        if decision.wake_playback {
+            self.wake_sync_worker_direct();
+        }
+
+        let mut wake_render = false;
+        for stage in &decision.wake_stages {
+            {
+                let mut scheduler = self.scheduler.lock().unwrap();
+                scheduler.note_stage_requested(*stage);
+                append_trace_line(&format!(
+                    "scheduler:request stage={:?} state={:?}",
+                    stage,
+                    scheduler.trace_snapshot()
+                ));
+            }
+            match stage {
+                StageId::AudioDecode | StageId::VideoDecode => {
+                    self.request_decode_stage_if_needed(*stage);
+                }
+                StageId::AudioRender | StageId::VideoRender => wake_render = true,
+            }
+        }
+
+        if wake_render {
+            self.request_render_worker_direct();
+        }
+    }
+
+    fn wake_sync_worker_direct(&self) {
+        append_trace_line("player:wake_sync_worker_direct");
         if let Some(sync_worker) = self.sync_worker.as_ref() {
             sync_worker.notify();
         }
     }
 
     pub fn notify_decode_worker(&self) {
-        self.request_decode_if_needed();
+        append_trace_line(&format!(
+            "player:notify_decode_worker demand={:?}",
+            self.runtime_decode_demand_snapshot()
+        ));
+        self.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     }
 
     pub fn notify_render_worker(&self) {
+        append_trace_line(&format!(
+            "player:notify_render_worker supply={:?}",
+            self.runtime_render_supply_snapshot()
+        ));
+        self.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
+    }
+
+    fn request_render_worker_direct(&self) {
+        append_trace_line("player:request_render_worker_direct");
         if let Some(render_worker) = self.render_worker.as_ref() {
             render_worker.request_render();
         }
     }
 
-    pub fn request_decode_if_needed(&self) {
+    fn request_decode_stage_if_needed(&self, stage: StageId) {
         let hint =
             PlayerScheduleService::evaluate_decode_from_inputs(self.decode_schedule_inputs());
+        append_trace_line(&format!(
+            "player:request_decode_stage_if_needed stage={:?} hint={:?} demand={:?}",
+            stage,
+            hint,
+            self.runtime_decode_demand_snapshot()
+        ));
         if !hint.should_decode_now {
             return;
         }
 
         if let Some(decode_worker) = self.decode_worker.as_ref() {
-            decode_worker.request_decode();
+            append_trace_line(&format!(
+                "player:request_decode_worker_direct stage={:?}",
+                stage
+            ));
+            decode_worker.request_decode_stage(stage);
         }
     }
 
     pub fn reset_runtime_state(&mut self) {
         *self.control.lock().unwrap() = ControlState::default();
+        *self.scheduler.lock().unwrap() = SchedulerState::default();
         self.audio_clock.reset();
         self.audio_output
             .with_mut(crate::audio::core::output_controller::AudioOutputController::stop);
@@ -273,6 +395,10 @@ impl SemiPlayerHandle {
 
     pub fn diagnostics_snapshot(&self) -> PlayerDiagnosticsSnapshot {
         self.diagnostics.snapshot()
+    }
+
+    pub fn scheduler_stage_snapshot(&self) -> StageMap {
+        self.scheduler.lock().unwrap().stage_snapshot()
     }
 
     pub fn current_video_frame_snapshot(

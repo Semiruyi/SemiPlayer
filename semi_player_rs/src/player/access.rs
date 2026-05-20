@@ -7,9 +7,14 @@ use crate::demux::MediaInfo;
 use crate::demux::SeekDemuxDiagnosticsSnapshot;
 use crate::player::diagnostics::PlayerDiagnosticsSnapshot;
 use crate::player::handle::SemiPlayerHandle;
-use crate::player::runtime::{AudioDiscardSummary, PlayerRuntime, RuntimeSnapshot};
+use crate::player::runtime::{
+    AudioDiscardSummary, DecodeDemandStatus, PlaybackSupplyStatus, PlayerRuntime,
+    RenderSupplyStatus, RuntimeSnapshot,
+};
 use crate::render::core::frame::PresentationFrame;
 use crate::render::service::RenderService;
+use crate::scheduler::snapshot::{LegacySchedulerInputs, SchedulerSnapshot};
+use crate::scheduler::types::StageId;
 use crate::sync::clock::AudioClock;
 use crate::sync::schedule::{DecodeScheduleInputs, PumpScheduleHint, ScheduleInputs};
 use crate::sync::video_scheduler::VideoScheduler;
@@ -106,6 +111,7 @@ pub struct DecodePlanContext {
     pub opened_media: Option<crate::decode::session::SharedMediaSession>,
     pub generation: u64,
     pub decode_policy: crate::decode::DecodePolicy,
+    pub decode_demand: DecodeDemandStatus,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -127,7 +133,7 @@ pub struct SyncWorkerPlanContext {
 pub struct RenderWorkerPlanContext {
     pub media_loaded: bool,
     pub state: crate::api::types::PlayerState,
-    pub decode_supply: crate::player::runtime::DecodeSupplyStatus,
+    pub render_supply: RenderSupplyStatus,
 }
 
 #[derive(Clone)]
@@ -147,6 +153,13 @@ pub struct PlaybackAdvanceObserveContext {
     pub control: ControlSnapshot,
     pub runtime: RuntimeSnapshot,
     pub playback_position_us: MediaTimeUs,
+    pub audio_output: AudioOutputSnapshot,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WorkerStateTraceSnapshot {
+    pub control: ControlSnapshot,
+    pub runtime: RuntimeSnapshot,
     pub audio_output: AudioOutputSnapshot,
 }
 
@@ -232,20 +245,23 @@ impl SemiPlayerHandle {
     }
 
     pub fn decode_plan_context(&self) -> DecodePlanContext {
+        let runtime = self.runtime_snapshot();
         DecodePlanContext {
             media_loaded: self.control_access().is_media_loaded(),
             state: self.control_access().state(),
             opened_media: self.cloned_media_session(),
             generation: self.media_generation(),
             decode_policy: self.decode_policy(),
+            decode_demand: runtime.runtime_decode_demand(),
         }
     }
 
     pub fn decode_schedule_inputs(&self) -> DecodeScheduleInputs {
+        let runtime = self.runtime_snapshot();
         DecodeScheduleInputs {
             media_loaded: self.control_access().is_media_loaded(),
             state: self.control_access().state(),
-            decode_supply: self.runtime_snapshot().decode_supply,
+            decode_demand: runtime.runtime_decode_demand(),
         }
     }
 
@@ -276,7 +292,7 @@ impl SemiPlayerHandle {
                 .unwrap_or(crate::api::types::PlayerState::Idle),
             playback_time_us,
             gating_audio_for_seek_recovery: control.gate_audio_until_video_ready,
-            decode_supply: runtime.decode_supply,
+            playback_supply: runtime.runtime_playback_supply(),
             video_sync_dirty: self.video_sync_dirty_snapshot(),
             runtime_video,
             video_snapshot,
@@ -296,10 +312,11 @@ impl SemiPlayerHandle {
     }
 
     pub fn render_worker_plan_context(&self) -> RenderWorkerPlanContext {
+        let runtime = self.runtime_snapshot();
         RenderWorkerPlanContext {
             media_loaded: self.control_access().is_media_loaded(),
             state: self.control_access().state(),
-            decode_supply: self.runtime_snapshot().decode_supply,
+            render_supply: runtime.runtime_render_supply(),
         }
     }
 
@@ -415,6 +432,48 @@ impl SemiPlayerHandle {
 
     pub fn playback_phase_handle(&self) -> PlaybackPhaseHandle {
         self.playback_phase_lock()
+    }
+
+    pub fn worker_state_trace_snapshot(&self) -> WorkerStateTraceSnapshot {
+        WorkerStateTraceSnapshot {
+            control: self.control_snapshot(),
+            runtime: self.runtime_snapshot(),
+            audio_output: self.audio_output_snapshot(),
+        }
+    }
+
+    pub fn scheduler_snapshot(&self) -> SchedulerSnapshot {
+        let control = self.control_snapshot();
+        let runtime = self.runtime_snapshot();
+        let schedule_hint = crate::sync::schedule::PlayerScheduleService::evaluate_from_inputs(
+            self.schedule_inputs(),
+        );
+        let playback_supply = runtime.runtime_playback_supply();
+        let render_supply = runtime.runtime_render_supply();
+        let decode_demand = runtime.runtime_decode_demand();
+
+        let mut snapshot = SchedulerSnapshot::from_legacy_inputs(LegacySchedulerInputs {
+            player_state: crate::api::types::PlayerState::from_raw(control.state_raw)
+                .unwrap_or(crate::api::types::PlayerState::Idle),
+            media_loaded: self.control_access().is_media_loaded(),
+            generation: control.media_generation,
+            playback_supply,
+            render_supply,
+            decode_demand,
+            audio_presentation_demand: !playback_supply.has_sufficient_audio,
+            video_presentation_demand: !playback_supply.has_sufficient_video,
+            next_deadline_us: schedule_hint.next_pump_deadline_us,
+        });
+        let stage_lifecycle = self.scheduler_stage_snapshot();
+
+        for stage in StageId::ALL {
+            let lifecycle_state = stage_lifecycle[stage];
+            if lifecycle_state != crate::scheduler::types::StageState::default() {
+                snapshot.stages[stage] = lifecycle_state;
+            }
+        }
+
+        snapshot
     }
 }
 
@@ -591,6 +650,18 @@ impl RuntimeAccess<'_> {
 }
 
 impl SemiPlayerHandle {
+    pub fn runtime_playback_supply_snapshot(&self) -> PlaybackSupplyStatus {
+        self.runtime.lock().unwrap().runtime.playback_supply_status()
+    }
+
+    pub fn runtime_render_supply_snapshot(&self) -> RenderSupplyStatus {
+        self.runtime.lock().unwrap().runtime.render_supply_status()
+    }
+
+    pub fn runtime_decode_demand_snapshot(&self) -> DecodeDemandStatus {
+        self.runtime.lock().unwrap().runtime.decode_demand_status()
+    }
+
     pub fn current_video_pts_us_snapshot(&self) -> Option<MediaTimeUs> {
         self.runtime.lock().unwrap().runtime.current_video_frame().map(|frame| frame.pts_us)
     }

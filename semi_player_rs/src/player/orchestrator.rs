@@ -5,6 +5,7 @@ use crate::api::types::PlayerState;
 use crate::decode::session::MediaSession;
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::pipeline::PresentationTargetProfile;
+use crate::scheduler::types::SchedulerEvent;
 use crate::util::time::{ms_to_us, MediaTimeUs};
 
 fn reset_playback_domains_for_new_timeline(player: &SemiPlayerHandle) {
@@ -25,7 +26,7 @@ pub fn load_media_session(player: &SemiPlayerHandle, media_session: MediaSession
     player.with_runtime_access(|mut runtime| {
         runtime.mark_video_sync_dirty();
     });
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::MediaLoaded);
 }
 
 fn mark_video_sync_dirty(player: &SemiPlayerHandle) {
@@ -44,7 +45,7 @@ pub fn play(player: &SemiPlayerHandle) -> ResultCode {
     control.set_state(PlayerState::Playing);
     audio.sync_output_started_state(control.state());
     mark_video_sync_dirty(player);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::PlayerStateChanged(PlayerState::Playing));
     SEMI_OK
 }
 
@@ -59,7 +60,7 @@ pub fn pause(player: &SemiPlayerHandle) -> ResultCode {
     control.set_state(PlayerState::Paused);
     audio.sync_output_started_state(control.state());
     mark_video_sync_dirty(player);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::PlayerStateChanged(PlayerState::Paused));
     SEMI_OK
 }
 
@@ -107,7 +108,7 @@ pub fn execute_seek(player: &SemiPlayerHandle, target_us: MediaTimeUs) -> Result
     }
     player.control_access().begin_seek_recovery(resolved_pts);
     player.observe_seek_reset_finished_access();
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::SeekCompleted);
     player.observe_seek_api_completed_access();
     SEMI_OK
 }
@@ -149,7 +150,7 @@ pub fn reset(player: &SemiPlayerHandle) -> ResultCode {
     player.clear_media_session();
     reset_playback_domains_for_new_timeline(player);
     player.control_access().set_state(PlayerState::Idle);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::MediaUnloaded);
     SEMI_OK
 }
 
@@ -166,7 +167,7 @@ pub fn set_speed(player: &SemiPlayerHandle, speed: c_double) -> ResultCode {
     control.set_speed_value(speed);
     audio.set_clock_speed(speed);
     mark_video_sync_dirty(player);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     SEMI_OK
 }
 
@@ -175,7 +176,7 @@ pub fn set_video_presentation_bias(player: &SemiPlayerHandle, bias_ms: i32) -> R
         .control_access()
         .set_host_presentation_offset_us(ms_to_us(i64::from(bias_ms)));
     mark_video_sync_dirty(player);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     SEMI_OK
 }
 
@@ -200,6 +201,6 @@ pub fn set_video_presentation_profile(
 
     control.set_video_presentation_profile(profile);
     mark_video_sync_dirty(player);
-    player.notify_workers();
+    player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     SEMI_OK
 }

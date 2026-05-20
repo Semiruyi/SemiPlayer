@@ -5,6 +5,7 @@ use crate::api::types::PlayerState;
 use crate::player::access::RenderWorkerPlanContext;
 use crate::player::execution::render_supply;
 use crate::player::handle::SemiPlayerHandle;
+use crate::scheduler::types::{ResourceKey, SchedulerEvent, StageId};
 use crate::util::debug_trace::append_trace_line;
 
 #[derive(Default)]
@@ -82,6 +83,12 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<RenderWorkerControl>, Con
 
         match action {
             RenderWorkerAction::RenderNow => {
+                unsafe {
+                    let player_ptr = player_addr as *mut SemiPlayerHandle;
+                    (&*player_ptr).dispatch_scheduler_event(SchedulerEvent::StageStarted(
+                        StageId::VideoRender,
+                    ));
+                }
                 let render_result = unsafe {
                     let player_ptr = player_addr as *mut SemiPlayerHandle;
                     render_supply(&*player_ptr)
@@ -90,22 +97,37 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<RenderWorkerControl>, Con
                 if render_result.has_new_presentation_frames() {
                     unsafe {
                         let player_ptr = player_addr as *mut SemiPlayerHandle;
-                        (&*player_ptr).notify_sync_worker();
+                        (&*player_ptr).dispatch_scheduler_event(SchedulerEvent::StageProgress {
+                            stage: StageId::VideoRender,
+                            produced: vec![ResourceKey::PresentationVideo],
+                        });
                     }
                 }
             }
             RenderWorkerAction::RequestDecode => unsafe {
                 let player_ptr = player_addr as *mut SemiPlayerHandle;
-                (&*player_ptr).notify_decode_worker();
+                (&*player_ptr).dispatch_scheduler_event(SchedulerEvent::StageBlocked(
+                    StageId::VideoRender,
+                ));
             },
-            RenderWorkerAction::Wait => {}
+            RenderWorkerAction::Wait => unsafe {
+                let player_ptr = player_addr as *mut SemiPlayerHandle;
+                (&*player_ptr).dispatch_scheduler_event(SchedulerEvent::StageIdle(
+                    StageId::VideoRender,
+                ));
+            },
         }
     }
 }
 
 fn evaluate_worker_action(player: &SemiPlayerHandle) -> RenderWorkerAction {
     let context = player.render_worker_plan_context();
-    render_action_from_context(context)
+    let action = render_action_from_context(context);
+    append_trace_line(&format!(
+        "render:plan state={:?} media_loaded={} supply={:?} action={:?}",
+        context.state, context.media_loaded, context.render_supply, action
+    ));
+    action
 }
 
 fn render_action_from_context(context: RenderWorkerPlanContext) -> RenderWorkerAction {
@@ -113,40 +135,29 @@ fn render_action_from_context(context: RenderWorkerPlanContext) -> RenderWorkerA
         return RenderWorkerAction::Wait;
     }
 
-    let supply = context.decode_supply;
+    let supply = context.render_supply;
 
-    if supply.decoded_video_queue_len > 0 && !supply.has_sufficient_presentation_buffer {
+    if supply.needs_presentation_frames && supply.has_decoded_video {
         return RenderWorkerAction::RenderNow;
     }
 
-    if supply.needs_decode_supply
-        && supply.decoded_video_queue_len == 0
-        && !supply.has_in_flight_render_batch()
+    if supply.needs_presentation_frames && !supply.has_decoded_video && !supply.has_in_flight_batch
     {
         return RenderWorkerAction::RequestDecode;
     }
 
-    if supply.decoded_video_queue_len > 0 {
+    if supply.has_decoded_video {
         return RenderWorkerAction::RenderNow;
     }
 
     RenderWorkerAction::Wait
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RenderWorkerAction {
     RenderNow,
     RequestDecode,
     Wait,
-}
-
-trait RenderDecodeSupplyExt {
-    fn has_in_flight_render_batch(self) -> bool;
-}
-
-impl RenderDecodeSupplyExt for crate::player::runtime::DecodeSupplyStatus {
-    fn has_in_flight_render_batch(self) -> bool {
-        self.in_flight_decoded_video_queue_len > 0
-    }
 }
 
 #[cfg(test)]
@@ -154,18 +165,18 @@ mod tests {
     use super::{render_action_from_context, RenderWorkerAction};
     use crate::api::types::PlayerState;
     use crate::player::access::RenderWorkerPlanContext;
-    use crate::player::runtime::DecodeSupplyStatus;
+    use crate::player::runtime::RenderSupplyStatus;
 
     #[test]
     fn render_worker_requests_decode_when_decoded_supply_is_empty() {
         let action = render_action_from_context(RenderWorkerPlanContext {
             media_loaded: true,
             state: PlayerState::Playing,
-            decode_supply: DecodeSupplyStatus {
-                needs_decode_supply: true,
-                decoded_video_queue_len: 0,
-                in_flight_decoded_video_queue_len: 0,
-                ..DecodeSupplyStatus::default()
+            render_supply: RenderSupplyStatus {
+                needs_presentation_frames: true,
+                has_decoded_video: false,
+                has_in_flight_batch: false,
+                ..RenderSupplyStatus::default()
             },
         });
 
@@ -177,9 +188,10 @@ mod tests {
         let action = render_action_from_context(RenderWorkerPlanContext {
             media_loaded: true,
             state: PlayerState::Playing,
-            decode_supply: DecodeSupplyStatus {
+            render_supply: RenderSupplyStatus {
                 decoded_video_queue_len: 2,
-                ..DecodeSupplyStatus::default()
+                has_decoded_video: true,
+                ..RenderSupplyStatus::default()
             },
         });
 
@@ -191,7 +203,7 @@ mod tests {
         let action = render_action_from_context(RenderWorkerPlanContext {
             media_loaded: false,
             state: PlayerState::Playing,
-            decode_supply: DecodeSupplyStatus::default(),
+            render_supply: RenderSupplyStatus::default(),
         });
 
         assert!(matches!(action, RenderWorkerAction::Wait));

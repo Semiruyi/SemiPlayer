@@ -8,6 +8,7 @@ use crate::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
 use crate::player::handle::SemiPlayerHandle;
+use crate::scheduler::types::SchedulerEvent;
 use crate::util::debug_trace::append_trace_line;
 use crate::util::time::MediaTimeUs;
 
@@ -126,13 +127,21 @@ fn evaluate_worker_action(player: &SemiPlayerHandle) -> WorkerAction {
         return WorkerAction::WaitIndefinitely;
     }
 
-    match context.state {
-        PlayerState::Playing => execute_worker_step(player, context, WorkerMode::Playing),
+    let action = match context.state {
+        PlayerState::Playing => execute_worker_step(player, context.clone(), WorkerMode::Playing),
         PlayerState::Ready | PlayerState::Paused => {
-            execute_worker_step(player, context, WorkerMode::Stabilizing)
+            execute_worker_step(player, context.clone(), WorkerMode::Stabilizing)
         }
         PlayerState::Idle => WorkerAction::WaitIndefinitely,
-    }
+    };
+    append_trace_line(&format!(
+        "sync:plan state={:?} hint={:?} action={:?} snapshot={:?}",
+        context.state,
+        context.schedule_hint,
+        action,
+        player.worker_state_trace_snapshot()
+    ));
+    action
 }
 
 fn execute_worker_step(
@@ -141,13 +150,13 @@ fn execute_worker_step(
     mode: WorkerMode,
 ) -> WorkerAction {
     let hint = context.schedule_hint;
-    if mode == WorkerMode::Stabilizing && !hint.playback_due_now && !hint.decode_supply_needed {
+    if mode == WorkerMode::Stabilizing && !hint.playback_due_now && !hint.playback_supply_needed {
         return WorkerAction::WaitIndefinitely;
     }
 
     let scheduled_work = hint.scheduled_work();
-    if scheduled_work.should_request_decode {
-        player.notify_render_worker();
+    if scheduled_work.should_request_render {
+        player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     }
 
     if scheduled_work.should_advance_playback {
@@ -213,6 +222,16 @@ enum WorkerAction {
     AdvancePlayback { phase_lock: Arc<Mutex<()>> },
     WaitFor(Duration),
     WaitIndefinitely,
+}
+
+impl std::fmt::Debug for WorkerAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AdvancePlayback { .. } => f.write_str("AdvancePlayback"),
+            Self::WaitFor(duration) => f.debug_tuple("WaitFor").field(duration).finish(),
+            Self::WaitIndefinitely => f.write_str("WaitIndefinitely"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

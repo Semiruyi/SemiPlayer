@@ -31,6 +31,65 @@ pub struct RuntimeSnapshot {
     pub render_staging: RenderStagingStatus,
 }
 
+impl RuntimeSnapshot {
+    pub fn runtime_playback_supply(self) -> PlaybackSupplyStatus {
+        PlaybackSupplyStatus {
+            audio_queue_len: self.decode_supply.audio_queue_len,
+            ready_video_frame_count: self.decode_supply.ready_video_frame_count,
+            target_audio_queue_len: self.decode_supply.target_audio_queue_len,
+            target_ready_video_frame_count: self.decode_supply.target_total_video_frames,
+            has_sufficient_audio: self.decode_supply.audio_queue_len
+                >= self.decode_supply.target_audio_queue_len,
+            has_sufficient_video: self.decode_supply.ready_video_frame_count
+                >= self.decode_supply.target_total_video_frames,
+            has_sufficient_presentation_buffer: self
+                .decode_supply
+                .has_sufficient_presentation_buffer,
+            end_of_stream: self.end_of_stream,
+            needs_presentation_supply: !self.end_of_stream
+                && !self.decode_supply.has_sufficient_presentation_buffer,
+        }
+    }
+
+    pub fn runtime_render_supply(self) -> RenderSupplyStatus {
+        RenderSupplyStatus {
+            decoded_video_queue_len: self.decode_supply.decoded_video_queue_len,
+            in_flight_decoded_video_queue_len: self
+                .decode_supply
+                .in_flight_decoded_video_queue_len,
+            ready_video_frame_count: self.decode_supply.ready_video_frame_count,
+            target_ready_video_frame_count: self.decode_supply.target_total_video_frames,
+            has_in_flight_batch: self.render_staging.has_in_flight_batch,
+            has_decoded_video: self.decode_supply.decoded_video_queue_len > 0,
+            needs_presentation_frames: !self.end_of_stream
+                && self.decode_supply.ready_video_frame_count
+                    < self.decode_supply.target_total_video_frames,
+            end_of_stream: self.end_of_stream,
+        }
+    }
+
+    pub fn runtime_decode_demand(self) -> DecodeDemandStatus {
+        DecodeDemandStatus {
+            audio_queue_len: self.decode_supply.audio_queue_len,
+            decoded_video_queue_len: self.decode_supply.decoded_video_queue_len,
+            buffered_video_frame_count: self.decode_supply.buffered_video_frame_count,
+            target_audio_queue_len: self.decode_supply.target_audio_queue_len,
+            target_total_video_frames: self.decode_supply.target_total_video_frames,
+            has_sufficient_audio: self.decode_supply.audio_queue_len
+                >= self.decode_supply.target_audio_queue_len,
+            has_sufficient_total_video_buffer: self
+                .decode_supply
+                .has_sufficient_total_video_buffer,
+            needs_audio_decode: !self.end_of_stream
+                && self.decode_supply.audio_queue_len < self.decode_supply.target_audio_queue_len,
+            needs_video_decode: !self.end_of_stream
+                && !self.decode_supply.has_sufficient_total_video_buffer,
+            end_of_stream: self.end_of_stream,
+            should_decode: self.decode_supply.needs_decode_supply,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AudioDiscardSummary {
     pub removed_frames: usize,
@@ -60,6 +119,46 @@ pub struct DecodeSupplyStatus {
     pub end_of_stream: bool,
     pub has_sufficient_buffer: bool,
     pub needs_decode_supply: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PlaybackSupplyStatus {
+    pub audio_queue_len: usize,
+    pub ready_video_frame_count: usize,
+    pub target_audio_queue_len: usize,
+    pub target_ready_video_frame_count: usize,
+    pub has_sufficient_audio: bool,
+    pub has_sufficient_video: bool,
+    pub has_sufficient_presentation_buffer: bool,
+    pub end_of_stream: bool,
+    pub needs_presentation_supply: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RenderSupplyStatus {
+    pub decoded_video_queue_len: usize,
+    pub in_flight_decoded_video_queue_len: usize,
+    pub ready_video_frame_count: usize,
+    pub target_ready_video_frame_count: usize,
+    pub has_in_flight_batch: bool,
+    pub has_decoded_video: bool,
+    pub needs_presentation_frames: bool,
+    pub end_of_stream: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DecodeDemandStatus {
+    pub audio_queue_len: usize,
+    pub decoded_video_queue_len: usize,
+    pub buffered_video_frame_count: usize,
+    pub target_audio_queue_len: usize,
+    pub target_total_video_frames: usize,
+    pub has_sufficient_audio: bool,
+    pub has_sufficient_total_video_buffer: bool,
+    pub needs_audio_decode: bool,
+    pub needs_video_decode: bool,
+    pub end_of_stream: bool,
+    pub should_decode: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -262,6 +361,75 @@ impl PlayerRuntime {
             has_sufficient_buffer: has_sufficient_presentation_buffer,
             needs_decode_supply: !end_of_stream
                 && (audio_queue_len < TARGET_AUDIO_QUEUE_LEN || !has_sufficient_total_video_buffer),
+        }
+    }
+
+    pub fn playback_supply_status(&self) -> PlaybackSupplyStatus {
+        let target_ready_video_frame_count = TARGET_FUTURE_VIDEO_QUEUE_LEN + 1;
+        let audio_queue_len = self.audio_queue_len();
+        let ready_video_frame_count = self.ready_video_frame_count();
+        let has_sufficient_audio = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN;
+        let has_sufficient_video = ready_video_frame_count >= target_ready_video_frame_count;
+        let has_sufficient_presentation_buffer = has_sufficient_audio && has_sufficient_video;
+        let end_of_stream = self.has_reached_end_of_stream();
+
+        PlaybackSupplyStatus {
+            audio_queue_len,
+            ready_video_frame_count,
+            target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
+            target_ready_video_frame_count,
+            has_sufficient_audio,
+            has_sufficient_video,
+            has_sufficient_presentation_buffer,
+            end_of_stream,
+            needs_presentation_supply: !end_of_stream && !has_sufficient_presentation_buffer,
+        }
+    }
+
+    pub fn render_supply_status(&self) -> RenderSupplyStatus {
+        let target_ready_video_frame_count = TARGET_FUTURE_VIDEO_QUEUE_LEN + 1;
+        let decoded_video_queue_len = self.queued_decoded_video_frames.len();
+        let in_flight_decoded_video_queue_len = self.in_flight_decoded_video_queue_len();
+        let ready_video_frame_count = self.ready_video_frame_count();
+        let end_of_stream = self.has_reached_end_of_stream();
+
+        RenderSupplyStatus {
+            decoded_video_queue_len,
+            in_flight_decoded_video_queue_len,
+            ready_video_frame_count,
+            target_ready_video_frame_count,
+            has_in_flight_batch: self.render_in_flight.is_some(),
+            has_decoded_video: decoded_video_queue_len > 0,
+            needs_presentation_frames: !end_of_stream
+                && ready_video_frame_count < target_ready_video_frame_count,
+            end_of_stream,
+        }
+    }
+
+    pub fn decode_demand_status(&self) -> DecodeDemandStatus {
+        let target_total_video_frames = TARGET_FUTURE_VIDEO_QUEUE_LEN + 1;
+        let audio_queue_len = self.audio_queue_len();
+        let decoded_video_queue_len = self.queued_decoded_video_frames.len();
+        let buffered_video_frame_count = self.buffered_video_frame_count();
+        let has_sufficient_audio = audio_queue_len >= TARGET_AUDIO_QUEUE_LEN;
+        let has_sufficient_total_video_buffer =
+            buffered_video_frame_count >= target_total_video_frames;
+        let end_of_stream = self.has_reached_end_of_stream();
+        let needs_audio_decode = !end_of_stream && !has_sufficient_audio;
+        let needs_video_decode = !end_of_stream && !has_sufficient_total_video_buffer;
+
+        DecodeDemandStatus {
+            audio_queue_len,
+            decoded_video_queue_len,
+            buffered_video_frame_count,
+            target_audio_queue_len: TARGET_AUDIO_QUEUE_LEN,
+            target_total_video_frames,
+            has_sufficient_audio,
+            has_sufficient_total_video_buffer,
+            needs_audio_decode,
+            needs_video_decode,
+            end_of_stream,
+            should_decode: needs_audio_decode || needs_video_decode,
         }
     }
 
