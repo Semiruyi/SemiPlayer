@@ -1,14 +1,13 @@
 use crate::api::types::{
     SemiAudioOutputSnapshot, SemiDecodedKind, SemiDecodedOutput, SemiMediaInfo,
-    SemiPlaybackSnapshot, SemiVideoDecodeBackend, SemiVideoDecodeFallbackReason,
-    SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
+    SemiPlaybackSnapshot, SemiVideoFrameInfo, SemiVideoSurfaceDesc, SemiVideoSurfaceKind,
 };
 use crate::audio::core::output_controller::AudioOutputSnapshot;
-use crate::decode::{DecodedOutput, VideoDecodeBackend, VideoDecodeFallbackReason};
+use crate::decode::DecodedOutput;
 use crate::demux::{MediaInfo, StreamKind};
 use crate::player::access::PlaybackSnapshotInputs;
 use crate::player::handle::SemiPlayerHandle;
-use crate::render::core::frame::{VideoFrame, VideoSurfaceStorage};
+use crate::render::core::frame::VideoFrame;
 use crate::util::time::us_to_ms;
 
 fn option_index_to_i32(index: Option<usize>) -> i32 {
@@ -153,8 +152,15 @@ pub fn build_playback_snapshot_from_inputs(
         .map_or(0, |pts_us| playback_position_ms - us_to_ms(pts_us));
     let next_video_pts_ms = runtime_video.next_pts_us.map_or(0, us_to_ms);
     let current_to_next_video_delta_ms = runtime_video.current_to_next_delta_us.map_or(0, us_to_ms);
-    let (current_video_surface_kind, current_video_surface_pixel_format) =
-        (inputs.current_video_surface_kind_raw, inputs.current_video_pixel_format_raw);
+    let (
+        current_video_surface_kind,
+        current_video_surface_backend,
+        current_video_surface_pixel_format,
+    ) = (
+        inputs.current_video_surface_kind_raw,
+        inputs.current_video_surface_backend_raw,
+        inputs.current_video_pixel_format_raw,
+    );
     let core_sync_error_ms = sync_snapshot.core_sync_error_us / 1_000;
     let expected_end_to_end_av_delta_ms = core_av_delta_ms - i64::from(host_presentation_offset_ms);
 
@@ -165,13 +171,10 @@ pub fn build_playback_snapshot_from_inputs(
         has_current_video_frame: u32::from(runtime_video.has_current_frame),
         current_video_pts_ms: runtime_video.current_pts_us.map_or(0, us_to_ms),
         current_video_duration_ms: runtime_video.current_duration_us.map_or(0, us_to_ms),
-        video_decode_backend: map_video_decode_backend(video_decode.backend).as_raw(),
+        video_decode_backend: video_decode.backend.as_raw(),
         video_hardware_requested: u32::from(video_decode.hardware_requested),
         video_hardware_active: u32::from(video_decode.hardware_active),
-        video_decode_fallback_reason: map_video_decode_fallback_reason(
-            video_decode.fallback_reason,
-        )
-        .as_raw(),
+        video_decode_fallback_reason: video_decode.fallback_reason.as_raw(),
         current_video_surface_kind,
         current_video_surface_pixel_format,
         current_video_effective_end_ms: sync_snapshot
@@ -291,6 +294,7 @@ pub fn build_playback_snapshot_from_inputs(
         rendered_frames_total: audio_output_snapshot.rendered_frames_total,
         audible_frames_total: audio_output_snapshot.audible_frames_total,
         end_of_stream: u32::from(runtime.end_of_stream),
+        current_video_surface_backend,
     }
 }
 
@@ -302,37 +306,6 @@ fn stream_kind_to_u32(kind: StreamKind) -> u32 {
         StreamKind::Subtitle => 3,
         StreamKind::Data => 4,
         StreamKind::Attachment => 5,
-    }
-}
-
-fn map_video_decode_backend(backend: VideoDecodeBackend) -> SemiVideoDecodeBackend {
-    match backend {
-        VideoDecodeBackend::Unknown => SemiVideoDecodeBackend::Unknown,
-        VideoDecodeBackend::SoftwareBgra => SemiVideoDecodeBackend::SoftwareBgra,
-        VideoDecodeBackend::D3d11va => SemiVideoDecodeBackend::D3d11va,
-    }
-}
-
-fn map_video_decode_fallback_reason(
-    reason: VideoDecodeFallbackReason,
-) -> SemiVideoDecodeFallbackReason {
-    match reason {
-        VideoDecodeFallbackReason::None => SemiVideoDecodeFallbackReason::None,
-        VideoDecodeFallbackReason::NoHardwareConfig => {
-            SemiVideoDecodeFallbackReason::NoHardwareConfig
-        }
-        VideoDecodeFallbackReason::HwDeviceCreateFailed => {
-            SemiVideoDecodeFallbackReason::HwDeviceCreateFailed
-        }
-        VideoDecodeFallbackReason::HwDeviceContextBindFailed => {
-            SemiVideoDecodeFallbackReason::HwDeviceContextBindFailed
-        }
-        VideoDecodeFallbackReason::HwDecoderOpenFailed => {
-            SemiVideoDecodeFallbackReason::HwDecoderOpenFailed
-        }
-        VideoDecodeFallbackReason::HwDecoderTypeMismatch => {
-            SemiVideoDecodeFallbackReason::HwDecoderTypeMismatch
-        }
     }
 }
 
@@ -350,17 +323,20 @@ pub fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
 }
 
 pub fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
-    let (kind, texture_ptr, shared_handle, array_slice) = match &frame.surface.storage {
-        VideoSurfaceStorage::CpuPacked { .. } => (SemiVideoSurfaceKind::CpuPacked, 0, 0, 0),
-        VideoSurfaceStorage::GpuTexture(data) => match data.backend() {
-            crate::render::gpu::GpuBackendKind::D3d11 => (
-                SemiVideoSurfaceKind::D3d11Texture2D,
-                data.texture_ptr,
-                data.shared_handle.unwrap_or(0),
-                data.array_slice,
-            ),
-        },
-    };
+    let (kind, backend_kind, texture_ptr, shared_handle, array_slice) =
+        match frame.gpu_texture_export_desc() {
+            None => (SemiVideoSurfaceKind::CpuPacked, 0u32, 0, 0, 0),
+            Some(texture) => {
+                let host_export = texture.host_export();
+                (
+                    SemiVideoSurfaceKind::GpuTexture,
+                    host_export.backend_kind_raw,
+                    host_export.texture_ptr,
+                    host_export.shared_handle,
+                    host_export.array_slice,
+                )
+            }
+        };
 
     SemiVideoSurfaceDesc {
         kind: kind.as_raw(),
@@ -373,7 +349,7 @@ pub fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
         texture_ptr,
         shared_handle,
         array_slice,
-        reserved0: 0,
+        backend_kind,
     }
 }
 

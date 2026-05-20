@@ -91,6 +91,7 @@ pub struct PlaybackSnapshotInputs {
     pub video_decode: VideoDecodeDiagnosticsSnapshot,
     pub audio_output: AudioOutputSnapshot,
     pub current_video_surface_kind_raw: u32,
+    pub current_video_surface_backend_raw: u32,
     pub current_video_pixel_format_raw: u32,
 }
 
@@ -389,7 +390,11 @@ impl SemiPlayerHandle {
         let video_sync_snapshot = schedule_inputs.video_snapshot;
         let audio_output = self.audio_output_snapshot();
 
-        let (current_video_surface_kind_raw, current_video_pixel_format_raw) =
+        let (
+            current_video_surface_kind_raw,
+            current_video_surface_backend_raw,
+            current_video_pixel_format_raw,
+        ) =
             self.current_video_surface_info_snapshot();
 
         PlaybackSnapshotInputs {
@@ -406,6 +411,7 @@ impl SemiPlayerHandle {
             video_decode: self.video_decode_diagnostics_snapshot(),
             audio_output,
             current_video_surface_kind_raw,
+            current_video_surface_backend_raw,
             current_video_pixel_format_raw,
         }
     }
@@ -677,16 +683,16 @@ impl SemiPlayerHandle {
         self.runtime.lock().unwrap().runtime.current_video_frame().map(|frame| frame.pts_us)
     }
 
-    pub fn current_video_surface_info_snapshot(&self) -> (u32, u32) {
+    pub fn current_video_surface_info_snapshot(&self) -> (u32, u32, u32) {
         self.runtime.lock().unwrap().runtime.current_video_frame()
             .map(|frame| {
-                let kind = match &frame.surface.storage {
-                    crate::render::core::frame::VideoSurfaceStorage::CpuPacked { .. } => 1u32,
-                    crate::render::core::frame::VideoSurfaceStorage::GpuTexture(_) => 2u32,
+                let (kind, backend_kind) = match frame.gpu_texture_view() {
+                    Some(texture) => (frame.surface_kind().as_raw(), texture.backend_kind().as_raw()),
+                    None => (frame.surface_kind().as_raw(), 0u32),
                 };
-                (kind, frame.pixel_format().as_raw())
+                (kind, backend_kind, frame.pixel_format().as_raw())
             })
-            .unwrap_or((0, 0))
+            .unwrap_or((0, 0, 0))
     }
 
     pub fn probe_prev_keyframe_pts_snapshot(&self, target_us: MediaTimeUs) -> Option<MediaTimeUs> {

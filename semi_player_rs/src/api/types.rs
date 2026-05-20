@@ -225,6 +225,7 @@ pub struct SemiPlaybackSnapshot {
     pub rendered_frames_total: u64,
     pub audible_frames_total: u64,
     pub end_of_stream: u32,
+    pub current_video_surface_backend: u32,
 }
 
 #[repr(C)]
@@ -264,7 +265,7 @@ pub struct SemiVideoFrameInfo {
 pub enum SemiVideoSurfaceKind {
     Unknown = 0,
     CpuPacked = 1,
-    D3d11Texture2D = 2,
+    GpuTexture = 2,
 }
 
 impl SemiVideoSurfaceKind {
@@ -276,12 +277,21 @@ impl SemiVideoSurfaceKind {
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(dead_code)]
+pub enum SemiGpuBackendKind {
+    Unknown = 0,
+    D3d11 = 1,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub enum SemiVideoDecodeBackend {
     Unknown = 0,
     SoftwareBgra = 1,
     D3d11va = 2,
 }
 
+#[allow(dead_code)]
 impl SemiVideoDecodeBackend {
     pub const fn as_raw(self) -> u32 {
         self as u32
@@ -300,6 +310,7 @@ pub enum SemiVideoDecodeFallbackReason {
     HwDecoderTypeMismatch = 5,
 }
 
+#[allow(dead_code)]
 impl SemiVideoDecodeFallbackReason {
     pub const fn as_raw(self) -> u32 {
         self as u32
@@ -319,5 +330,5 @@ pub struct SemiVideoSurfaceDesc {
     pub texture_ptr: u64,
     pub shared_handle: u64,
     pub array_slice: u32,
-    pub reserved0: u32,
+    pub backend_kind: u32,
 }

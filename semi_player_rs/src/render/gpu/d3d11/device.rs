@@ -28,12 +28,12 @@ impl D3d11DeviceContext {
 }
 
 #[derive(Debug)]
-pub struct D3d11GpuDevice {
+pub(crate) struct D3d11GpuDevice {
     context: D3d11DeviceContext,
 }
 
 impl D3d11GpuDevice {
-    pub fn new() -> Result<Self, GpuDeviceError> {
+    pub(crate) fn new() -> Result<Self, GpuDeviceError> {
         use windows::Win32::Foundation::HMODULE;
         use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
         use windows::Win32::Graphics::Direct3D11::{
@@ -82,12 +82,12 @@ impl D3d11GpuDevice {
     }
 
     #[allow(dead_code)]
-    pub fn raw_device(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Device {
+    pub(crate) fn raw_device(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Device {
         &self.context.device
     }
 
     #[allow(dead_code)]
-    pub fn raw_device_context(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext {
+    pub(crate) fn raw_device_context(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext {
         &self.context.device_context
     }
 }

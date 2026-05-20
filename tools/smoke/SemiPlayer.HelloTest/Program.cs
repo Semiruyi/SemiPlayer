@@ -658,7 +658,7 @@ internal sealed class PlayerSmokeWindow : Window
     private static string FormatSurfaceKind(uint kind) => kind switch
     {
         (uint)SemiVideoSurfaceKind.CpuPacked => "CpuPacked",
-        (uint)SemiVideoSurfaceKind.D3d11Texture2D => "D3D11",
+        (uint)SemiVideoSurfaceKind.GpuTexture => "GpuTexture",
         _ => "Unknown",
     };
 
@@ -1235,6 +1235,7 @@ internal struct SemiPlaybackSnapshot
     internal ulong RenderedFramesTotal;
     internal ulong AudibleFramesTotal;
     internal uint EndOfStream;
+    internal uint CurrentVideoSurfaceBackend;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -1281,14 +1282,20 @@ internal struct SemiVideoSurfaceDesc
     internal ulong TexturePtr;
     internal ulong SharedHandle;
     internal uint ArraySlice;
-    internal uint Reserved0;
+    internal uint BackendKind;
 }
 
 internal enum SemiVideoSurfaceKind : uint
 {
     Unknown = 0,
     CpuPacked = 1,
-    D3d11Texture2D = 2,
+    GpuTexture = 2,
+}
+
+internal enum SemiGpuBackendKind : uint
+{
+    Unknown = 0,
+    D3d11 = 1,
 }
 
 internal enum SemiVideoDecodeBackend : uint

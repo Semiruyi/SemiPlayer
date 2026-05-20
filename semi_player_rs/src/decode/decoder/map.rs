@@ -21,7 +21,7 @@ pub(crate) fn map_video_frame(
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
 ) -> Result<DecodedVideoFrame, MediaOpenError> {
-    if let Some(mapped) = map_d3d11_video_frame(decoder, frame, pts_us, duration_us) {
+    if let Some(mapped) = map_exported_gpu_video_frame(decoder, frame, pts_us, duration_us) {
         return Ok(mapped);
     }
 
@@ -78,16 +78,24 @@ pub(crate) fn audio_duration_us(frame: &frame::Audio) -> Option<MediaTimeUs> {
     )
 }
 
-fn map_d3d11_video_frame(
+fn map_exported_gpu_video_frame(
     decoder: &OpenedVideoDecoder,
     frame: &frame::Video,
     pts_us: MediaTimeUs,
     duration_us: Option<MediaTimeUs>,
 ) -> Option<DecodedVideoFrame> {
-    if decoder.backend != crate::decode::video_decode::VideoDecodeBackend::D3d11va {
-        return None;
+    match decoder.backend.exported_gpu_backend_kind()? {
+        crate::render::gpu::GpuBackendKind::D3d11 => {
+            map_d3d11_exported_video_frame(frame, pts_us, duration_us)
+        }
     }
+}
 
+fn map_d3d11_exported_video_frame(
+    frame: &frame::Video,
+    pts_us: MediaTimeUs,
+    duration_us: Option<MediaTimeUs>,
+) -> Option<DecodedVideoFrame> {
     if !matches!(
         frame.format(),
         format::Pixel::D3D11VA_VLD | format::Pixel::D3D11

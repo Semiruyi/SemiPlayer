@@ -33,6 +33,4 @@ pub use output::{
 };
 #[allow(unused_imports)]
 pub use policy::{DecodePreference, VideoDecodeRequirements};
-pub use video_decode::{
-    VideoDecodeBackend, VideoDecodeDiagnosticsSnapshot, VideoDecodeFallbackReason,
-};
+pub use video_decode::VideoDecodeDiagnosticsSnapshot;

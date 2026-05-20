@@ -242,8 +242,9 @@ mod tests {
             width: 1920,
             height: 1080,
             is_key_frame: false,
-            surface: Arc::new(VideoSurface::new_d3d11_texture_2d(
+            surface: Arc::new(VideoSurface::new_raw_gpu_texture(
                 PixelFormatCategory::Nv12,
+                crate::render::gpu::GpuBackendKind::D3d11,
                 0x1234,
                 None,
                 0,

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::render::gpu::GpuTextureData;
+use crate::render::gpu::{GpuTextureData, GpuTextureExportDesc, GpuTextureView};
 use crate::util::time::MediaTimeUs;
 
 #[repr(u32)]
@@ -80,6 +80,15 @@ pub enum VideoSurfaceKind {
     GpuTexture,
 }
 
+impl VideoSurfaceKind {
+    pub const fn as_raw(self) -> u32 {
+        match self {
+            Self::CpuPacked => 1,
+            Self::GpuTexture => 2,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum VideoSurfaceStorage {
@@ -112,8 +121,9 @@ impl VideoSurface {
     }
 
     #[allow(dead_code)]
-    pub fn new_d3d11_texture_2d(
+    pub fn new_raw_gpu_texture(
         pixel_format: PixelFormatCategory,
+        backend_kind: crate::render::gpu::GpuBackendKind,
         texture_ptr: u64,
         shared_handle: Option<u64>,
         array_slice: u32,
@@ -122,7 +132,7 @@ impl VideoSurface {
             pixel_format,
             color_info: VideoColorInfo::default(),
             storage: VideoSurfaceStorage::GpuTexture(GpuTextureData::new(
-                crate::render::gpu::GpuBackendKind::D3d11,
+                backend_kind,
                 texture_ptr,
                 shared_handle,
                 array_slice,
@@ -171,6 +181,14 @@ impl VideoSurface {
         }
     }
 
+    pub fn gpu_texture_view(&self) -> Option<GpuTextureView> {
+        self.gpu_texture_data().map(GpuTextureData::view)
+    }
+
+    pub fn gpu_texture_export_desc(&self) -> Option<GpuTextureExportDesc> {
+        self.gpu_texture_data().map(GpuTextureData::export_desc)
+    }
+
     pub fn color_info(&self) -> VideoColorInfo {
         self.color_info
     }
@@ -214,6 +232,14 @@ impl VideoFrame {
 
     pub fn color_info(&self) -> VideoColorInfo {
         self.surface.color_info()
+    }
+
+    pub fn gpu_texture_view(&self) -> Option<GpuTextureView> {
+        self.surface.gpu_texture_view()
+    }
+
+    pub fn gpu_texture_export_desc(&self) -> Option<GpuTextureExportDesc> {
+        self.surface.gpu_texture_export_desc()
     }
 
     pub fn end_time_us(&self) -> Option<MediaTimeUs> {

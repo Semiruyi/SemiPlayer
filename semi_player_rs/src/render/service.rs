@@ -41,10 +41,6 @@ impl RenderService {
         }
     }
 
-    pub fn from_device(device: &dyn RenderBackend) -> Self {
-        Self::from_backend(device)
-    }
-
     pub fn render_frames(
         &mut self,
         request: VideoRenderRequest,

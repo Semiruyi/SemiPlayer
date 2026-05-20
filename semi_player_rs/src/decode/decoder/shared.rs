@@ -52,7 +52,7 @@ impl OpenedVideoDecoder {
         VideoDecodeDiagnosticsSnapshot {
             backend: self.backend,
             hardware_requested: self.hardware_requested,
-            hardware_active: self.backend == VideoDecodeBackend::D3d11va,
+            hardware_active: self.backend.is_hardware_accelerated(),
             fallback_reason: self.fallback_reason,
         }
     }
