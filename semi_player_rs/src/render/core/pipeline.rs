@@ -1,8 +1,8 @@
+use crate::render::core::converter::ConversionRequest;
 use crate::render::core::frame::{
-    DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoSurfaceKind,
+    DecodedVideoFrame, PixelFormatCategory, VideoSurfaceKind,
 };
-use crate::render::gpu::{GpuRenderer, RenderBackendCapabilities};
-use crate::render::pipelines::cpu_bgra;
+use crate::render::gpu::RenderBackendCapabilities;
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -114,7 +114,7 @@ pub struct VideoRenderStats {
 
 #[derive(Debug, Default)]
 pub struct VideoRenderBatch {
-    pub frames: Vec<PresentationFrame>,
+    pub frames: Vec<crate::render::core::frame::PresentationFrame>,
     pub stats: VideoRenderStats,
 }
 
@@ -124,60 +124,7 @@ impl VideoRenderPipeline {
         Self
     }
 
-    #[allow(dead_code)]
-    pub fn render_frame(
-        &self,
-        request: VideoRenderRequest,
-        frame: DecodedVideoFrame,
-        backend_capabilities: RenderBackendCapabilities,
-        renderer: &mut Box<dyn GpuRenderer>,
-    ) -> PresentationFrame {
-        let plan = self.plan_render(request, &frame, backend_capabilities);
-        self.execute_render_plan(&plan, frame, renderer).0
-    }
-
-    pub fn render_frames(
-        &self,
-        request: VideoRenderRequest,
-        frames: impl IntoIterator<Item = DecodedVideoFrame>,
-        backend_capabilities: RenderBackendCapabilities,
-        renderer: &mut Box<dyn GpuRenderer>,
-    ) -> VideoRenderBatch {
-        let mut batch = VideoRenderBatch::default();
-
-        for frame in frames {
-            let plan = self.plan_render(request, &frame, backend_capabilities);
-            match plan.path {
-                VideoRenderPath::Passthrough => {
-                    batch.stats.passthrough_frames =
-                        batch.stats.passthrough_frames.saturating_add(1);
-                }
-                VideoRenderPath::PassthroughWithSubtitleIntent => {
-                    batch.stats.passthrough_with_subtitle_intent_frames = batch
-                        .stats
-                        .passthrough_with_subtitle_intent_frames
-                        .saturating_add(1);
-                }
-                VideoRenderPath::RequiresTransform => {
-                    batch.stats.requires_transform_frames =
-                        batch.stats.requires_transform_frames.saturating_add(1);
-                }
-                VideoRenderPath::UnsupportedTransform => {}
-            }
-
-            let (rendered_frame, fell_back) = self.execute_render_plan(&plan, frame, renderer);
-            if fell_back {
-                batch.stats.fallback_passthrough_frames =
-                    batch.stats.fallback_passthrough_frames.saturating_add(1);
-            }
-            batch.frames.push(rendered_frame);
-            batch.stats.rendered_frames = batch.stats.rendered_frames.saturating_add(1);
-        }
-
-        batch
-    }
-
-    fn plan_render(
+    pub(crate) fn plan_render(
         &self,
         request: VideoRenderRequest,
         frame: &DecodedVideoFrame,
@@ -200,7 +147,18 @@ impl VideoRenderPipeline {
             VideoRenderPath::UnsupportedTransform
         };
 
-        VideoRenderPlan { target, path }
+        let request = if path == VideoRenderPath::Passthrough
+            || path == VideoRenderPath::PassthroughWithSubtitleIntent
+        {
+            ConversionRequest::Passthrough
+        } else {
+            ConversionRequest::Convert {
+                target_pixel_format: target.presentation_pixel_format,
+                target_surface_kind: target.presentation_surface_kind,
+            }
+        };
+
+        VideoRenderPlan { request, path }
     }
 
     fn resolve_request(
@@ -273,64 +231,10 @@ impl VideoRenderPipeline {
             _ => false,
         }
     }
-
-    fn try_render_transform(
-        &self,
-        plan: &VideoRenderPlan,
-        frame: DecodedVideoFrame,
-        renderer: &mut Box<dyn GpuRenderer>,
-    ) -> Result<PresentationFrame, DecodedVideoFrame> {
-        match (
-            plan.target.presentation_surface_kind,
-            plan.target.presentation_pixel_format,
-        ) {
-            (VideoSurfaceKind::CpuPacked, PixelFormatCategory::Bgra8) => {
-                if frame.surface_kind() == VideoSurfaceKind::GpuTexture {
-                    match renderer.render_frame(&frame) {
-                        Ok(rendered) => Ok(rendered),
-                        Err(_) => Err(frame),
-                    }
-                } else {
-                    cpu_bgra::try_render(frame)
-                }
-            }
-            (VideoSurfaceKind::GpuTexture, PixelFormatCategory::Bgra8) => {
-                match renderer.render_frame(&frame) {
-                    Ok(rendered) => Ok(rendered),
-                    Err(_) => Err(frame),
-                }
-            }
-            _ => Err(frame),
-        }
-    }
-
-    fn execute_render_plan(
-        &self,
-        plan: &VideoRenderPlan,
-        frame: DecodedVideoFrame,
-        renderer: &mut Box<dyn GpuRenderer>,
-    ) -> (PresentationFrame, bool) {
-        match plan.path {
-            VideoRenderPath::Passthrough | VideoRenderPath::PassthroughWithSubtitleIntent => {
-                (frame, false)
-            }
-            VideoRenderPath::RequiresTransform => {
-                match self.try_render_transform(plan, frame, renderer) {
-                    Ok(transformed_frame) => (transformed_frame, false),
-                    Err(frame) => {
-                        let _target_pixel_format = plan.target.presentation_pixel_format;
-                        let _target_surface_kind = plan.target.presentation_surface_kind;
-                        (frame, true)
-                    }
-                }
-            }
-            VideoRenderPath::UnsupportedTransform => (frame, true),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum VideoRenderPath {
+pub(crate) enum VideoRenderPath {
     Passthrough,
     PassthroughWithSubtitleIntent,
     RequiresTransform,
@@ -338,9 +242,9 @@ enum VideoRenderPath {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VideoRenderPlan {
-    target: ResolvedVideoRenderRequest,
-    path: VideoRenderPath,
+pub(crate) struct VideoRenderPlan {
+    pub request: ConversionRequest,
+    pub path: VideoRenderPath,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,9 +278,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        PresentationPixelFormatPreference, PresentationSurfaceKindPreference,
+        ConversionRequest, PresentationPixelFormatPreference, PresentationSurfaceKindPreference,
         PresentationIntent, VideoRenderPath, VideoRenderPipeline, VideoRenderRequest,
-        VideoRenderStats,
     };
     use crate::render::core::frame::{
         PixelFormatCategory, VideoFrame, VideoSurface, VideoSurfaceKind,
@@ -418,26 +321,6 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_pipeline_preserves_timing_and_surface_shape() {
-        let pipeline = VideoRenderPipeline::new();
-        let input = decoded_frame(33_000);
-
-        let output = pipeline.render_frame(
-            VideoRenderRequest::default(),
-            input.clone(),
-            no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
-        );
-
-        assert_eq!(output.pts_us, input.pts_us);
-        assert_eq!(output.duration_us, input.duration_us);
-        assert_eq!(output.width, input.width);
-        assert_eq!(output.height, input.height);
-        assert_eq!(output.pixel_format(), input.pixel_format());
-        assert_eq!(output.byte_len(), input.byte_len());
-    }
-
-    #[test]
     fn passthrough_request_plans_passthrough_path() {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(10_000);
@@ -449,8 +332,7 @@ mod tests {
         );
 
         assert_eq!(plan.path, VideoRenderPath::PassthroughWithSubtitleIntent);
-        assert_eq!(plan.target.presentation_pixel_format, input.pixel_format());
-        assert_eq!(plan.target.presentation_surface_kind, input.surface_kind());
+        assert_eq!(plan.request, ConversionRequest::Passthrough);
     }
 
     #[test]
@@ -458,20 +340,21 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(66_000);
 
-        let output = pipeline.render_frame(
+        // Passthrough intent + Bgra8 preference on already-BGRA CPU input →
+        // resolved target matches input, so it stays passthrough
+        let plan = pipeline.plan_render(
             VideoRenderRequest {
                 target_intent: PresentationIntent::Passthrough,
                 presentation_pixel_format: PresentationPixelFormatPreference::Bgra8,
                 presentation_surface_kind: PresentationSurfaceKindPreference::PreserveInput,
                 subtitles_visible: true,
             },
-            input.clone(),
+            &input,
             no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
         );
 
-        assert_eq!(output.pts_us, input.pts_us);
-        assert_eq!(output.pixel_format(), input.pixel_format());
+        assert_eq!(plan.path, VideoRenderPath::PassthroughWithSubtitleIntent);
+        assert_eq!(plan.request, ConversionRequest::Passthrough);
     }
 
     #[test]
@@ -479,38 +362,21 @@ mod tests {
         let pipeline = VideoRenderPipeline::new();
         let input = decoded_frame(99_000);
 
-        let output = pipeline.render_frame(
+        // Passthrough intent + GpuTexture preference, but input is CpuPacked and
+        // no backend supports GPU transform → UnsupportedTransform
+        let plan = pipeline.plan_render(
             VideoRenderRequest {
                 target_intent: PresentationIntent::Passthrough,
                 presentation_pixel_format: PresentationPixelFormatPreference::PreserveInput,
                 presentation_surface_kind: PresentationSurfaceKindPreference::GpuTexture,
                 subtitles_visible: false,
             },
-            input.clone(),
+            &input,
             no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
         );
 
-        assert_eq!(output.pts_us, input.pts_us);
-        assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
-    }
-
-    #[test]
-    fn cpu_bgra_compatibility_profile_resolves_to_cpu_bgra_targets() {
-        let pipeline = VideoRenderPipeline::new();
-        let input = decoded_frame(123_000);
-
-        let resolved =
-            pipeline.resolve_request(VideoRenderRequest::cpu_bgra_compatibility(true), &input);
-
-        assert_eq!(
-            resolved.presentation_pixel_format,
-            PixelFormatCategory::Bgra8
-        );
-        assert_eq!(
-            resolved.presentation_surface_kind,
-            VideoSurfaceKind::CpuPacked
-        );
+        // Input is CpuPacked BGRA, target is GpuTexture BGRA — mismatch, no backend → unsupported
+        assert_eq!(plan.path, VideoRenderPath::UnsupportedTransform);
     }
 
     #[test]
@@ -528,40 +394,23 @@ mod tests {
     }
 
     #[test]
-    fn cpu_bgra_compatibility_transforms_rgba_cpu_input_to_bgra() {
+    fn cpu_bgra_compatibility_plans_convert_for_mismatched_format() {
         let pipeline = VideoRenderPipeline::new();
         let input = rgba_frame(123_000);
 
-        let output = pipeline.render_frame(
+        let plan = pipeline.plan_render(
             VideoRenderRequest::cpu_bgra_compatibility(false),
-            input,
+            &input,
             no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
         );
 
-        assert_eq!(output.pixel_format(), PixelFormatCategory::Bgra8);
-        assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
+        assert_eq!(plan.path, VideoRenderPath::RequiresTransform);
         assert_eq!(
-            output.cpu_packed_data(),
-            Some([3, 2, 1, 4, 30, 20, 10, 40].as_slice())
-        );
-    }
-
-    #[test]
-    fn gpu_presenter_profile_resolves_to_gpu_bgra_targets() {
-        let pipeline = VideoRenderPipeline::new();
-        let input = decoded_frame(123_000);
-
-        let resolved =
-            pipeline.resolve_request(VideoRenderRequest::gpu_bgra_presenter(false), &input);
-
-        assert_eq!(
-            resolved.presentation_pixel_format,
-            PixelFormatCategory::Bgra8
-        );
-        assert_eq!(
-            resolved.presentation_surface_kind,
-            VideoSurfaceKind::GpuTexture
+            plan.request,
+            ConversionRequest::Convert {
+                target_pixel_format: PixelFormatCategory::Bgra8,
+                target_surface_kind: VideoSurfaceKind::CpuPacked,
+            }
         );
     }
 
@@ -601,57 +450,6 @@ mod tests {
         assert_eq!(
             resolved.presentation_surface_kind,
             VideoSurfaceKind::CpuPacked
-        );
-    }
-
-    #[test]
-    fn render_batch_reports_transform_requirements() {
-        let pipeline = VideoRenderPipeline::new();
-        let frames = vec![decoded_frame(0), decoded_frame(33_000)];
-
-        let batch = pipeline.render_frames(
-            VideoRenderRequest::gpu_bgra_presenter(false),
-            frames,
-            no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
-        );
-
-        assert_eq!(batch.frames.len(), 2);
-        assert_eq!(
-            batch.stats,
-            VideoRenderStats {
-                rendered_frames: 2,
-                passthrough_frames: 0,
-                passthrough_with_subtitle_intent_frames: 0,
-                requires_transform_frames: 0,
-                fallback_passthrough_frames: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn render_batch_does_not_count_supported_cpu_transform_as_fallback() {
-        let pipeline = VideoRenderPipeline::new();
-        let frames = vec![rgba_frame(0)];
-
-        let batch = pipeline.render_frames(
-            VideoRenderRequest::cpu_bgra_compatibility(false),
-            frames,
-            no_backend_capabilities(),
-            &mut crate::render::gpu::create_noop_renderer(),
-        );
-
-        assert_eq!(batch.frames.len(), 1);
-        assert_eq!(batch.frames[0].pixel_format(), PixelFormatCategory::Bgra8);
-        assert_eq!(
-            batch.stats,
-            VideoRenderStats {
-                rendered_frames: 1,
-                passthrough_frames: 0,
-                passthrough_with_subtitle_intent_frames: 0,
-                requires_transform_frames: 1,
-                fallback_passthrough_frames: 0,
-            }
         );
     }
 }

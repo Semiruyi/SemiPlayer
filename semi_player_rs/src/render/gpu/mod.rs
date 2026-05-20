@@ -1,9 +1,9 @@
 mod d3d11;
 
-use std::fmt;
 use std::sync::Arc;
 
-use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
+use crate::render::core::converter::FrameConverter;
+use crate::render::core::frame::DecodedVideoFrame;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpuBackendKind {
@@ -167,13 +167,6 @@ pub enum GpuRenderError {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct GpuRendererSnapshot {
-    pub render_attempts: u64,
-    pub successful_renders: u64,
-    pub backend_unavailable_errors: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RenderBackendCapabilities {
     pub supports_ffmpeg_hw_device_ctx: bool,
     pub supports_owned_texture_copy: bool,
@@ -181,7 +174,7 @@ pub struct RenderBackendCapabilities {
     pub supports_nv12_cpu_bgra_conversion: bool,
 }
 
-pub trait RenderBackend: Send + Sync {
+pub(crate) trait RenderBackend: Send + Sync {
     fn backend_kind(&self) -> GpuBackendKind;
     fn capabilities(&self) -> RenderBackendCapabilities {
         RenderBackendCapabilities::default()
@@ -189,21 +182,13 @@ pub trait RenderBackend: Send + Sync {
     fn create_ffmpeg_hw_device_ctx(
         &self,
     ) -> Result<*mut ffmpeg_next::ffi::AVBufferRef, GpuDeviceError>;
-    fn create_renderer(&self) -> Box<dyn GpuRenderer>;
+    fn create_converter(&self) -> Box<dyn FrameConverter>;
     fn copy_frame_to_owned_texture(
         &self,
         frame: &DecodedVideoFrame,
     ) -> Result<DecodedVideoFrame, GpuRenderError> {
         Ok(frame.clone())
     }
-}
-
-pub trait GpuRenderer: Send + fmt::Debug {
-    fn render_frame(
-        &mut self,
-        frame: &DecodedVideoFrame,
-    ) -> Result<PresentationFrame, GpuRenderError>;
-    fn snapshot(&self) -> GpuRendererSnapshot;
 }
 
 pub fn create_default_backend() -> Result<Arc<dyn RenderBackend>, GpuDeviceError> {
@@ -215,27 +200,4 @@ pub fn create_default_backend() -> Result<Arc<dyn RenderBackend>, GpuDeviceError
     {
         Err(GpuDeviceError::DeviceCreationFailed)
     }
-}
-
-/// Renderer that always returns `BackendUnavailable`. Used when no GPU device is available
-/// or in tests that don't need GPU rendering.
-#[derive(Debug, Default)]
-pub struct NoopGpuRenderer;
-
-impl GpuRenderer for NoopGpuRenderer {
-    fn render_frame(
-        &mut self,
-        _frame: &DecodedVideoFrame,
-    ) -> Result<PresentationFrame, GpuRenderError> {
-        Err(GpuRenderError::BackendUnavailable)
-    }
-
-    fn snapshot(&self) -> GpuRendererSnapshot {
-        GpuRendererSnapshot::default()
-    }
-}
-
-#[cfg(test)]
-pub fn create_noop_renderer() -> Box<dyn GpuRenderer> {
-    Box::new(NoopGpuRenderer)
 }

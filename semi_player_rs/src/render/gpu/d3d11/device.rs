@@ -1,11 +1,11 @@
+use crate::render::core::converter::FrameConverter;
 use crate::render::core::frame::DecodedVideoFrame;
 use crate::render::gpu::{
-    GpuBackendKind, GpuDeviceError, GpuRenderError, GpuRenderer, RenderBackend,
-    RenderBackendCapabilities,
+    GpuBackendKind, GpuDeviceError, GpuRenderError, RenderBackend, RenderBackendCapabilities,
 };
 
+use super::converter::D3d11FrameConverter;
 use super::interop;
-use super::renderer::D3d11GpuRenderer;
 
 #[derive(Clone, Debug)]
 pub(crate) struct D3d11DeviceContext {
@@ -112,8 +112,8 @@ impl RenderBackend for D3d11GpuDevice {
         interop::create_ffmpeg_hw_device_ctx(&self.context)
     }
 
-    fn create_renderer(&self) -> Box<dyn GpuRenderer> {
-        Box::new(D3d11GpuRenderer::new(self.context.clone()))
+    fn create_converter(&self) -> Box<dyn FrameConverter> {
+        Box::new(D3d11FrameConverter::new(self.context.clone()))
     }
 
     fn copy_frame_to_owned_texture(

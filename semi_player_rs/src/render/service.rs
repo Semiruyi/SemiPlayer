@@ -1,21 +1,22 @@
 use std::sync::Arc;
 
-use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
-use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPipeline, VideoRenderRequest};
-use crate::render::gpu::{
-    GpuRenderer, GpuRendererSnapshot, NoopGpuRenderer, RenderBackend, RenderBackendCapabilities,
+use crate::render::core::converter::{
+    ConversionRequest, FrameConverter, FrameConverterSnapshot, NoopFrameConverter,
 };
+use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
+use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPath, VideoRenderPipeline, VideoRenderRequest};
+use crate::render::gpu::{RenderBackend, RenderBackendCapabilities};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(dead_code)]
 pub struct RenderServiceSnapshot {
-    pub renderer: GpuRendererSnapshot,
+    pub converter: FrameConverterSnapshot,
     pub backend_capabilities: RenderBackendCapabilities,
 }
 
 pub struct RenderService {
     pipeline: VideoRenderPipeline,
-    renderer: Box<dyn GpuRenderer>,
+    converter: Box<dyn FrameConverter>,
     backend_capabilities: RenderBackendCapabilities,
     backend: Option<Arc<dyn RenderBackend>>,
 }
@@ -24,7 +25,7 @@ impl std::fmt::Debug for RenderService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderService")
             .field("pipeline", &self.pipeline)
-            .field("renderer", &self.renderer)
+            .field("converter", &self.converter)
             .field("backend_capabilities", &self.backend_capabilities)
             .field("has_backend", &self.backend.is_some())
             .finish()
@@ -35,7 +36,7 @@ impl Default for RenderService {
     fn default() -> Self {
         Self {
             pipeline: VideoRenderPipeline::new(),
-            renderer: Box::new(NoopGpuRenderer),
+            converter: Box::new(NoopFrameConverter),
             backend_capabilities: RenderBackendCapabilities::default(),
             backend: None,
         }
@@ -50,7 +51,7 @@ impl RenderService {
     pub fn from_backend(backend: Arc<dyn RenderBackend>) -> Self {
         Self {
             pipeline: VideoRenderPipeline::new(),
-            renderer: backend.create_renderer(),
+            converter: backend.create_converter(),
             backend_capabilities: backend.capabilities(),
             backend: Some(backend),
         }
@@ -72,8 +73,47 @@ impl RenderService {
         request: VideoRenderRequest,
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
     ) -> VideoRenderBatch {
-        self.pipeline
-            .render_frames(request, frames, self.backend_capabilities, &mut self.renderer)
+        let mut batch = VideoRenderBatch::default();
+
+        for frame in frames {
+            let plan = self.pipeline.plan_render(request, &frame, self.backend_capabilities);
+            match plan.path {
+                VideoRenderPath::Passthrough => {
+                    batch.stats.passthrough_frames =
+                        batch.stats.passthrough_frames.saturating_add(1);
+                }
+                VideoRenderPath::PassthroughWithSubtitleIntent => {
+                    batch.stats.passthrough_with_subtitle_intent_frames = batch
+                        .stats
+                        .passthrough_with_subtitle_intent_frames
+                        .saturating_add(1);
+                }
+                VideoRenderPath::RequiresTransform => {
+                    batch.stats.requires_transform_frames =
+                        batch.stats.requires_transform_frames.saturating_add(1);
+                }
+                VideoRenderPath::UnsupportedTransform => {}
+            }
+
+            let result = match plan.request {
+                ConversionRequest::Passthrough => Ok(frame),
+                req => self.converter.convert(frame, req),
+            };
+
+            let (rendered_frame, fell_back) = match result {
+                Ok(presentation_frame) => (presentation_frame, false),
+                Err(original_frame) => (original_frame, true),
+            };
+
+            if fell_back {
+                batch.stats.fallback_passthrough_frames =
+                    batch.stats.fallback_passthrough_frames.saturating_add(1);
+            }
+            batch.frames.push(rendered_frame);
+            batch.stats.rendered_frames = batch.stats.rendered_frames.saturating_add(1);
+        }
+
+        batch
     }
 
     #[allow(dead_code)]
@@ -82,14 +122,17 @@ impl RenderService {
         request: VideoRenderRequest,
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
-        self.pipeline
-            .render_frame(request, frame, self.backend_capabilities, &mut self.renderer)
+        let plan = self.pipeline.plan_render(request, &frame, self.backend_capabilities);
+        match self.converter.convert(frame, plan.request) {
+            Ok(presentation_frame) => presentation_frame,
+            Err(original_frame) => original_frame,
+        }
     }
 
     #[allow(dead_code)]
     pub fn snapshot(&self) -> RenderServiceSnapshot {
         RenderServiceSnapshot {
-            renderer: self.renderer.snapshot(),
+            converter: self.converter.snapshot(),
             backend_capabilities: self.backend_capabilities,
         }
     }
@@ -100,6 +143,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{RenderService, RenderServiceSnapshot};
+    use crate::render::core::converter::FrameConverterSnapshot;
     use crate::render::core::frame::{
         PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
     };
@@ -135,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn render_service_uses_noop_renderer_without_device() {
+    fn render_service_uses_noop_converter_without_device() {
         let mut render = RenderService::new();
 
         let _ = render.render_frame(
@@ -150,13 +194,24 @@ mod tests {
         assert_eq!(
             render.snapshot(),
             RenderServiceSnapshot {
-                renderer: crate::render::gpu::GpuRendererSnapshot {
-                    render_attempts: 0,
-                    successful_renders: 0,
-                    backend_unavailable_errors: 0,
-                },
+                converter: FrameConverterSnapshot::default(),
                 backend_capabilities: RenderBackendCapabilities::default(),
             }
         );
+    }
+
+    #[test]
+    fn render_service_converts_rgba_to_bgra_via_noop_converter() {
+        use crate::render::core::frame::VideoSurfaceKind;
+
+        let mut render = RenderService::new();
+
+        let output = render.render_frame(
+            VideoRenderRequest::cpu_bgra_compatibility(false),
+            cpu_frame(PixelFormatCategory::Rgba8),
+        );
+
+        assert_eq!(output.pixel_format(), PixelFormatCategory::Bgra8);
+        assert_eq!(output.surface_kind(), VideoSurfaceKind::CpuPacked);
     }
 }
