@@ -561,6 +561,7 @@ fn map_d3d11_video_frame(
                     texture_ptr,
                     shared_handle: None,
                     array_slice,
+                    lease: None,
                 },
             )
             .with_color_info(color_info),

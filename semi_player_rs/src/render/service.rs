@@ -87,6 +87,7 @@ mod tests {
                         texture_ptr: 0x1234,
                         shared_handle: None,
                         array_slice: 0,
+                        lease: None,
                     },
                 )
                 .with_color_info(VideoColorInfo::default()),

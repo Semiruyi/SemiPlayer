@@ -125,6 +125,7 @@ impl VideoSurface {
                 texture_ptr,
                 shared_handle,
                 array_slice,
+                lease: None,
             }),
         }
     }

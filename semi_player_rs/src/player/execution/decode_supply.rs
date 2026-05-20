@@ -112,10 +112,25 @@ fn commit_video_prepare(
     prepared: VideoOutputPrepare,
     frame: DecodedVideoFrame,
 ) {
+    let frame = materialize_video_frame_for_runtime(player, frame);
     player.observe_seek_video_decoded_access(frame.pts_us, prepared.playback_time_us);
     player.with_runtime_access(|mut runtime| {
         runtime.push_decoded_video_frame(frame);
     });
+}
+
+fn materialize_video_frame_for_runtime(
+    player: &SemiPlayerHandle,
+    frame: DecodedVideoFrame,
+) -> DecodedVideoFrame {
+    let Some(device) = player.gpu_device.as_ref() else {
+        return frame;
+    };
+
+    match device.copy_frame_to_owned_texture(&frame) {
+        Ok(owned_frame) => owned_frame,
+        Err(_) => frame,
+    }
 }
 
 fn should_wake_sync_for_audio_enqueue(
@@ -218,7 +233,7 @@ mod tests {
 
     #[test]
     fn applying_audio_output_does_not_wake_sync_when_audio_is_already_started() {
-        let mut player = SemiPlayerHandle::new();
+        let player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Playing);
         player.audio_output.with_mut(|audio_output| {
             audio_output.ensure_backend_format(Some(AudioStreamFormat {
@@ -242,7 +257,7 @@ mod tests {
 
     #[test]
     fn applying_audio_output_wakes_sync_when_playing_backend_has_not_started() {
-        let mut player = SemiPlayerHandle::new();
+        let player = SemiPlayerHandle::new();
         player.set_state(PlayerState::Playing);
         player.audio_output.with_mut(|audio_output| {
             audio_output.ensure_backend_format(Some(AudioStreamFormat {

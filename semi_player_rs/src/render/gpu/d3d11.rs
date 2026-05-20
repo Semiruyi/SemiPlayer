@@ -7,8 +7,8 @@ use crate::render::core::frame::{
     VideoSurfaceStorage,
 };
 use crate::render::gpu::{
-    GpuBackendKind, GpuDevice, GpuDeviceError, GpuRenderError, GpuRenderer, GpuRendererSnapshot,
-    GpuTextureData,
+    D3d11TextureLease, GpuBackendKind, GpuDevice, GpuDeviceError, GpuRenderError, GpuRenderer,
+    GpuRendererSnapshot, GpuTextureData,
 };
 
 #[derive(Debug)]
@@ -139,6 +139,13 @@ impl GpuDevice for D3d11GpuDevice {
             state: RendererState::default(),
         })
     }
+
+    fn copy_frame_to_owned_texture(
+        &self,
+        frame: &DecodedVideoFrame,
+    ) -> Result<DecodedVideoFrame, GpuRenderError> {
+        self.copy_frame_texture(frame)
+    }
 }
 
 unsafe impl Send for D3d11GpuDevice {}
@@ -233,6 +240,7 @@ impl D3d11GpuRenderer {
                 texture_ptr,
                 shared_handle,
                 array_slice,
+                lease,
             } = gpu_data;
 
             let result = VideoFrame {
@@ -248,6 +256,7 @@ impl D3d11GpuRenderer {
                             texture_ptr: *texture_ptr,
                             shared_handle: *shared_handle,
                             array_slice: *array_slice,
+                            lease: lease.clone(),
                         },
                     )
                     .with_color_info(frame.color_info()),
@@ -373,6 +382,114 @@ impl D3d11GpuRenderer {
             };
             Ok(result)
         })
+    }
+}
+
+impl D3d11GpuDevice {
+    fn copy_frame_texture(
+        &self,
+        frame: &DecodedVideoFrame,
+    ) -> Result<DecodedVideoFrame, GpuRenderError> {
+        let gpu_data = match &frame.surface.storage {
+            VideoSurfaceStorage::GpuTexture(data) => data,
+            VideoSurfaceStorage::CpuPacked { .. } => return Ok(frame.clone()),
+        };
+
+        self.with_multithread_guard(|| {
+            use windows::Win32::Graphics::Direct3D11::{
+                ID3D11Resource, ID3D11Texture2D, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            };
+            use windows::core::Interface;
+
+            let GpuTextureData::D3d11 {
+                texture_ptr,
+                array_slice,
+                ..
+            } = gpu_data;
+
+            let source_texture: ID3D11Texture2D =
+                unsafe { Interface::from_raw(*texture_ptr as *mut _) };
+            let source = ManuallyDrop::new(source_texture);
+
+            let mut source_desc = D3D11_TEXTURE2D_DESC::default();
+            unsafe {
+                source.GetDesc(&mut source_desc);
+            }
+
+            let owned_desc = D3D11_TEXTURE2D_DESC {
+                Width: source_desc.Width,
+                Height: source_desc.Height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: source_desc.Format,
+                SampleDesc: source_desc.SampleDesc,
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: 0,
+                CPUAccessFlags: 0,
+                MiscFlags: 0,
+            };
+
+            let mut owned_texture: Option<ID3D11Texture2D> = None;
+            unsafe {
+                self.device
+                    .CreateTexture2D(&owned_desc, None, Some(&mut owned_texture))
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+            }
+            let owned_texture = owned_texture.ok_or(GpuRenderError::BackendUnavailable)?;
+
+            unsafe {
+                let src_resource: ID3D11Resource = source
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                let dst_resource: ID3D11Resource = owned_texture
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                self.device_context.CopySubresourceRegion(
+                    &dst_resource,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &src_resource,
+                    *array_slice,
+                    None,
+                );
+            }
+
+            let owned_ptr = owned_texture.as_raw() as usize as u64;
+            std::mem::forget(owned_texture);
+
+            Ok(VideoFrame {
+                pts_us: frame.pts_us,
+                duration_us: frame.duration_us,
+                width: frame.width,
+                height: frame.height,
+                is_key_frame: frame.is_key_frame,
+                surface: Arc::new(
+                    VideoSurface::new_gpu_texture(
+                        frame.pixel_format(),
+                        GpuTextureData::D3d11 {
+                            texture_ptr: owned_ptr,
+                            shared_handle: None,
+                            array_slice: 0,
+                            lease: Some(D3d11TextureLease::new(owned_ptr)),
+                        },
+                    )
+                    .with_color_info(frame.color_info()),
+                ),
+            })
+        })
+    }
+
+    fn with_multithread_guard<T>(&self, f: impl FnOnce() -> T) -> T {
+        unsafe {
+            self.multithread.Enter();
+        }
+        let result = f();
+        unsafe {
+            self.multithread.Leave();
+        }
+        result
     }
 }
 

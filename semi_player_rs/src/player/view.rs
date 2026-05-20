@@ -359,6 +359,7 @@ pub fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
                 texture_ptr,
                 shared_handle,
                 array_slice,
+                ..
             } => (
                 SemiVideoSurfaceKind::D3d11Texture2D,
                 *texture_ptr,

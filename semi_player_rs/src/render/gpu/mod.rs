@@ -18,6 +18,7 @@ pub enum GpuTextureData {
         texture_ptr: u64,
         shared_handle: Option<u64>,
         array_slice: u32,
+        lease: Option<Arc<D3d11TextureLease>>,
     },
 }
 
@@ -25,6 +26,32 @@ impl GpuTextureData {
     pub fn backend(&self) -> GpuBackendKind {
         match self {
             Self::D3d11 { .. } => GpuBackendKind::D3d11,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct D3d11TextureLease {
+    texture_ptr: u64,
+}
+
+impl D3d11TextureLease {
+    pub fn new(texture_ptr: u64) -> Arc<Self> {
+        Arc::new(Self { texture_ptr })
+    }
+}
+
+impl Drop for D3d11TextureLease {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+            use windows::core::Interface;
+
+            if self.texture_ptr != 0 {
+                let texture = ID3D11Texture2D::from_raw(self.texture_ptr as *mut _);
+                drop(texture);
+            }
         }
     }
 }
@@ -56,6 +83,12 @@ pub trait GpuDevice: Send + Sync {
         &self,
     ) -> Result<*mut ffmpeg_next::ffi::AVBufferRef, GpuDeviceError>;
     fn create_renderer(&self) -> Box<dyn GpuRenderer>;
+    fn copy_frame_to_owned_texture(
+        &self,
+        frame: &DecodedVideoFrame,
+    ) -> Result<DecodedVideoFrame, GpuRenderError> {
+        Ok(frame.clone())
+    }
 }
 
 pub trait GpuRenderer: Send + fmt::Debug {
