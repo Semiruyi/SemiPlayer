@@ -6,8 +6,7 @@ use crate::decode::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
 use crate::decode::policy::{VideoDecodeOpenOptions, VideoDecodeRequirements};
 use crate::decode::session_decode::SessionDecodeState;
 use crate::decode::session_lifecycle::{
-    build_media_session, open_media_with_hw_device_ctx as open_media_session_with_hw_device_ctx,
-    open_media_with_video_decode_requirements as open_media_session_with_video_decode_requirements,
+    build_media_session, open_media_with_request as open_media_session_with_request,
     seek_media_session, video_decode_diagnostics_snapshot,
 };
 use crate::decode::session_shared::SharedMediaSession;
@@ -27,24 +26,69 @@ pub struct MediaSession {
     pub(crate) seek_diagnostics: SeekDemuxDiagnostics,
 }
 
-#[allow(dead_code)]
-pub fn open_media(path: &str) -> Result<MediaSession, MediaOpenError> {
-    open_media_with_hw_device_ctx(path, None)
+#[derive(Clone, Copy, Debug)]
+pub struct MediaOpenRequest {
+    pub video_decode_requirements: VideoDecodeRequirements,
+    pub hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 }
 
+impl MediaOpenRequest {
+    pub fn new(
+        video_decode_requirements: VideoDecodeRequirements,
+        hw_device_ctx: Option<*mut ffi::AVBufferRef>,
+    ) -> Self {
+        Self {
+            video_decode_requirements,
+            hw_device_ctx,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn compatibility() -> Self {
+        Self::new(VideoDecodeRequirements::compatibility(), None)
+    }
+
+    #[allow(dead_code)]
+    pub fn performance() -> Self {
+        Self::new(VideoDecodeRequirements::performance(), None)
+    }
+
+    #[allow(dead_code)]
+    pub fn zero_copy() -> Self {
+        Self::new(VideoDecodeRequirements::zero_copy(), None)
+    }
+}
+
+#[allow(dead_code)]
+pub fn open_media(path: &str) -> Result<MediaSession, MediaOpenError> {
+    open_media_with_request(path, MediaOpenRequest::performance())
+}
+
+pub fn open_media_with_request(
+    path: &str,
+    request: MediaOpenRequest,
+) -> Result<MediaSession, MediaOpenError> {
+    open_media_session_with_request(path, request)
+}
+
+#[allow(dead_code)]
 pub fn open_media_with_hw_device_ctx(
     path: &str,
     hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 ) -> Result<MediaSession, MediaOpenError> {
-    open_media_session_with_hw_device_ctx(path, hw_device_ctx)
+    open_media_with_request(
+        path,
+        MediaOpenRequest::new(VideoDecodeRequirements::performance(), hw_device_ctx),
+    )
 }
 
+#[allow(dead_code)]
 pub fn open_media_with_video_decode_requirements(
     path: &str,
     requirements: VideoDecodeRequirements,
     hw_device_ctx: Option<*mut ffi::AVBufferRef>,
 ) -> Result<MediaSession, MediaOpenError> {
-    open_media_session_with_video_decode_requirements(path, requirements, hw_device_ctx)
+    open_media_with_request(path, MediaOpenRequest::new(requirements, hw_device_ctx))
 }
 
 impl MediaSession {

@@ -748,6 +748,35 @@ Target:
 
 This is the recommended order.
 
+## Current Progress Snapshot
+
+The codebase has already completed a meaningful part of the target shape.
+
+### Largely completed
+
+- Phase 1 model cleanup:
+  - decode preference / requirements types are explicit
+  - render intent is expressed as `PresentationIntent`
+  - diagnostics snapshots expose concrete outcomes without turning them into main control APIs
+- Phase 2 decode internal split:
+  - decode policy, planner, open, pump, and frame mapping are no longer fused into one implementation body
+  - session code now has a real directory boundary
+- Phase 3 render backend split:
+  - D3D11 device, interop, and renderer responsibilities now live in separate files
+  - top-level render code talks in `RenderBackend`
+
+### In progress
+
+- Phase 4 open-path cleanup:
+  - FFI no longer assembles media-open backend wiring directly
+  - player-side open request assembly exists
+  - decode session open now has an explicit `MediaOpenRequest`
+
+### Still meaningfully open
+
+- Phase 4 is not fully done until more of the remaining open-path assembly and compatibility wrappers collapse onto the request-shaped path.
+- Phase 5 preference unification is still a cleanup and naming pass, not yet a finished sweep.
+
 ## Phase 1: Model cleanup without behavior changes
 
 Add or reshape:
@@ -779,6 +808,10 @@ Goal:
 
 - isolate native device ownership from media interop and rendering behavior
 
+Status:
+
+- Mostly completed in the current tree.
+
 ## Phase 4: Open-path cleanup
 
 Move media-open capability negotiation below API.
@@ -786,6 +819,19 @@ Move media-open capability negotiation below API.
 Goal:
 
 - API and player stop carrying concrete backend setup knowledge
+
+Status:
+
+- Started and partially completed.
+- `src/lib.rs` no longer assembles backend-specific media-open wiring.
+- `player/access` now assembles a player-facing media-open context.
+- `decode/session` now has `MediaOpenRequest`, and `session/lifecycle` treats request-shaped open as its internal primary path.
+
+Remaining work:
+
+- Continue collapsing compatibility wrappers toward the request-shaped open path.
+- Decide whether `MediaSession::from_input*` should also converge on request-shaped or plan-shaped open input.
+- Continue reducing backend-aware assembly that still lives on the player aggregate root.
 
 ## Phase 5: Preference unification
 
@@ -799,6 +845,12 @@ Normalize naming across decode/render/player:
 Goal:
 
 - consistent mental model across modules
+
+Status:
+
+- Partially completed.
+- Decode preference, render intent, render backend, and diagnostics language are much cleaner than before.
+- A final consistency pass is still needed for open/request/plan naming across session and player code.
 
 ## Naming Guidance
 

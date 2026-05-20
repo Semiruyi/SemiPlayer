@@ -557,25 +557,17 @@ These are the main places where the current codebase still mixes layers.
 
 | File | Smell | Why it matters |
 | --- | --- | --- |
-| `src/lib.rs` | FFI layer reaches into GPU-backed media open setup | API layer is still participating in backend wiring |
-| `src/decode/decoder.rs` | decode policy, backend selection, hardware context glue, and frame mapping are fused | makes cross-platform decode growth harder |
-| `src/render/gpu/d3d11.rs` | render backend and ffmpeg interop are fused | backend reuse and future backend additions get noisier |
-| `src/player/execution/decode_supply.rs` | player execution owns GPU texture materialization fallback | ownership between decode/runtime/render is still blurry |
+| `src/lib.rs` | FFI still owns direct error-code mapping and some host-view shaping | API is thinner now, but there is still room to reduce non-ABI behavior there |
+| `src/decode/session/mod.rs` and `src/decode/session/lifecycle.rs` | decode session open still carries compatibility wrappers beside the new request-shaped path | open-path cleanup is underway but not yet fully converged |
+| `src/decode/decoder.rs` | decode core still presents a facade over several responsibilities, even though internals are now split | the boundary is much healthier, but long-term growth may still prefer clearer backend/executor grouping |
+| `src/player/execution/decoded_output_apply.rs` | player execution still owns decoded-output application policy and wake-result shaping | ownership between decode/runtime/render is clearer now, but not yet final |
 | `src/player/worker/decode.rs` and `src/player/worker/render.rs` | workers still carry some local scheduling flavor | execution and scheduling remain partially mixed |
 
 ## Recommended Refactor Priorities
 
-1. Keep `api` thin and move backend-specific open wiring behind player/decode-facing capability providers.
-2. Split decode internals into:
-   - requirements/policy
-   - backend plan
-   - backend open
-   - packet/frame execution
-   - frame mapping
-3. Split render backend code into:
-   - backend device
-   - decoder interop adapter
-   - presentation renderer
+1. Keep `api` thin and continue moving non-ABI open-path behavior behind player/decode-facing request assembly.
+2. Continue converging decode session open around `MediaOpenRequest` so internal and external open paths speak one language.
+3. Keep shrinking `player/handle.rs` and let `player/access`, `player/orchestrator`, and `render/service` own more request assembly and execution-specific helpers.
 4. Keep growing scheduler as the only owner of cross-stage wake policy.
 5. Move player-facing preferences toward abstract capability requests, while keeping concrete backend diagnostics available for visibility.
 

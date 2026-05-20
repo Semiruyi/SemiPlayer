@@ -18,8 +18,8 @@ pub mod session {
     pub use super::session_impl::SharedOpenedMedia;
     #[allow(unused_imports)]
     pub use super::session_impl::{
-        open_media_with_hw_device_ctx, open_media_with_video_decode_requirements, MediaSession,
-        OpenedMedia,
+        open_media_with_hw_device_ctx, open_media_with_request,
+        open_media_with_video_decode_requirements, MediaOpenRequest, MediaSession, OpenedMedia,
     };
     #[allow(unused_imports)]
     pub use super::session_shared::SharedMediaSession;

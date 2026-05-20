@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
 use crate::audio::core::output_controller::{AudioOutputSnapshot, SharedAudioOutputController};
+use crate::decode::session::MediaOpenRequest;
 use crate::decode::{DecodePreference, VideoDecodeRequirements};
 use crate::decode::VideoDecodeDiagnosticsSnapshot;
 use crate::demux::MediaInfo;
@@ -115,6 +116,11 @@ pub struct DecodePlanContext {
     pub generation: u64,
     pub decode_policy: crate::decode::DecodePolicy,
     pub decode_demand: DecodeDemandStatus,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct MediaOpenContext {
+    pub request: MediaOpenRequest,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -257,6 +263,17 @@ impl SemiPlayerHandle {
             generation: self.media_generation(),
             decode_policy: self.decode_policy(),
             decode_demand: runtime.runtime_decode_demand(),
+        }
+    }
+
+    pub fn media_open_context(&self) -> MediaOpenContext {
+        MediaOpenContext {
+            request: MediaOpenRequest::new(
+                self.control_access().video_decode_requirements(),
+                self.render_backend
+                    .as_ref()
+                    .and_then(|backend| backend.create_ffmpeg_hw_device_ctx().ok()),
+            ),
         }
     }
 

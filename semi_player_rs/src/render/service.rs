@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
 use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPipeline, VideoRenderRequest};
 use crate::render::gpu::{
@@ -11,11 +13,22 @@ pub struct RenderServiceSnapshot {
     pub backend_capabilities: RenderBackendCapabilities,
 }
 
-#[derive(Debug)]
 pub struct RenderService {
     pipeline: VideoRenderPipeline,
     renderer: Box<dyn GpuRenderer>,
     backend_capabilities: RenderBackendCapabilities,
+    backend: Option<Arc<dyn RenderBackend>>,
+}
+
+impl std::fmt::Debug for RenderService {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RenderService")
+            .field("pipeline", &self.pipeline)
+            .field("renderer", &self.renderer)
+            .field("backend_capabilities", &self.backend_capabilities)
+            .field("has_backend", &self.backend.is_some())
+            .finish()
+    }
 }
 
 impl Default for RenderService {
@@ -24,6 +37,7 @@ impl Default for RenderService {
             pipeline: VideoRenderPipeline::new(),
             renderer: Box::new(NoopGpuRenderer),
             backend_capabilities: RenderBackendCapabilities::default(),
+            backend: None,
         }
     }
 }
@@ -33,11 +47,23 @@ impl RenderService {
         Self::default()
     }
 
-    pub fn from_backend(backend: &dyn RenderBackend) -> Self {
+    pub fn from_backend(backend: Arc<dyn RenderBackend>) -> Self {
         Self {
             pipeline: VideoRenderPipeline::new(),
             renderer: backend.create_renderer(),
             backend_capabilities: backend.capabilities(),
+            backend: Some(backend),
+        }
+    }
+
+    pub fn prepare_decoded_frame_for_runtime(&self, frame: DecodedVideoFrame) -> DecodedVideoFrame {
+        let Some(backend) = self.backend.as_ref() else {
+            return frame;
+        };
+
+        match backend.copy_frame_to_owned_texture(&frame) {
+            Ok(owned_frame) => owned_frame,
+            Err(_) => frame,
         }
     }
 

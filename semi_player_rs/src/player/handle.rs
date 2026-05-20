@@ -81,7 +81,7 @@ impl SemiPlayerHandle {
     pub fn new() -> Self {
         let render_backend = crate::render::gpu::create_default_backend().ok();
         let render = match &render_backend {
-            Some(backend) => RenderService::from_backend(backend.as_ref()),
+            Some(backend) => RenderService::from_backend(Arc::clone(backend)),
             None => RenderService::new(),
         };
 
@@ -189,6 +189,10 @@ impl SemiPlayerHandle {
             let media_session = ms.ok_or(ffmpeg_next::Error::Bug).map_err(MediaOpenError::Seek)?;
             media_session.with_mut(MediaSession::next_decoded_output)
         })
+    }
+
+    pub fn open_media_session(&self, path: &str) -> Result<MediaSession, MediaOpenError> {
+        crate::decode::session::open_media_with_request(path, self.media_open_context().request)
     }
 
     pub fn start_workers(&mut self, player_ptr: *mut SemiPlayerHandle) {

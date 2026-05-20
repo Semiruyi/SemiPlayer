@@ -1,35 +1,22 @@
 use ffmpeg_next as ffmpeg;
-use ffmpeg_next::ffi;
 use ffmpeg_next::Rescale;
 
 use crate::decode::decoder::{
     open_audio_decoder, open_video_decoder_with_options, OpenedAudioDecoder, OpenedVideoDecoder,
 };
 use crate::decode::error::MediaOpenError;
-use crate::decode::policy::{VideoDecodeOpenOptions, VideoDecodeRequirements};
+use crate::decode::policy::VideoDecodeOpenOptions;
 use crate::decode::session_decode::SessionDecodeState;
-use crate::decode::session_impl::MediaSession;
+use crate::decode::session_impl::{MediaOpenRequest, MediaSession};
 use crate::decode::video_decode::VideoDecodeDiagnosticsSnapshot;
 use crate::demux::demux_impl::SeekDemuxDiagnostics;
 use crate::demux::keyframe_probe::probe_expected_left_keyframe_pts;
 use crate::demux::probe::{collect_media_info, MediaInfo, MediaProbeError};
 use crate::util::time::MediaTimeUs;
 
-pub(crate) fn open_media_with_hw_device_ctx(
+pub(crate) fn open_media_with_request(
     path: &str,
-    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
-) -> Result<MediaSession, MediaOpenError> {
-    open_media_with_video_decode_requirements(
-        path,
-        VideoDecodeRequirements::performance(),
-        hw_device_ctx,
-    )
-}
-
-pub(crate) fn open_media_with_video_decode_requirements(
-    path: &str,
-    requirements: VideoDecodeRequirements,
-    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
+    request: MediaOpenRequest,
 ) -> Result<MediaSession, MediaOpenError> {
     ffmpeg::init()
         .map_err(MediaProbeError::FfmpegInit)
@@ -43,8 +30,8 @@ pub(crate) fn open_media_with_video_decode_requirements(
         path.to_owned(),
         input,
         VideoDecodeOpenOptions {
-            requirements,
-            hw_device_ctx,
+            requirements: request.video_decode_requirements,
+            hw_device_ctx: request.hw_device_ctx,
         },
     )
 }

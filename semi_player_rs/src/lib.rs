@@ -19,8 +19,7 @@ use crate::api::types::{
     SemiVideoDecodePreference, SemiVideoFrameInfo, SemiVideoPresentationProfile,
     SemiVideoSurfaceDesc,
 };
-use crate::decode::session::open_media_with_video_decode_requirements;
-use crate::decode::{DecodePreference, DecodedOutput, MediaOpenError, VideoDecodeRequirements};
+use crate::decode::{DecodePreference, DecodedOutput, MediaOpenError};
 use crate::demux::MediaProbeError;
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::orchestrator;
@@ -99,6 +98,21 @@ fn cstr_to_string(input: *const c_char) -> Result<String, c_int> {
     Ok(c_str.to_string_lossy().into_owned())
 }
 
+fn map_media_open_error(error: MediaOpenError) -> c_int {
+    match error {
+        MediaOpenError::Probe(MediaProbeError::OpenInput(_)) => SEMI_E_MEDIA_OPEN_FAILED,
+        MediaOpenError::Probe(MediaProbeError::FfmpegInit(_) | MediaProbeError::Decoder(_))
+        | MediaOpenError::Seek(_) => SEMI_E_MEDIA_PROBE_FAILED,
+        MediaOpenError::VideoDecoder(_)
+        | MediaOpenError::AudioDecoder(_)
+        | MediaOpenError::ReadPacket(_)
+        | MediaOpenError::SendPacket(_)
+        | MediaOpenError::ReceiveFrame(_)
+        | MediaOpenError::ScaleFrame(_)
+        | MediaOpenError::ResampleFrame(_) => SEMI_E_DECODER_OPEN_FAILED,
+    }
+}
+
 #[no_mangle]
 /// # Safety
 ///
@@ -157,44 +171,10 @@ pub extern "C" fn semi_player_open(
         Err(code) => return code,
     };
 
-    let hw_device_ctx = with_player_ref(player, |player| {
-        player
-            .render_backend
-            .as_ref()
-            .and_then(|backend| backend.create_ffmpeg_hw_device_ctx().ok())
-    })
-    .unwrap_or(None);
-    let video_decode_requirements = with_player_ref(player, |player| {
-        player.control_access().video_decode_requirements()
-    })
-    .unwrap_or_else(|_| VideoDecodeRequirements::performance());
-
-    let opened_media = match open_media_with_video_decode_requirements(
-        &path,
-        video_decode_requirements,
-        hw_device_ctx,
-    ) {
-        Ok(opened_media) => opened_media,
-        Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => {
-            return SEMI_E_MEDIA_OPEN_FAILED
-        }
-        Err(
-            MediaOpenError::Probe(MediaProbeError::FfmpegInit(_) | MediaProbeError::Decoder(_))
-            | MediaOpenError::Seek(_),
-        ) => {
-            return SEMI_E_MEDIA_PROBE_FAILED;
-        }
-        Err(
-            MediaOpenError::VideoDecoder(_)
-            | MediaOpenError::AudioDecoder(_)
-            | MediaOpenError::ReadPacket(_)
-            | MediaOpenError::SendPacket(_)
-            | MediaOpenError::ReceiveFrame(_)
-            | MediaOpenError::ScaleFrame(_)
-            | MediaOpenError::ResampleFrame(_),
-        ) => {
-            return SEMI_E_DECODER_OPEN_FAILED;
-        }
+    let opened_media = match with_player_ref(player, |player| player.open_media_session(&path)) {
+        Ok(Ok(opened_media)) => opened_media,
+        Ok(Err(error)) => return map_media_open_error(error),
+        Err(code) => return code,
     };
 
     match with_playback_coordinated_player_ref(player, |player| {
