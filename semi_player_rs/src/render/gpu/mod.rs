@@ -172,6 +172,7 @@ pub struct RenderBackendCapabilities {
     pub supports_owned_texture_copy: bool,
     pub supports_gpu_bgra_presentation: bool,
     pub supports_nv12_cpu_bgra_conversion: bool,
+    pub supports_nv12_gpu_bgra_conversion: bool,
 }
 
 pub(crate) trait RenderBackend: Send + Sync {

@@ -103,6 +103,7 @@ impl RenderBackend for D3d11GpuDevice {
             supports_owned_texture_copy: true,
             supports_gpu_bgra_presentation: true,
             supports_nv12_cpu_bgra_conversion: true,
+            supports_nv12_gpu_bgra_conversion: true,
         }
     }
 
@@ -113,7 +114,10 @@ impl RenderBackend for D3d11GpuDevice {
     }
 
     fn create_converter(&self) -> Box<dyn FrameConverter> {
-        Box::new(D3d11FrameConverter::new(self.context.clone()))
+        match D3d11FrameConverter::new(self.context.clone()) {
+            Some(converter) => Box::new(converter),
+            None => Box::new(crate::render::core::converter::NoopFrameConverter),
+        }
     }
 
     fn copy_frame_to_owned_texture(

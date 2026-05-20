@@ -227,6 +227,7 @@ impl RenderPlanner {
             }
             (_, _, VideoSurfaceKind::GpuTexture, PixelFormatCategory::Bgra8) => {
                 backend_capabilities.supports_gpu_bgra_presentation
+                    || backend_capabilities.supports_nv12_gpu_bgra_conversion
             }
             _ => false,
         }

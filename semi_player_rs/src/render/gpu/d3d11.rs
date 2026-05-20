@@ -1,3 +1,4 @@
+mod compute;
 mod converter;
 mod device;
 mod interop;
