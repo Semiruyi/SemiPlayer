@@ -17,8 +17,8 @@ use crate::demux::{
 use crate::player::diagnostics::{PlayerDiagnostics, PlayerDiagnosticsSnapshot};
 use crate::player::runtime::AudioDiscardSummary;
 use crate::player::worker::{DecodeWorkerHandle, RenderWorkerHandle, SyncWorkerHandle};
-use crate::render::core::pipeline::PresentationTargetProfile;
-use crate::render::gpu::GpuDevice;
+use crate::render::core::pipeline::PresentationIntent;
+use crate::render::gpu::RenderBackend;
 use crate::render::service::RenderService;
 use crate::scheduler::snapshot::StageMap;
 use crate::scheduler::decision::evaluate_scheduler_decision;
@@ -39,7 +39,7 @@ struct SeekRecoveryState {
 struct ControlState {
     speed: c_double,
     video_decode_preference: DecodePreference,
-    video_presentation_profile: PresentationTargetProfile,
+    video_presentation_intent: PresentationIntent,
     subtitles_visible: bool,
     host_presentation_offset_us: MediaTimeUs,
     seek_recovery: SeekRecoveryState,
@@ -50,7 +50,7 @@ impl Default for ControlState {
         Self {
             speed: 1.0,
             video_decode_preference: DecodePreference::PreferPerformance,
-            video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
+            video_presentation_intent: PresentationIntent::CpuBgraCompatibility,
             subtitles_visible: true,
             host_presentation_offset_us: 0,
             seek_recovery: SeekRecoveryState::default(),
@@ -74,14 +74,14 @@ pub struct SemiPlayerHandle {
     pub(crate) audio_output: SharedAudioOutputController,
     pub(crate) runtime: Mutex<crate::player::runtime::RuntimeDomain>,
     pub(crate) render: Mutex<RenderService>,
-    pub(crate) gpu_device: Option<Arc<dyn GpuDevice>>,
+    pub(crate) render_backend: Option<Arc<dyn RenderBackend>>,
 }
 
 impl SemiPlayerHandle {
     pub fn new() -> Self {
-        let gpu_device = crate::render::gpu::create_default_device().ok();
-        let render = match &gpu_device {
-            Some(device) => RenderService::from_device(device.as_ref()),
+        let render_backend = crate::render::gpu::create_default_backend().ok();
+        let render = match &render_backend {
+            Some(backend) => RenderService::from_backend(backend.as_ref()),
             None => RenderService::new(),
         };
 
@@ -100,7 +100,7 @@ impl SemiPlayerHandle {
             audio_output: SharedAudioOutputController::default(),
             runtime: Mutex::new(crate::player::runtime::RuntimeDomain::new()),
             render: Mutex::new(render),
-            gpu_device,
+            render_backend,
         }
     }
 
@@ -417,8 +417,8 @@ impl SemiPlayerHandle {
         }
     }
 
-    pub fn video_presentation_profile(&self) -> PresentationTargetProfile {
-        self.control.lock().unwrap().video_presentation_profile
+    pub fn video_presentation_intent(&self) -> PresentationIntent {
+        self.control.lock().unwrap().video_presentation_intent
     }
 
     pub fn video_decode_preference(&self) -> DecodePreference {
@@ -437,8 +437,8 @@ impl SemiPlayerHandle {
         self.control.lock().unwrap().video_decode_preference = preference;
     }
 
-    pub fn set_video_presentation_profile(&self, profile: PresentationTargetProfile) {
-        self.control.lock().unwrap().video_presentation_profile = profile;
+    pub fn set_video_presentation_intent(&self, intent: PresentationIntent) {
+        self.control.lock().unwrap().video_presentation_intent = intent;
     }
 
     pub fn subtitles_visible(&self) -> bool {

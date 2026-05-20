@@ -5,7 +5,7 @@ use crate::api::types::PlayerState;
 use crate::decode::DecodePreference;
 use crate::decode::session::MediaSession;
 use crate::player::handle::SemiPlayerHandle;
-use crate::render::core::pipeline::PresentationTargetProfile;
+use crate::render::core::pipeline::PresentationIntent;
 use crate::scheduler::types::SchedulerEvent;
 use crate::util::time::{ms_to_us, MediaTimeUs};
 
@@ -191,16 +191,16 @@ pub fn set_subtitle_visible(player: &SemiPlayerHandle, visible: bool) -> ResultC
     SEMI_OK
 }
 
-pub fn set_video_presentation_profile(
+pub fn set_video_presentation_intent(
     player: &SemiPlayerHandle,
-    profile: PresentationTargetProfile,
+    intent: PresentationIntent,
 ) -> ResultCode {
     let control = player.control_access();
     if !control.is_media_loaded() {
         return SEMI_E_INVALID_STATE;
     }
 
-    control.set_video_presentation_profile(profile);
+    control.set_video_presentation_intent(intent);
     mark_video_sync_dirty(player);
     player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
     SEMI_OK

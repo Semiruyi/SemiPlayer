@@ -28,7 +28,7 @@ impl PlayerState {
 pub enum SemiVideoPresentationProfile {
     Passthrough = 0,
     CpuBgraCompatibility = 1,
-    D3d11BgraPresenter = 2,
+    GpuBgraPresenter = 2,
 }
 
 impl SemiVideoPresentationProfile {
@@ -41,7 +41,7 @@ impl SemiVideoPresentationProfile {
         match raw {
             0 => Some(Self::Passthrough),
             1 => Some(Self::CpuBgraCompatibility),
-            2 => Some(Self::D3d11BgraPresenter),
+            2 => Some(Self::GpuBgraPresenter),
             _ => None,
         }
     }

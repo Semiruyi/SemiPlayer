@@ -118,12 +118,13 @@ fn map_d3d11_video_frame(
         surface: Arc::new(
             VideoSurface::new_gpu_texture(
                 pixel_format,
-                crate::render::gpu::GpuTextureData::D3d11 {
+                crate::render::gpu::GpuTextureData::new(
+                    crate::render::gpu::GpuBackendKind::D3d11,
                     texture_ptr,
-                    shared_handle: None,
+                    None,
                     array_slice,
-                    lease: None,
-                },
+                    None,
+                ),
             )
             .with_color_info(color_info),
         ),

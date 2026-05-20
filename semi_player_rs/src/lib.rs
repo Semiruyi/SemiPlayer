@@ -159,9 +159,9 @@ pub extern "C" fn semi_player_open(
 
     let hw_device_ctx = with_player_ref(player, |player| {
         player
-            .gpu_device
+            .render_backend
             .as_ref()
-            .and_then(|device| device.create_ffmpeg_hw_device_ctx().ok())
+            .and_then(|backend| backend.create_ffmpeg_hw_device_ctx().ok())
     })
     .unwrap_or(None);
     let video_decode_requirements = with_player_ref(player, |player| {
@@ -300,16 +300,16 @@ pub extern "C" fn semi_player_set_video_presentation_profile(
     with_playback_coordinated_player_ref(player, |player| {
         let profile = match profile {
             SemiVideoPresentationProfile::Passthrough => {
-                crate::render::core::pipeline::PresentationTargetProfile::Passthrough
+                crate::render::core::pipeline::PresentationIntent::Passthrough
             }
             SemiVideoPresentationProfile::CpuBgraCompatibility => {
-                crate::render::core::pipeline::PresentationTargetProfile::CpuBgraCompatibility
+                crate::render::core::pipeline::PresentationIntent::CpuBgraCompatibility
             }
-            SemiVideoPresentationProfile::D3d11BgraPresenter => {
-                crate::render::core::pipeline::PresentationTargetProfile::D3d11BgraPresenter
+            SemiVideoPresentationProfile::GpuBgraPresenter => {
+                crate::render::core::pipeline::PresentationIntent::GpuBgraPresenter
             }
         };
-        orchestrator::set_video_presentation_profile(player, profile)
+        orchestrator::set_video_presentation_intent(player, profile)
     })
     .unwrap_or_else(|code| code)
 }

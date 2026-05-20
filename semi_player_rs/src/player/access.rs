@@ -513,11 +513,11 @@ impl ControlAccess<'_> {
         self.player.set_subtitles_visible(visible);
     }
 
-    pub fn set_video_presentation_profile(
+    pub fn set_video_presentation_intent(
         &self,
-        profile: crate::render::core::pipeline::PresentationTargetProfile,
+        intent: crate::render::core::pipeline::PresentationIntent,
     ) {
-        self.player.set_video_presentation_profile(profile);
+        self.player.set_video_presentation_intent(intent);
     }
 
     pub fn begin_seek_recovery(&self, target_us: MediaTimeUs) {

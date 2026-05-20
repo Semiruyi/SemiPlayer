@@ -121,12 +121,13 @@ impl VideoSurface {
         Self {
             pixel_format,
             color_info: VideoColorInfo::default(),
-            storage: VideoSurfaceStorage::GpuTexture(GpuTextureData::D3d11 {
+            storage: VideoSurfaceStorage::GpuTexture(GpuTextureData::new(
+                crate::render::gpu::GpuBackendKind::D3d11,
                 texture_ptr,
                 shared_handle,
                 array_slice,
-                lease: None,
-            }),
+                None,
+            )),
         }
     }
 

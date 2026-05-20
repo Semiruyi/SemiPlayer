@@ -350,21 +350,14 @@ pub fn build_video_frame_info(frame: &VideoFrame) -> SemiVideoFrameInfo {
 }
 
 pub fn build_video_surface_desc(frame: &VideoFrame) -> SemiVideoSurfaceDesc {
-    use crate::render::gpu::GpuTextureData;
-
     let (kind, texture_ptr, shared_handle, array_slice) = match &frame.surface.storage {
         VideoSurfaceStorage::CpuPacked { .. } => (SemiVideoSurfaceKind::CpuPacked, 0, 0, 0),
-        VideoSurfaceStorage::GpuTexture(data) => match data {
-            GpuTextureData::D3d11 {
-                texture_ptr,
-                shared_handle,
-                array_slice,
-                ..
-            } => (
+        VideoSurfaceStorage::GpuTexture(data) => match data.backend() {
+            crate::render::gpu::GpuBackendKind::D3d11 => (
                 SemiVideoSurfaceKind::D3d11Texture2D,
-                *texture_ptr,
-                shared_handle.unwrap_or(0),
-                *array_slice,
+                data.texture_ptr,
+                data.shared_handle.unwrap_or(0),
+                data.array_slice,
             ),
         },
     };

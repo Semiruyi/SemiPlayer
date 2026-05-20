@@ -1,17 +1,21 @@
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
 use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderPipeline, VideoRenderRequest};
-use crate::render::gpu::{GpuDevice, GpuRenderer, GpuRendererSnapshot, NoopGpuRenderer};
+use crate::render::gpu::{
+    GpuRenderer, GpuRendererSnapshot, NoopGpuRenderer, RenderBackend, RenderBackendCapabilities,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[allow(dead_code)]
 pub struct RenderServiceSnapshot {
     pub renderer: GpuRendererSnapshot,
+    pub backend_capabilities: RenderBackendCapabilities,
 }
 
 #[derive(Debug)]
 pub struct RenderService {
     pipeline: VideoRenderPipeline,
     renderer: Box<dyn GpuRenderer>,
+    backend_capabilities: RenderBackendCapabilities,
 }
 
 impl Default for RenderService {
@@ -19,6 +23,7 @@ impl Default for RenderService {
         Self {
             pipeline: VideoRenderPipeline::new(),
             renderer: Box::new(NoopGpuRenderer),
+            backend_capabilities: RenderBackendCapabilities::default(),
         }
     }
 }
@@ -28,11 +33,16 @@ impl RenderService {
         Self::default()
     }
 
-    pub fn from_device(device: &dyn GpuDevice) -> Self {
+    pub fn from_backend(backend: &dyn RenderBackend) -> Self {
         Self {
             pipeline: VideoRenderPipeline::new(),
-            renderer: device.create_renderer(),
+            renderer: backend.create_renderer(),
+            backend_capabilities: backend.capabilities(),
         }
+    }
+
+    pub fn from_device(device: &dyn RenderBackend) -> Self {
+        Self::from_backend(device)
     }
 
     pub fn render_frames(
@@ -41,7 +51,7 @@ impl RenderService {
         frames: impl IntoIterator<Item = DecodedVideoFrame>,
     ) -> VideoRenderBatch {
         self.pipeline
-            .render_frames(request, frames, &mut self.renderer)
+            .render_frames(request, frames, self.backend_capabilities, &mut self.renderer)
     }
 
     #[allow(dead_code)]
@@ -51,13 +61,14 @@ impl RenderService {
         frame: DecodedVideoFrame,
     ) -> PresentationFrame {
         self.pipeline
-            .render_frame(request, frame, &mut self.renderer)
+            .render_frame(request, frame, self.backend_capabilities, &mut self.renderer)
     }
 
     #[allow(dead_code)]
     pub fn snapshot(&self) -> RenderServiceSnapshot {
         RenderServiceSnapshot {
             renderer: self.renderer.snapshot(),
+            backend_capabilities: self.backend_capabilities,
         }
     }
 }
@@ -71,7 +82,7 @@ mod tests {
         PixelFormatCategory, VideoColorInfo, VideoFrame, VideoSurface,
     };
     use crate::render::core::pipeline::VideoRenderRequest;
-    use crate::render::gpu::GpuTextureData;
+    use crate::render::gpu::{GpuBackendKind, GpuTextureData, RenderBackendCapabilities};
 
     fn gpu_frame(pixel_format: PixelFormatCategory) -> VideoFrame {
         VideoFrame {
@@ -83,12 +94,7 @@ mod tests {
             surface: Arc::new(
                 VideoSurface::new_gpu_texture(
                     pixel_format,
-                    GpuTextureData::D3d11 {
-                        texture_ptr: 0x1234,
-                        shared_handle: None,
-                        array_slice: 0,
-                        lease: None,
-                    },
+                    GpuTextureData::new(GpuBackendKind::D3d11, 0x1234, None, 0, None),
                 )
                 .with_color_info(VideoColorInfo::default()),
             ),
@@ -111,11 +117,11 @@ mod tests {
         let mut render = RenderService::new();
 
         let _ = render.render_frame(
-            VideoRenderRequest::d3d11_bgra_presenter(false),
+            VideoRenderRequest::gpu_bgra_presenter(false),
             gpu_frame(PixelFormatCategory::Nv12),
         );
         let _ = render.render_frame(
-            VideoRenderRequest::d3d11_bgra_presenter(false),
+            VideoRenderRequest::gpu_bgra_presenter(false),
             cpu_frame(PixelFormatCategory::Bgra8),
         );
 
@@ -127,6 +133,7 @@ mod tests {
                     successful_renders: 0,
                     backend_unavailable_errors: 0,
                 },
+                backend_capabilities: RenderBackendCapabilities::default(),
             }
         );
     }

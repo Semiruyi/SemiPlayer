@@ -120,8 +120,8 @@ fn render_execution_from_batch(generation: u64, batch: VideoRenderBatch) -> Rend
 }
 
 fn default_render_request(player: &SemiPlayerHandle) -> VideoRenderRequest {
-    VideoRenderRequest::from_target_profile(
-        player.video_presentation_profile(),
+    VideoRenderRequest::from_intent(
+        player.video_presentation_intent(),
         player.subtitles_visible(),
     )
 }
@@ -221,20 +221,20 @@ mod tests {
     #[test]
     fn default_render_request_follows_player_profile() {
         let player = SemiPlayerHandle::new();
-        player.set_video_presentation_profile(
-            crate::render::core::pipeline::PresentationTargetProfile::D3d11BgraPresenter,
+        player.set_video_presentation_intent(
+            crate::render::core::pipeline::PresentationIntent::GpuBgraPresenter,
         );
 
         let request = default_render_request(&player);
 
-        assert_eq!(request, VideoRenderRequest::d3d11_bgra_presenter(true));
+        assert_eq!(request, VideoRenderRequest::gpu_bgra_presenter(true));
     }
 
     #[test]
     fn gpu_texture_with_passthrough_profile_does_not_attempt_transform() {
         let mut player = SemiPlayerHandle::new();
-        player.set_video_presentation_profile(
-            crate::render::core::pipeline::PresentationTargetProfile::Passthrough,
+        player.set_video_presentation_intent(
+            crate::render::core::pipeline::PresentationIntent::Passthrough,
         );
         player.runtime.get_mut().unwrap().runtime.push_decoded_video_frame(VideoFrame {
             pts_us: 0,

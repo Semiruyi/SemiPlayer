@@ -123,11 +123,11 @@ fn materialize_video_frame_for_runtime(
     player: &SemiPlayerHandle,
     frame: DecodedVideoFrame,
 ) -> DecodedVideoFrame {
-    let Some(device) = player.gpu_device.as_ref() else {
+    let Some(backend) = player.render_backend.as_ref() else {
         return frame;
     };
 
-    match device.copy_frame_to_owned_texture(&frame) {
+    match backend.copy_frame_to_owned_texture(&frame) {
         Ok(owned_frame) => owned_frame,
         Err(_) => frame,
     }
