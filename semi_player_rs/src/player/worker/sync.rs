@@ -127,12 +127,9 @@ fn evaluate_worker_action(player: &SemiPlayerHandle) -> WorkerAction {
         return WorkerAction::WaitIndefinitely;
     }
 
-    let action = match context.state {
-        PlayerState::Playing => execute_worker_step(player, context.clone(), WorkerMode::Playing),
-        PlayerState::Ready | PlayerState::Paused => {
-            execute_worker_step(player, context.clone(), WorkerMode::Stabilizing)
-        }
-        PlayerState::Idle => WorkerAction::WaitIndefinitely,
+    let action = match worker_mode_for_state(context.state) {
+        Some(mode) => execute_worker_step(player, context.clone(), mode),
+        None => WorkerAction::WaitIndefinitely,
     };
     append_trace_line(&format!(
         "sync:plan state={:?} hint={:?} action={:?} snapshot={:?}",
@@ -238,4 +235,32 @@ impl std::fmt::Debug for WorkerAction {
 enum WorkerMode {
     Playing,
     Stabilizing,
+}
+
+fn worker_mode_for_state(state: PlayerState) -> Option<WorkerMode> {
+    match state {
+        PlayerState::Playing => Some(WorkerMode::Playing),
+        PlayerState::Ready => Some(WorkerMode::Stabilizing),
+        PlayerState::Paused | PlayerState::Idle => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{worker_mode_for_state, WorkerMode};
+    use crate::api::types::PlayerState;
+
+    #[test]
+    fn paused_state_does_not_enter_sync_stabilization() {
+        assert_eq!(worker_mode_for_state(PlayerState::Paused), None);
+        assert_eq!(worker_mode_for_state(PlayerState::Idle), None);
+        assert_eq!(
+            worker_mode_for_state(PlayerState::Ready),
+            Some(WorkerMode::Stabilizing)
+        );
+        assert_eq!(
+            worker_mode_for_state(PlayerState::Playing),
+            Some(WorkerMode::Playing)
+        );
+    }
 }
