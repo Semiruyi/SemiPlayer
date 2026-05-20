@@ -8,6 +8,7 @@ use crate::player::execution::{
     execute_playback_plan, finish_playback_advance, plan_playback_advance,
 };
 use crate::player::handle::SemiPlayerHandle;
+use crate::util::debug_trace::append_trace_line;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Default)]
@@ -46,6 +47,7 @@ impl SyncWorkerHandle {
     }
 
     pub fn stop(&mut self) {
+        append_trace_line("sync:stop requested");
         let (lock, condvar) = &*self.control;
         {
             let mut control = lock.lock().unwrap();
@@ -55,7 +57,9 @@ impl SyncWorkerHandle {
         condvar.notify_all();
 
         if let Some(thread) = self.thread.take() {
+            append_trace_line("sync:joining");
             let _ = thread.join();
+            append_trace_line("sync:joined");
         }
     }
 }
@@ -63,6 +67,11 @@ impl SyncWorkerHandle {
 #[allow(clippy::needless_pass_by_value)]
 fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condvar)>) {
     loop {
+        if shutdown_requested(&control) {
+            append_trace_line("sync:loop exit shutdown_requested");
+            break;
+        }
+
         let action = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
             evaluate_worker_action(&*player_ptr)
@@ -93,16 +102,22 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<SyncWorkerControl>, Condv
             }
             WorkerAction::WaitFor(duration) => {
                 if wait_for_signal(&control, Some(duration)) {
+                    append_trace_line("sync:loop exit wait_for_signal timeout");
                     break;
                 }
             }
             WorkerAction::WaitIndefinitely => {
                 if wait_for_signal(&control, None) {
+                    append_trace_line("sync:loop exit wait_for_signal");
                     break;
                 }
             }
         }
     }
+}
+
+fn shutdown_requested(control: &Arc<(Mutex<SyncWorkerControl>, Condvar)>) -> bool {
+    control.0.lock().unwrap().shutdown
 }
 
 fn evaluate_worker_action(player: &SemiPlayerHandle) -> WorkerAction {
@@ -132,7 +147,7 @@ fn execute_worker_step(
 
     let scheduled_work = hint.scheduled_work();
     if scheduled_work.should_request_decode {
-        player.notify_decode_worker();
+        player.notify_render_worker();
     }
 
     if scheduled_work.should_advance_playback {

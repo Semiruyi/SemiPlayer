@@ -1,6 +1,7 @@
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::{DecodedVideoFrame, PresentationFrame};
 use crate::render::core::pipeline::{VideoRenderBatch, VideoRenderRequest, VideoRenderStats};
+use crate::util::debug_trace::append_trace_line;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RenderSupplyPlan {
@@ -72,10 +73,12 @@ fn execute_render_supply(
     stage: RenderSupplyStage,
 ) -> RenderSupplyExecution {
     let batch = player.with_render_access_mut(|render| {
+        append_trace_line("render_supply:execute render_frames begin");
         render
             .render
             .render_frames(stage.request, stage.decoded_frames)
     });
+    append_trace_line("render_supply:execute render_frames end");
     render_execution_from_batch(stage.generation, batch)
 }
 

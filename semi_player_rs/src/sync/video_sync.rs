@@ -1,6 +1,7 @@
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::{RuntimeVideoSnapshot, VideoSelectionStats};
 use crate::sync::video_scheduler::VideoScheduler;
+use crate::util::debug_trace::append_trace_line;
 use crate::util::time::add_media_time_us;
 
 pub struct VideoSyncService;
@@ -208,11 +209,13 @@ impl VideoSyncService {
     }
 
     pub fn sync(player: &SemiPlayerHandle, playback_time_us: i64) -> VideoSyncSnapshot {
+        let host_presentation_offset_us = player.host_presentation_offset_us();
         let target_video_time_us =
-            add_media_time_us(playback_time_us, player.host_presentation_offset_us());
+            add_media_time_us(playback_time_us, host_presentation_offset_us);
         let mut dropped_pts = Vec::new();
-        let (_selection, snapshot) = {
+        let (selection, snapshot, before_video) = {
             let mut domain = player.runtime.lock().unwrap();
+            let before_video = domain.runtime.video_snapshot();
             let selection = domain.runtime.select_video_frame(
                 &VideoScheduler,
                 target_video_time_us,
@@ -220,19 +223,57 @@ impl VideoSyncService {
             );
             let snapshot = Self::evaluate_from_inputs(
                 VideoSyncInputs {
-                    host_presentation_offset_us: player.host_presentation_offset_us(),
+                    host_presentation_offset_us,
                     runtime_video: domain.runtime.video_snapshot(),
                 },
                 playback_time_us,
             );
             domain.video_sync.observe_sync(snapshot, selection);
-            (selection, snapshot)
+            (selection, snapshot, before_video)
         };
+        trace_sync_transition(
+            playback_time_us,
+            target_video_time_us,
+            before_video,
+            snapshot,
+            selection,
+            &dropped_pts,
+        );
         for pts_us in dropped_pts {
             player.observe_seek_video_dropped(pts_us);
         }
         snapshot
     }
+}
+
+fn trace_sync_transition(
+    playback_time_us: i64,
+    target_video_time_us: i64,
+    before_video: RuntimeVideoSnapshot,
+    snapshot: VideoSyncSnapshot,
+    selection: VideoSelectionStats,
+    dropped_pts: &[i64],
+) {
+    let current_changed = before_video.current_pts_us != Some(snapshot.current_video_pts_us);
+    let late = snapshot.core_sync_error_us.unsigned_abs() >= 20_000;
+    let should_trace =
+        selection.presented_frames > 0 || selection.dropped_frames > 0 || current_changed || late;
+
+    if !should_trace {
+        return;
+    }
+
+    append_trace_line(&format!(
+        "video_sync:sync playback={playback_time_us} target={target_video_time_us} before_cur={:?} before_next={:?} after_cur={} after_next={:?} presented={} dropped={} late_us={} dropped_pts={:?}",
+        before_video.current_pts_us,
+        before_video.next_pts_us,
+        snapshot.current_video_pts_us,
+        snapshot.next_video_pts_us,
+        selection.presented_frames,
+        selection.dropped_frames,
+        snapshot.core_sync_error_us,
+        dropped_pts,
+    ));
 }
 
 fn compute_core_sync_error_us(

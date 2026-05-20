@@ -1,7 +1,11 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
+use crate::util::debug_trace::append_trace_line;
 use crate::util::time::{add_media_time_us, MediaTimeUs};
+
+const DEVICE_TIMING_MIN_PLAYED_FRAMES: u64 = 1;
+const DEVICE_TIMING_MAX_BACKWARD_CORRECTION_US: MediaTimeUs = 50_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DevicePlaybackTiming {
@@ -35,9 +39,15 @@ impl AudioClock {
 
     pub fn play(&self) {
         let mut state = self.state.lock().unwrap();
+        let was_running = state.anchor_instant.is_some();
         if state.anchor_instant.is_none() {
             state.anchor_instant = Some(Instant::now());
         }
+        append_trace_line(&format!(
+            "audio_clock:play was_running={} anchor_media_time_us={}",
+            was_running,
+            state.anchor_media_time_us
+        ));
     }
 
     pub fn pause(&self) {
@@ -45,6 +55,10 @@ impl AudioClock {
         Self::reanchor_to_now(&mut state);
         state.anchor_instant = None;
         state.device_timing = None;
+        append_trace_line(&format!(
+            "audio_clock:pause anchor_media_time_us={}",
+            state.anchor_media_time_us
+        ));
     }
 
     pub fn seek(&self, position_us: MediaTimeUs) {
@@ -54,6 +68,11 @@ impl AudioClock {
         if state.anchor_instant.is_some() {
             state.anchor_instant = Some(Instant::now());
         }
+        append_trace_line(&format!(
+            "audio_clock:seek position_us={} running={}",
+            position_us,
+            state.anchor_instant.is_some()
+        ));
     }
 
     pub fn set_speed(&self, speed: f64) {
@@ -71,25 +90,87 @@ impl AudioClock {
         state.anchor_instant = None;
         state.speed = 1.0;
         state.device_timing = None;
+        append_trace_line("audio_clock:reset");
     }
 
     pub fn update_from_device(&self, timing: Option<DevicePlaybackTiming>) {
         let mut state = self.state.lock().unwrap();
+        let before_presentation_us = Self::projected_media_time_us(&state, Instant::now());
+        let had_device_timing = state.device_timing.is_some();
         if state.anchor_instant.is_none() {
+            if let Some(timing) = timing.filter(|timing| timing.played_frames >= DEVICE_TIMING_MIN_PLAYED_FRAMES)
+            {
+                let device_media_time_us = Self::device_media_time_us(&timing);
+                state.anchor_media_time_us = device_media_time_us;
+                state.anchor_instant = Some(Instant::now());
+                state.device_timing = Some(timing);
+                let after_presentation_us = Self::projected_media_time_us(&state, Instant::now());
+                append_trace_line(&format!(
+                    "audio_clock:update_from_device bootstrap before={before_presentation_us} after={after_presentation_us} base_pts={} played_frames={} sample_rate={}",
+                    timing.base_pts_us,
+                    timing.played_frames,
+                    timing.sample_rate
+                ));
+                return;
+            }
+
+            append_trace_line(&format!(
+                "audio_clock:update_from_device skipped not_running timing={:?} before={before_presentation_us}",
+                timing
+            ));
             state.device_timing = None;
             return;
         }
 
         if let Some(timing) = timing {
-            state.anchor_media_time_us = Self::device_media_time_us(&timing);
+            let device_media_time_us = Self::device_media_time_us(&timing);
+            let backward_correction_us =
+                before_presentation_us.saturating_sub(device_media_time_us);
+
+            if timing.played_frames < DEVICE_TIMING_MIN_PLAYED_FRAMES {
+                append_trace_line(&format!(
+                    "audio_clock:update_from_device skipped priming before={before_presentation_us} device={device_media_time_us} base_pts={} played_frames={} sample_rate={}",
+                    timing.base_pts_us,
+                    timing.played_frames,
+                    timing.sample_rate
+                ));
+                return;
+            }
+
+            if had_device_timing
+                && backward_correction_us > DEVICE_TIMING_MAX_BACKWARD_CORRECTION_US
+            {
+                append_trace_line(&format!(
+                    "audio_clock:update_from_device skipped backward_jump before={before_presentation_us} device={device_media_time_us} backward_correction={backward_correction_us} base_pts={} played_frames={} sample_rate={}",
+                    timing.base_pts_us,
+                    timing.played_frames,
+                    timing.sample_rate
+                ));
+                return;
+            }
+
+            state.anchor_media_time_us = device_media_time_us;
             state.anchor_instant = Some(Instant::now());
             state.device_timing = Some(timing);
+            let after_presentation_us = Self::projected_media_time_us(&state, Instant::now());
+            append_trace_line(&format!(
+                "audio_clock:update_from_device apply before={before_presentation_us} after={after_presentation_us} correction={} initial_sync={} base_pts={} played_frames={} sample_rate={}",
+                after_presentation_us.saturating_sub(before_presentation_us),
+                !had_device_timing,
+                timing.base_pts_us,
+                timing.played_frames,
+                timing.sample_rate
+            ));
         } else {
             Self::reanchor_to_now(&mut state);
             state.device_timing = None;
             if state.anchor_instant.is_some() {
                 state.anchor_instant = Some(Instant::now());
             }
+            let after_presentation_us = Self::projected_media_time_us(&state, Instant::now());
+            append_trace_line(&format!(
+                "audio_clock:update_from_device clear before={before_presentation_us} after={after_presentation_us}"
+            ));
         }
     }
 
@@ -191,5 +272,61 @@ mod tests {
         assert!(before_pause >= 200_000);
         assert!(after_pause >= before_pause);
         assert_eq!(frozen_after_pause, after_pause);
+    }
+
+    #[test]
+    fn device_timing_with_zero_played_frames_does_not_override_clock() {
+        let clock = AudioClock::new();
+        clock.seek(300_000);
+        clock.play();
+
+        let before = clock.presentation_time_us();
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 21_333,
+            played_frames: 0,
+            sample_rate: 48_000,
+        }));
+        let after = clock.presentation_time_us();
+
+        assert!(after >= before);
+        assert!(after < 360_000);
+    }
+
+    #[test]
+    fn initial_device_sync_can_reanchor_backward() {
+        let clock = AudioClock::new();
+        clock.seek(400_000);
+
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 0,
+            played_frames: 4_800,
+            sample_rate: 48_000,
+        }));
+        let after = clock.presentation_time_us();
+
+        assert!(after >= 100_000);
+        assert!(after < 160_000);
+    }
+
+    #[test]
+    fn large_backward_device_jump_is_ignored_after_initial_sync() {
+        let clock = AudioClock::new();
+        clock.seek(400_000);
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 380_000,
+            played_frames: 960,
+            sample_rate: 48_000,
+        }));
+
+        let before = clock.presentation_time_us();
+        clock.update_from_device(Some(DevicePlaybackTiming {
+            base_pts_us: 21_333,
+            played_frames: 550,
+            sample_rate: 48_000,
+        }));
+        let after = clock.presentation_time_us();
+
+        assert!(after >= before);
+        assert!(after < before.saturating_add(60_000));
     }
 }

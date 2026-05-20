@@ -26,6 +26,7 @@ use crate::player::view::{
     build_audio_output_snapshot, build_decoded_output_view, build_media_info_view,
     build_playback_snapshot, build_video_frame_info, build_video_surface_desc,
 };
+use crate::util::debug_trace::{append_trace_line, reset_trace_file};
 use crate::util::time::us_to_ms;
 use std::ffi::{c_char, c_double, c_int, CStr, CString};
 use std::ptr;
@@ -116,11 +117,14 @@ pub unsafe extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHand
         return SEMI_E_INVALID_ARG;
     }
 
+    reset_trace_file();
+    append_trace_line("ffi:create begin");
     let player_ptr = Box::into_raw(Box::new(SemiPlayerHandle::new()));
     unsafe {
         (*player_ptr).start_workers(player_ptr);
         *out_player = player_ptr;
     }
+    append_trace_line("ffi:create end");
     SEMI_OK
 }
 
@@ -131,10 +135,12 @@ pub unsafe extern "C" fn semi_player_create(out_player: *mut *mut SemiPlayerHand
 /// It must not be used again after destruction.
 pub unsafe extern "C" fn semi_player_destroy(player: *mut SemiPlayerHandle) {
     if !player.is_null() {
+        append_trace_line("ffi:destroy begin");
         unsafe {
             (*player).stop_workers();
             drop(Box::from_raw(player));
         };
+        append_trace_line("ffi:destroy end");
     }
 }
 

@@ -13,6 +13,8 @@ using System.Windows.Threading;
 internal sealed class SmokeAnomalyLogger
 {
     private const long CoreSyncErrorWarnThresholdMs = 16;
+    private const long NegativeVideoStepWarnThresholdMs = 1;
+    private const long LargeVideoStepWarnThresholdMs = 100;
     private const long StaleAudioDiscardLagWarnThresholdUs = 2_000;
     private const long LockWaitWarnThresholdUs = 8_000;
     private const long WorkerSlipWarnThresholdUs = 5_000;
@@ -88,6 +90,22 @@ internal sealed class SmokeAnomalyLogger
             LogThrottled(
                 "video-drop",
                 $"video-drop totalDrops={snapshot.VideoSyncDrops} lastDropped={snapshot.LastSyncDroppedFrames} maxDroppedRun={snapshot.MaxSyncDroppedFrames}");
+        }
+
+        if (afterStartupGrace && diagnostics.LastVideoStepMs <= -NegativeVideoStepWarnThresholdMs)
+        {
+            _activeAnomalies.Add("video-backstep");
+            LogThrottled(
+                "video-backstep",
+                $"video-backstep stepMs={diagnostics.LastVideoStepMs} audio={snapshot.AudioPositionMs} current={snapshot.CurrentVideoPtsMs} next={snapshot.NextVideoPtsMs} coreErr={snapshot.CoreSyncErrorMs}");
+        }
+
+        if (afterStartupGrace && diagnostics.LastVideoStepMs >= LargeVideoStepWarnThresholdMs)
+        {
+            _activeAnomalies.Add("video-big-step");
+            LogThrottled(
+                "video-big-step",
+                $"video-big-step stepMs={diagnostics.LastVideoStepMs} avgStepMs={diagnostics.AverageVideoStepMs:F1} audio={snapshot.AudioPositionMs} current={snapshot.CurrentVideoPtsMs} next={snapshot.NextVideoPtsMs} dropped={snapshot.LastSyncDroppedFrames}");
         }
 
         if (afterStartupGrace
@@ -498,7 +516,8 @@ internal sealed class PlayerSmokeWindow : Window
             $"Max+ {_diagnostics.CoreSyncErrorMaxPositiveMs} ms  Max- {_diagnostics.CoreSyncErrorMaxNegativeMs} ms";
         string videoLine =
             $"Video  Cur {snapshot.CurrentVideoPtsMs} ms  Next {snapshot.NextVideoPtsMs} ms  " +
-            $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms";
+            $"CurEnd {snapshot.CurrentVideoEffectiveEndMs} ms  " +
+            $"Step {_diagnostics.LastVideoStepMs} ms  Avg {_diagnostics.AverageVideoStepMs:F1} ms";
         string decodeLine =
             $"Decode  {FormatDecodeBackend(snapshot.VideoDecodeBackend)}  " +
             $"HwReq {snapshot.VideoHardwareRequested}  HwOn {snapshot.VideoHardwareActive}  " +

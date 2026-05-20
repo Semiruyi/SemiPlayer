@@ -5,6 +5,7 @@ use crate::player::access::{PlaybackAdvanceObserveContext, PlaybackAdvancePlanCo
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::runtime::AudioDiscardSummary;
 use crate::sync::video_sync::VideoSyncService;
+use crate::util::debug_trace::append_trace_line;
 
 pub(crate) struct PlaybackAdvancePlan {
     audio_output: SharedAudioOutputController,
@@ -117,6 +118,14 @@ pub(crate) fn finish_playback_advance(
 
     let started_before_sync = player.audio_coord_access().started_snapshot();
     let mut should_update_clock_from_device = false;
+    append_trace_line(&format!(
+        "playback_advance:post_sync playback={playback_time_us} started_before={} gate_audio={} current_video={} sync_err={} current_pts={}",
+        started_before_sync,
+        player.control_snapshot().gate_audio_until_video_ready,
+        player.with_runtime_access(|runtime| runtime.has_current_video_frame()),
+        sync_snapshot.core_sync_error_us,
+        sync_snapshot.current_video_pts_us
+    ));
 
     if player.control_snapshot().gate_audio_until_video_ready {
         if player.with_runtime_access(|runtime| runtime.has_current_video_frame())
@@ -125,9 +134,13 @@ pub(crate) fn finish_playback_advance(
             player
                 .audio_coord_access()
                 .sync_output_started_state(plan.state);
-            player.audio_coord_access().play_clock();
 
             let device_timing = player.audio_coord_access().playback_timing_snapshot();
+            append_trace_line(&format!(
+                "playback_advance:gate_release device_timing={:?} clock_before={}",
+                device_timing,
+                player.playback_position_us_snapshot()
+            ));
             if let Some(timing) = device_timing {
                 player.audio_coord_access().update_clock_from_device(Some(timing));
             }
@@ -147,9 +160,38 @@ pub(crate) fn finish_playback_advance(
 
     if should_update_clock_from_device {
         let device_timing = player.audio_coord_access().playback_timing_snapshot();
+        let clock_before_update_us = player.playback_position_us_snapshot();
+        let audio_snapshot = player.audio_output_snapshot();
+        let expected_present_us = device_timing.map(|timing| {
+            let pending_frames_us = i64::try_from(audio_snapshot.pending_device_frames)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1_000_000)
+                .saturating_div(i64::from(timing.sample_rate.max(1)));
+            timing
+                .base_pts_us
+                .saturating_add(
+                    i64::try_from(timing.played_frames)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(1_000_000)
+                        .saturating_div(i64::from(timing.sample_rate.max(1))),
+                )
+                .saturating_add(pending_frames_us)
+        });
+        append_trace_line(&format!(
+            "playback_advance:update_clock begin started_before={} started_after={} device_timing={:?} pending_device_frames={} expected_present_us={:?} clock_before={clock_before_update_us}",
+            started_before_sync,
+            started_after_sync,
+            device_timing,
+            audio_snapshot.pending_device_frames,
+            expected_present_us
+        ));
         player
             .audio_coord_access()
             .update_clock_from_device(device_timing);
+        append_trace_line(&format!(
+            "playback_advance:update_clock end clock_after={}",
+            player.playback_position_us_snapshot()
+        ));
     }
 
     let observe = player.playback_advance_observe_context();

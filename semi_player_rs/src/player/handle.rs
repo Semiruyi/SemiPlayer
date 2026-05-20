@@ -21,6 +21,7 @@ use crate::render::gpu::GpuDevice;
 use crate::render::service::RenderService;
 use crate::sync::clock::AudioClock;
 use crate::sync::schedule::PlayerScheduleService;
+use crate::util::debug_trace::append_trace_line;
 use crate::util::time::MediaTimeUs;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -199,11 +200,10 @@ impl SemiPlayerHandle {
         if let Some(render_worker) = self.render_worker.as_ref() {
             render_worker.request_render();
         }
-
-        self.request_decode_if_needed();
     }
 
     pub fn stop_workers(&mut self) {
+        append_trace_line("player:stop_workers begin");
         if let Some(mut sync_worker) = self.sync_worker.take() {
             sync_worker.stop();
         }
@@ -215,6 +215,7 @@ impl SemiPlayerHandle {
         if let Some(mut decode_worker) = self.decode_worker.take() {
             decode_worker.stop();
         }
+        append_trace_line("player:stop_workers end");
     }
 
     pub fn notify_sync_worker(&self) {
@@ -471,7 +472,9 @@ impl SemiPlayerHandle {
     }
 
     pub fn observe_seek_stable(&self) {
-        self.diagnostics.observe_seek_stable();
+        if !self.diagnostics.observe_seek_stable() {
+            return;
+        }
         self.finish_media_seek_diagnostics();
         self.clear_seek_recovery();
     }

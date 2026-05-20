@@ -123,6 +123,13 @@ pub struct SyncWorkerPlanContext {
     pub phase_lock: PlaybackPhaseHandle,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct RenderWorkerPlanContext {
+    pub media_loaded: bool,
+    pub state: crate::api::types::PlayerState,
+    pub decode_supply: crate::player::runtime::DecodeSupplyStatus,
+}
+
 #[derive(Clone)]
 pub struct PlaybackAdvancePlanContext {
     pub initial_playback_time_us: MediaTimeUs,
@@ -285,6 +292,14 @@ impl SemiPlayerHandle {
                 self.schedule_inputs(),
             ),
             phase_lock: self.playback_phase_handle(),
+        }
+    }
+
+    pub fn render_worker_plan_context(&self) -> RenderWorkerPlanContext {
+        RenderWorkerPlanContext {
+            media_loaded: self.control_access().is_media_loaded(),
+            state: self.control_access().state(),
+            decode_supply: self.runtime_snapshot().decode_supply,
         }
     }
 

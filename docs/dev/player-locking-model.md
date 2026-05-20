@@ -32,6 +32,9 @@ Each resource domain owns its own lock. Callers go through the access layer
 - Heavy work (FFmpeg decode, render transform) stays outside locks whenever possible.
 - Diagnostics are readable without waiting on playback work.
 - Plan/execute/commit pattern for operations that touch multiple domains.
+- D3D11 device/context access is additionally protected by `ID3D11Multithread`; this is separate
+  from player-domain locks and is required because FFmpeg hardware decode and render readback share
+  the same D3D11 objects across threads.
 
 ## 4. Threads And Resources
 

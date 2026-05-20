@@ -15,6 +15,7 @@ use crate::render::gpu::{
 pub struct D3d11GpuDevice {
     device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     device_context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread,
 }
 
 #[repr(C)]
@@ -31,8 +32,10 @@ impl D3d11GpuDevice {
         use windows::Win32::Foundation::HMODULE;
         use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL};
         use windows::Win32::Graphics::Direct3D11::{
-            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
+            D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
         };
+        use windows::core::Interface;
 
         let mut device: Option<ID3D11Device> = None;
         let mut device_context: Option<ID3D11DeviceContext> = None;
@@ -56,10 +59,18 @@ impl D3d11GpuDevice {
 
         let device = device.ok_or(GpuDeviceError::DeviceCreationFailed)?;
         let device_context = device_context.ok_or(GpuDeviceError::DeviceCreationFailed)?;
+        let multithread: ID3D11Multithread = device
+            .cast()
+            .map_err(|_| GpuDeviceError::DeviceCreationFailed)?;
+
+        unsafe {
+            let _ = multithread.SetMultithreadProtected(true);
+        }
 
         Ok(Self {
             device,
             device_context,
+            multithread,
         })
     }
 
@@ -124,6 +135,7 @@ impl GpuDevice for D3d11GpuDevice {
         Box::new(D3d11GpuRenderer {
             device: self.device.clone(),
             device_context: self.device_context.clone(),
+            multithread: self.multithread.clone(),
             state: RendererState::default(),
         })
     }
@@ -143,6 +155,7 @@ struct RendererState {
 pub struct D3d11GpuRenderer {
     device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
     device_context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    multithread: windows::Win32::Graphics::Direct3D11::ID3D11Multithread,
     state: RendererState,
 }
 
@@ -185,9 +198,7 @@ impl D3d11GpuRenderer {
     ) -> Result<PresentationFrame, GpuRenderError> {
         let gpu_data = match &frame.surface.storage {
             VideoSurfaceStorage::GpuTexture(data) => data,
-            VideoSurfaceStorage::CpuPacked { .. } => {
-                return Err(GpuRenderError::UnsupportedInput);
-            }
+            VideoSurfaceStorage::CpuPacked { .. } => return Err(GpuRenderError::UnsupportedInput),
         };
 
         match (gpu_data, frame.pixel_format()) {
@@ -201,34 +212,48 @@ impl D3d11GpuRenderer {
         }
     }
 
+    fn with_multithread_guard<T>(&self, f: impl FnOnce() -> T) -> T {
+        unsafe {
+            self.multithread.Enter();
+        }
+        let result = f();
+        unsafe {
+            self.multithread.Leave();
+        }
+        result
+    }
+
     fn copy_bgra_texture(
         &self,
         frame: &DecodedVideoFrame,
         gpu_data: &GpuTextureData,
     ) -> Result<PresentationFrame, GpuRenderError> {
-        let GpuTextureData::D3d11 {
-            texture_ptr,
-            shared_handle,
-            array_slice,
-        } = gpu_data;
+        self.with_multithread_guard(|| {
+            let GpuTextureData::D3d11 {
+                texture_ptr,
+                shared_handle,
+                array_slice,
+            } = gpu_data;
 
-        Ok(VideoFrame {
-            pts_us: frame.pts_us,
-            duration_us: frame.duration_us,
-            width: frame.width,
-            height: frame.height,
-            is_key_frame: frame.is_key_frame,
-            surface: Arc::new(
-                VideoSurface::new_gpu_texture(
-                    PixelFormatCategory::Bgra8,
-                    GpuTextureData::D3d11 {
-                        texture_ptr: *texture_ptr,
-                        shared_handle: *shared_handle,
-                        array_slice: *array_slice,
-                    },
-                )
-                .with_color_info(frame.color_info()),
-            ),
+            let result = VideoFrame {
+                pts_us: frame.pts_us,
+                duration_us: frame.duration_us,
+                width: frame.width,
+                height: frame.height,
+                is_key_frame: frame.is_key_frame,
+                surface: Arc::new(
+                    VideoSurface::new_gpu_texture(
+                        PixelFormatCategory::Bgra8,
+                        GpuTextureData::D3d11 {
+                            texture_ptr: *texture_ptr,
+                            shared_handle: *shared_handle,
+                            array_slice: *array_slice,
+                        },
+                    )
+                    .with_color_info(frame.color_info()),
+                ),
+            };
+            Ok(result)
         })
     }
 
@@ -237,112 +262,116 @@ impl D3d11GpuRenderer {
         frame: &DecodedVideoFrame,
         gpu_data: &GpuTextureData,
     ) -> Result<PresentationFrame, GpuRenderError> {
-        use windows::core::Interface;
-        use windows::Win32::Graphics::Direct3D11::{
-            ID3D11Resource, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
-            D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
-        };
-        use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
+        self.with_multithread_guard(|| {
+            use windows::core::Interface;
+            use windows::Win32::Graphics::Direct3D11::{
+                ID3D11Resource, ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAPPED_SUBRESOURCE,
+                D3D11_MAP_READ, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+            };
+            use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_SAMPLE_DESC};
 
-        let GpuTextureData::D3d11 {
-            texture_ptr,
-            array_slice,
-            ..
-        } = gpu_data;
+            let GpuTextureData::D3d11 {
+                texture_ptr,
+                array_slice,
+                ..
+            } = gpu_data;
 
-        let width = frame.width;
-        let height = frame.height;
+            let width = frame.width;
+            let height = frame.height;
 
-        let staging_desc = D3D11_TEXTURE2D_DESC {
-            Width: width,
-            Height: height,
-            MipLevels: 1,
-            ArraySize: 1,
-            Format: DXGI_FORMAT(103), // DXGI_FORMAT_NV12
-            SampleDesc: DXGI_SAMPLE_DESC {
-                Count: 1,
-                Quality: 0,
-            },
-            Usage: D3D11_USAGE_STAGING,
-            BindFlags: 0,
-            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
-            MiscFlags: 0,
-        };
+            let staging_desc = D3D11_TEXTURE2D_DESC {
+                Width: width,
+                Height: height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT(103), // DXGI_FORMAT_NV12
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
 
-        let mut staging: Option<ID3D11Texture2D> = None;
-        unsafe {
-            self.device
-                .CreateTexture2D(&staging_desc, None, Some(&mut staging))
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-        }
-        let staging = staging.ok_or(GpuRenderError::BackendUnavailable)?;
+            let mut staging: Option<ID3D11Texture2D> = None;
+            unsafe {
+                self.device
+                    .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+            }
+            let staging = staging.ok_or(GpuRenderError::BackendUnavailable)?;
 
-        let source_texture: ID3D11Texture2D =
-            unsafe { Interface::from_raw(*texture_ptr as *mut _) };
-        let source = ManuallyDrop::new(source_texture);
+            let source_texture: ID3D11Texture2D =
+                unsafe { Interface::from_raw(*texture_ptr as *mut _) };
+            let source = ManuallyDrop::new(source_texture);
 
-        unsafe {
-            let src_resource: ID3D11Resource = source
-                .cast()
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-            let dst_resource: ID3D11Resource = staging
-                .cast()
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-            self.device_context.CopySubresourceRegion(
-                &dst_resource,
-                0,
-                0,
-                0,
-                0,
-                &src_resource,
-                *array_slice,
-                None,
-            );
-        }
+            unsafe {
+                let src_resource: ID3D11Resource = source
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                let dst_resource: ID3D11Resource = staging
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                self.device_context.CopySubresourceRegion(
+                    &dst_resource,
+                    0,
+                    0,
+                    0,
+                    0,
+                    &src_resource,
+                    *array_slice,
+                    None,
+                );
+            }
 
-        let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
-        unsafe {
-            let staging_resource: ID3D11Resource = staging
-                .cast()
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-            self.device_context
-                .Map(&staging_resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-        }
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            unsafe {
+                let staging_resource: ID3D11Resource = staging
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                self.device_context
+                    .Map(&staging_resource, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+            }
 
-        let y_pitch = mapped.RowPitch as i32;
-        let uv_pitch = mapped.RowPitch as i32;
-        let y_ptr = mapped.pData as *const u8;
-        let uv_ptr = unsafe {
-            mapped
-                .pData
-                .add((height as usize) * (mapped.RowPitch as usize)) as *const u8
-        };
+            let y_pitch = mapped.RowPitch as i32;
+            let uv_pitch = mapped.RowPitch as i32;
+            let y_ptr = mapped.pData as *const u8;
+            let uv_ptr = unsafe {
+                mapped
+                    .pData
+                    .add((height as usize) * (mapped.RowPitch as usize)) as *const u8
+            };
 
-        let bgra_data = nv12_to_bgra_via_swscale(y_ptr, uv_ptr, y_pitch, uv_pitch, width, height);
+            let bgra_data =
+                nv12_to_bgra_via_swscale(y_ptr, uv_ptr, y_pitch, uv_pitch, width, height);
 
-        unsafe {
-            let staging_resource: ID3D11Resource = staging
-                .cast()
-                .map_err(|_| GpuRenderError::BackendUnavailable)?;
-            self.device_context.Unmap(&staging_resource, 0);
-        }
+            unsafe {
+                let staging_resource: ID3D11Resource = staging
+                    .cast()
+                    .map_err(|_| GpuRenderError::BackendUnavailable)?;
+                self.device_context.Unmap(&staging_resource, 0);
+            }
 
-        let Some(bgra_data) = bgra_data else {
-            return Err(GpuRenderError::BackendUnavailable);
-        };
+            let Some(bgra_data) = bgra_data else {
+                return Err(GpuRenderError::BackendUnavailable);
+            };
 
-        Ok(VideoFrame {
-            pts_us: frame.pts_us,
-            duration_us: frame.duration_us,
-            width,
-            height,
-            is_key_frame: frame.is_key_frame,
-            surface: Arc::new(VideoSurface::new_cpu_packed(
-                PixelFormatCategory::Bgra8,
-                width as usize * 4,
-                bgra_data,
-            )),
+            let result = VideoFrame {
+                pts_us: frame.pts_us,
+                duration_us: frame.duration_us,
+                width,
+                height,
+                is_key_frame: frame.is_key_frame,
+                surface: Arc::new(VideoSurface::new_cpu_packed(
+                    PixelFormatCategory::Bgra8,
+                    width as usize * 4,
+                    bgra_data,
+                )),
+            };
+            Ok(result)
         })
     }
 }

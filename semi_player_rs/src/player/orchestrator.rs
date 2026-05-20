@@ -41,7 +41,6 @@ pub fn play(player: &SemiPlayerHandle) -> ResultCode {
         return SEMI_E_INVALID_STATE;
     }
 
-    audio.play_clock();
     control.set_state(PlayerState::Playing);
     audio.sync_output_started_state(control.state());
     mark_video_sync_dirty(player);

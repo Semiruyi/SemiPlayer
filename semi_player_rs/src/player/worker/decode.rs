@@ -7,6 +7,7 @@ use crate::player::access::DecodePlanContext;
 use crate::player::execution::{apply_decoded_output, poll_decoded_output_once};
 use crate::player::handle::SemiPlayerHandle;
 use crate::sync::schedule::PlayerScheduleService;
+use crate::util::debug_trace::append_trace_line;
 
 #[derive(Default)]
 struct DecodeWorkerControl {
@@ -46,6 +47,7 @@ impl DecodeWorkerHandle {
     }
 
     pub fn stop(&mut self) {
+        append_trace_line("decode:stop requested");
         let (lock, condvar) = &*self.control;
         {
             let mut control = lock.lock().unwrap();
@@ -55,7 +57,9 @@ impl DecodeWorkerHandle {
         condvar.notify_all();
 
         if let Some(thread) = self.thread.take() {
+            append_trace_line("decode:joining");
             let _ = thread.join();
+            append_trace_line("decode:joined");
         }
     }
 }
@@ -63,6 +67,11 @@ impl DecodeWorkerHandle {
 #[allow(clippy::needless_pass_by_value)]
 fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Condvar)>) {
     loop {
+        if shutdown_requested(&control) {
+            append_trace_line("decode:loop exit shutdown_requested");
+            break;
+        }
+
         let plan = unsafe {
             let player_ptr = player_addr as *mut SemiPlayerHandle;
             plan_decode_action(&*player_ptr)
@@ -84,6 +93,7 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
                     DecodeWorkerAction::ContinueSoon => {}
                     DecodeWorkerAction::WaitIndefinitely => {
                         if wait_for_signal(&control) {
+                            append_trace_line("decode:loop exit wait_for_signal");
                             break;
                         }
                     }
@@ -91,11 +101,16 @@ fn worker_loop(player_addr: usize, control: Arc<(Mutex<DecodeWorkerControl>, Con
             }
             DecodeWorkerPlan::WaitIndefinitely => {
                 if wait_for_signal(&control) {
+                    append_trace_line("decode:loop exit wait_for_signal");
                     break;
                 }
             }
         }
     }
+}
+
+fn shutdown_requested(control: &Arc<(Mutex<DecodeWorkerControl>, Condvar)>) -> bool {
+    control.0.lock().unwrap().shutdown
 }
 
 fn plan_decode_action(player: &SemiPlayerHandle) -> DecodeWorkerPlan {
@@ -141,6 +156,9 @@ fn complete_decode_action(
             let apply_result = apply_decoded_output(player, output);
             if apply_result.should_wake_sync {
                 player.notify_sync_worker();
+            }
+            if apply_result.should_wake_render {
+                player.notify_render_worker();
             }
             if apply_result.reached_end {
                 return DecodeWorkerAction::WaitIndefinitely;
@@ -265,7 +283,8 @@ mod tests {
         );
 
         assert!(matches!(action, DecodeWorkerAction::WaitIndefinitely));
-        assert_eq!(player.runtime.get_mut().unwrap().runtime.video_queue_len(), 1);
-        assert!(player.runtime.get_mut().unwrap().video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.decoded_video_queue_len(), 1);
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(), 0);
+        assert!(!player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 }

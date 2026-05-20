@@ -2,7 +2,6 @@ use crate::api::error::{ResultCode, SEMI_E_INVALID_STATE};
 use crate::api::types::PlayerState;
 use crate::decode::session::SharedMediaSession;
 use crate::decode::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
-use crate::player::execution::render_supply::render_supply;
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::frame::DecodedVideoFrame;
 
@@ -23,6 +22,7 @@ pub(crate) fn poll_decoded_output_once(
 pub(crate) struct DecodedOutputApplyResult {
     pub reached_end: bool,
     pub should_wake_sync: bool,
+    pub should_wake_render: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -36,14 +36,15 @@ pub(crate) fn apply_decoded_output(
 ) -> DecodedOutputApplyResult {
     match output {
         DecodedOutput::Video(frame) => apply_video_output(player, frame),
-        DecodedOutput::SkippedVideo(frame) => {
-            let playback_time_us = player.playback_position_us_snapshot();
-            player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
-            DecodedOutputApplyResult {
-                reached_end: false,
-                should_wake_sync: false,
+            DecodedOutput::SkippedVideo(frame) => {
+                let playback_time_us = player.playback_position_us_snapshot();
+                player.observe_seek_video_decoded_access(frame.pts_us, playback_time_us);
+                DecodedOutputApplyResult {
+                    reached_end: false,
+                    should_wake_sync: false,
+                    should_wake_render: false,
+                }
             }
-        }
         DecodedOutput::Audio(frame) => {
             player.observe_seek_first_audio_decoder_output_access();
             player.observe_seek_first_audio_decoded_access();
@@ -52,6 +53,7 @@ pub(crate) fn apply_decoded_output(
                 return DecodedOutputApplyResult {
                     reached_end: false,
                     should_wake_sync: false,
+                    should_wake_render: false,
                 };
             };
             player.with_runtime_access(|mut runtime| {
@@ -60,6 +62,7 @@ pub(crate) fn apply_decoded_output(
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: should_wake_sync_for_audio_enqueue(context),
+                should_wake_render: false,
             }
         }
         DecodedOutput::SkippedAudio(frame) => {
@@ -68,6 +71,7 @@ pub(crate) fn apply_decoded_output(
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: false,
+                should_wake_render: false,
             }
         }
         DecodedOutput::EndOfStream => {
@@ -77,6 +81,7 @@ pub(crate) fn apply_decoded_output(
             DecodedOutputApplyResult {
                 reached_end: true,
                 should_wake_sync: true,
+                should_wake_render: false,
             }
         }
     }
@@ -89,11 +94,10 @@ fn apply_video_output(
     let prepared = prepare_video_output(player);
     commit_video_prepare(player, prepared, frame);
 
-    let render_result = render_supply(player);
-
     DecodedOutputApplyResult {
         reached_end: false,
-        should_wake_sync: render_result.has_new_presentation_frames(),
+        should_wake_sync: false,
+        should_wake_render: true,
     }
 }
 
@@ -191,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn applying_video_output_requests_sync_wake() {
+    fn applying_video_output_requests_render_wake() {
         let mut player = SemiPlayerHandle::new();
 
         let result = apply_decoded_output(&player, DecodedOutput::Video(video_frame(0)));
@@ -200,10 +204,16 @@ mod tests {
             result,
             DecodedOutputApplyResult {
                 reached_end: false,
-                should_wake_sync: true,
+                should_wake_sync: false,
+                should_wake_render: true,
             }
         );
-        assert!(player.runtime.get_mut().unwrap().video_sync.is_dirty());
+        assert_eq!(player.runtime.get_mut().unwrap().runtime.decoded_video_queue_len(), 1);
+        assert_eq!(
+            player.runtime.get_mut().unwrap().runtime.presentation_video_queue_len(),
+            0
+        );
+        assert!(!player.runtime.get_mut().unwrap().video_sync.is_dirty());
     }
 
     #[test]
@@ -225,6 +235,7 @@ mod tests {
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: false,
+                should_wake_render: false,
             }
         );
     }
@@ -247,6 +258,7 @@ mod tests {
             DecodedOutputApplyResult {
                 reached_end: false,
                 should_wake_sync: true,
+                should_wake_render: false,
             }
         );
     }

@@ -380,10 +380,10 @@ impl PlayerDiagnostics {
         });
     }
 
-    pub(crate) fn observe_seek_stable(&self) {
+    pub(crate) fn observe_seek_stable(&self) -> bool {
         let mut seek = self.seek.lock().unwrap();
         let Some(mut active) = seek.active.take() else {
-            return;
+            return false;
         };
 
         if active.seek_stable_us.is_none() {
@@ -391,6 +391,7 @@ impl PlayerDiagnostics {
         }
 
         seek.last_completed = Some(active.snapshot(seek.seek_event_count, false));
+        true
     }
 
     fn with_active_seek(&self, f: impl FnOnce(&mut SeekObservation)) {
