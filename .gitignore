@@ -14,8 +14,7 @@ tools/tmp/
 Thumbs.db
 .DS_Store
 
-third_party/ffmpeg/current/
-third_party/ffmpeg/archives/
+third_party/
 
 *.dll
 *.log

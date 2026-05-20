@@ -1,13 +1,12 @@
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
-use crate::render::core::converter::{ConversionRequest, FrameConverter, FrameConverterSnapshot};
+use crate::render::core::converter::{ConversionRequest, FrameConverter, FrameConverterSnapshot, convert_cpu_packed_to_bgra};
 use crate::render::core::frame::{
     DecodedVideoFrame, PixelFormatCategory, PresentationFrame, VideoFrame,
     VideoSurface, VideoSurfaceKind, VideoSurfaceStorage,
 };
 use crate::render::gpu::{GpuBackendKind, GpuTextureData};
-use crate::render::pipelines::cpu_bgra;
 
 use super::device::D3d11DeviceContext;
 use super::interop::nv12_to_bgra_via_swscale;
@@ -198,7 +197,7 @@ impl FrameConverter for D3d11FrameConverter {
                                 }
                             }
                         }
-                        VideoSurfaceStorage::CpuPacked { .. } => cpu_bgra::try_render(frame),
+                        VideoSurfaceStorage::CpuPacked { .. } => convert_cpu_packed_to_bgra(frame),
                     }
                 }
                 (VideoSurfaceKind::GpuTexture, PixelFormatCategory::Bgra8) => {
