@@ -16,10 +16,11 @@ use crate::api::error::{
 };
 use crate::api::types::{
     SemiAudioOutputSnapshot, SemiDecodedOutput, SemiMediaInfo, SemiPlaybackSnapshot,
-    SemiVideoFrameInfo, SemiVideoPresentationProfile, SemiVideoSurfaceDesc,
+    SemiVideoDecodePreference, SemiVideoFrameInfo, SemiVideoPresentationProfile,
+    SemiVideoSurfaceDesc,
 };
-use crate::decode::session::open_media_with_hw_device_ctx;
-use crate::decode::{DecodedOutput, MediaOpenError};
+use crate::decode::session::open_media_with_video_decode_requirements;
+use crate::decode::{DecodePreference, DecodedOutput, MediaOpenError, VideoDecodeRequirements};
 use crate::demux::MediaProbeError;
 use crate::player::handle::SemiPlayerHandle;
 use crate::player::orchestrator;
@@ -163,8 +164,16 @@ pub extern "C" fn semi_player_open(
             .and_then(|device| device.create_ffmpeg_hw_device_ctx().ok())
     })
     .unwrap_or(None);
+    let video_decode_requirements = with_player_ref(player, |player| {
+        player.control_access().video_decode_requirements()
+    })
+    .unwrap_or_else(|_| VideoDecodeRequirements::performance());
 
-    let opened_media = match open_media_with_hw_device_ctx(&path, hw_device_ctx) {
+    let opened_media = match open_media_with_video_decode_requirements(
+        &path,
+        video_decode_requirements,
+        hw_device_ctx,
+    ) {
         Ok(opened_media) => opened_media,
         Err(MediaOpenError::Probe(MediaProbeError::OpenInput(_))) => {
             return SEMI_E_MEDIA_OPEN_FAILED
@@ -301,6 +310,28 @@ pub extern "C" fn semi_player_set_video_presentation_profile(
             }
         };
         orchestrator::set_video_presentation_profile(player, profile)
+    })
+    .unwrap_or_else(|code| code)
+}
+
+#[no_mangle]
+pub extern "C" fn semi_player_set_video_decode_preference(
+    player: *mut SemiPlayerHandle,
+    preference: u32,
+) -> c_int {
+    let Some(preference) = SemiVideoDecodePreference::from_raw(preference) else {
+        return SEMI_E_INVALID_ARG;
+    };
+
+    with_playback_coordinated_player_ref(player, |player| {
+        let preference = match preference {
+            SemiVideoDecodePreference::PreferCompatibility => {
+                DecodePreference::PreferCompatibility
+            }
+            SemiVideoDecodePreference::PreferPerformance => DecodePreference::PreferPerformance,
+            SemiVideoDecodePreference::PreferZeroCopy => DecodePreference::PreferZeroCopy,
+        };
+        orchestrator::set_video_decode_preference(player, preference)
     })
     .unwrap_or_else(|code| code)
 }

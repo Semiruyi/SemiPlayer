@@ -1,6 +1,7 @@
 pub(crate) mod decoder;
 mod error;
 pub(crate) mod output;
+mod policy;
 #[path = "session/decode.rs"]
 pub(crate) mod session_decode;
 #[path = "session/mod.rs"]
@@ -16,7 +17,10 @@ pub mod session {
     #[allow(unused_imports)]
     pub use super::session_impl::SharedOpenedMedia;
     #[allow(unused_imports)]
-    pub use super::session_impl::{open_media_with_hw_device_ctx, MediaSession, OpenedMedia};
+    pub use super::session_impl::{
+        open_media_with_hw_device_ctx, open_media_with_video_decode_requirements, MediaSession,
+        OpenedMedia,
+    };
     #[allow(unused_imports)]
     pub use super::session_shared::SharedMediaSession;
 }
@@ -27,6 +31,8 @@ pub use output::{
     DecodePolicy, DecodedOutput, DecodedOutputPoll, SeekRecoveryPolicy, SkippedAudioFrame,
     SkippedVideoFrame,
 };
+#[allow(unused_imports)]
+pub use policy::{DecodePreference, VideoDecodeRequirements};
 pub use video_decode::{
     VideoDecodeBackend, VideoDecodeDiagnosticsSnapshot, VideoDecodeFallbackReason,
 };

@@ -3,9 +3,11 @@ use ffmpeg_next::ffi;
 use crate::decode::decoder::{OpenedAudioDecoder, OpenedVideoDecoder};
 use crate::decode::error::MediaOpenError;
 use crate::decode::output::{DecodePolicy, DecodedOutput, DecodedOutputPoll};
+use crate::decode::policy::{VideoDecodeOpenOptions, VideoDecodeRequirements};
 use crate::decode::session_decode::SessionDecodeState;
 use crate::decode::session_lifecycle::{
     build_media_session, open_media_with_hw_device_ctx as open_media_session_with_hw_device_ctx,
+    open_media_with_video_decode_requirements as open_media_session_with_video_decode_requirements,
     seek_media_session, video_decode_diagnostics_snapshot,
 };
 use crate::decode::session_shared::SharedMediaSession;
@@ -37,13 +39,44 @@ pub fn open_media_with_hw_device_ctx(
     open_media_session_with_hw_device_ctx(path, hw_device_ctx)
 }
 
+pub fn open_media_with_video_decode_requirements(
+    path: &str,
+    requirements: VideoDecodeRequirements,
+    hw_device_ctx: Option<*mut ffi::AVBufferRef>,
+) -> Result<MediaSession, MediaOpenError> {
+    open_media_session_with_video_decode_requirements(path, requirements, hw_device_ctx)
+}
+
 impl MediaSession {
     pub fn from_input(
         path: String,
         input: ffmpeg_next::format::context::Input,
         hw_device_ctx: Option<*mut ffi::AVBufferRef>,
     ) -> Result<Self, MediaOpenError> {
-        build_media_session(path, input, hw_device_ctx)
+        build_media_session(
+            path,
+            input,
+            VideoDecodeOpenOptions {
+                requirements: VideoDecodeRequirements::performance(),
+                hw_device_ctx,
+            },
+        )
+    }
+
+    pub fn from_input_with_video_decode_requirements(
+        path: String,
+        input: ffmpeg_next::format::context::Input,
+        requirements: VideoDecodeRequirements,
+        hw_device_ctx: Option<*mut ffi::AVBufferRef>,
+    ) -> Result<Self, MediaOpenError> {
+        build_media_session(
+            path,
+            input,
+            VideoDecodeOpenOptions {
+                requirements,
+                hw_device_ctx,
+            },
+        )
     }
 
     #[allow(dead_code)]

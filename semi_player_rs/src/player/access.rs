@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::audio::core::output::{AudioOutputChunk, AudioStreamFormat};
 use crate::audio::core::output_controller::{AudioOutputSnapshot, SharedAudioOutputController};
+use crate::decode::{DecodePreference, VideoDecodeRequirements};
 use crate::decode::VideoDecodeDiagnosticsSnapshot;
 use crate::demux::MediaInfo;
 use crate::demux::SeekDemuxDiagnosticsSnapshot;
@@ -28,6 +29,7 @@ use crate::util::time::MediaTimeUs;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ControlSnapshot {
     pub speed: f64,
+    pub video_decode_preference: DecodePreference,
     pub subtitles_visible: bool,
     pub host_presentation_offset_us: MediaTimeUs,
     pub media_generation: u64,
@@ -174,6 +176,7 @@ impl SemiPlayerHandle {
     pub fn control_snapshot(&self) -> ControlSnapshot {
         ControlSnapshot {
             speed: self.speed(),
+            video_decode_preference: self.video_decode_preference(),
             subtitles_visible: self.subtitles_visible(),
             host_presentation_offset_us: self.host_presentation_offset_us(),
             media_generation: self.media_generation(),
@@ -492,6 +495,14 @@ impl ControlAccess<'_> {
 
     pub fn set_speed_value(&self, speed: f64) {
         self.player.set_speed_value(speed);
+    }
+
+    pub fn video_decode_requirements(&self) -> VideoDecodeRequirements {
+        self.player.video_decode_requirements()
+    }
+
+    pub fn set_video_decode_preference(&self, preference: DecodePreference) {
+        self.player.set_video_decode_preference(preference);
     }
 
     pub fn set_host_presentation_offset_us(&self, offset_us: MediaTimeUs) {

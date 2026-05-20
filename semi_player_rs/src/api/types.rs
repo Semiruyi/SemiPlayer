@@ -47,6 +47,30 @@ impl SemiVideoPresentationProfile {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SemiVideoDecodePreference {
+    PreferCompatibility = 0,
+    PreferPerformance = 1,
+    PreferZeroCopy = 2,
+}
+
+impl SemiVideoDecodePreference {
+    #[allow(dead_code)]
+    pub const fn as_raw(self) -> u32 {
+        self as u32
+    }
+
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        match raw {
+            0 => Some(Self::PreferCompatibility),
+            1 => Some(Self::PreferPerformance),
+            2 => Some(Self::PreferZeroCopy),
+            _ => None,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SemiMediaInfo {

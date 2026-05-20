@@ -7,7 +7,8 @@ use crate::audio::core::output_controller::SharedAudioOutputController;
 use crate::decode::session::{MediaSession, SharedMediaSession};
 use crate::decode::MediaOpenError;
 use crate::decode::{
-    DecodePolicy, DecodedOutput, SeekRecoveryPolicy, VideoDecodeDiagnosticsSnapshot,
+    DecodePolicy, DecodePreference, DecodedOutput, SeekRecoveryPolicy,
+    VideoDecodeDiagnosticsSnapshot, VideoDecodeRequirements,
 };
 use crate::demux::{
     probe_expected_left_keyframe_pts, probe_expected_right_keyframe_pts, MediaInfo,
@@ -37,6 +38,7 @@ struct SeekRecoveryState {
 #[derive(Clone, Copy, Debug)]
 struct ControlState {
     speed: c_double,
+    video_decode_preference: DecodePreference,
     video_presentation_profile: PresentationTargetProfile,
     subtitles_visible: bool,
     host_presentation_offset_us: MediaTimeUs,
@@ -47,6 +49,7 @@ impl Default for ControlState {
     fn default() -> Self {
         Self {
             speed: 1.0,
+            video_decode_preference: DecodePreference::PreferPerformance,
             video_presentation_profile: PresentationTargetProfile::CpuBgraCompatibility,
             subtitles_visible: true,
             host_presentation_offset_us: 0,
@@ -416,6 +419,22 @@ impl SemiPlayerHandle {
 
     pub fn video_presentation_profile(&self) -> PresentationTargetProfile {
         self.control.lock().unwrap().video_presentation_profile
+    }
+
+    pub fn video_decode_preference(&self) -> DecodePreference {
+        self.control.lock().unwrap().video_decode_preference
+    }
+
+    pub fn video_decode_requirements(&self) -> VideoDecodeRequirements {
+        VideoDecodeRequirements {
+            preference: self.video_decode_preference(),
+            allow_fallback: true,
+            require_gpu_output: false,
+        }
+    }
+
+    pub fn set_video_decode_preference(&self, preference: DecodePreference) {
+        self.control.lock().unwrap().video_decode_preference = preference;
     }
 
     pub fn set_video_presentation_profile(&self, profile: PresentationTargetProfile) {

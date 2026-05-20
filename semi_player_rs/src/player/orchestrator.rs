@@ -2,6 +2,7 @@ use std::ffi::c_double;
 
 use crate::api::error::{ResultCode, SEMI_E_INVALID_ARG, SEMI_E_INVALID_STATE, SEMI_OK};
 use crate::api::types::PlayerState;
+use crate::decode::DecodePreference;
 use crate::decode::session::MediaSession;
 use crate::player::handle::SemiPlayerHandle;
 use crate::render::core::pipeline::PresentationTargetProfile;
@@ -202,5 +203,15 @@ pub fn set_video_presentation_profile(
     control.set_video_presentation_profile(profile);
     mark_video_sync_dirty(player);
     player.dispatch_scheduler_event(SchedulerEvent::PlaybackDemandChanged);
+    SEMI_OK
+}
+
+pub fn set_video_decode_preference(
+    player: &SemiPlayerHandle,
+    preference: DecodePreference,
+) -> ResultCode {
+    player
+        .control_access()
+        .set_video_decode_preference(preference);
     SEMI_OK
 }
