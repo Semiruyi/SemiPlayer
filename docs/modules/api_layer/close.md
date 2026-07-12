@@ -31,6 +31,7 @@ fn handle_close():
     // ② 停 decoder 线程 (并等退出)
     video_decoder.stop()
     audio_decoder.stop()
+    audio_resampler.stop()               // 停重采样线程 (在 audio_decoder 之后, audio_sink 之前)
 
     // ③ 停 demux 线程 (并等退出)
     demuxer.stop_reading()
@@ -40,11 +41,13 @@ fn handle_close():
     audio_packet_queue.clear()
     video_frame_store.clear()
     audio_frame_store.clear()
+    audio_resampled_store.clear()
 
     // ⑤ 释放媒体相关资源 (模块对象留着, 只释放媒体上下文)
     demuxer.close()                      // 关文件, 释放 AVFormatContext
     video_decoder.unconfigure()          // 释放解码器实例 (configure 的逆)
     audio_decoder.unconfigure()
+    audio_resampler.unconfigure()        // 释放 SwrContext (configure 的逆)
     audio_sink.teardown()                // 释放 cpal 流 (setup 的逆)
     audio_clock.reset(0)                 // 时钟归零冻结
 

@@ -29,7 +29,9 @@ fn handle_open(src):
     video_decoder.configure(demuxer.video_config)
         // decoder 用 config 自己建解码器(含硬解上下文); 自包含, 不感知"流"概念
     audio_decoder.configure(demuxer.audio_config)
-    audio_sink.setup(demuxer.audio_config)   // 按音频参数建 cpal 流 (暂停态)
+    audio_sink.setup(demuxer.audio_config)   // 探测 cpal 能力, 建 cpal 输出流 (暂停态); 产出 audio_output_config
+    audio_resampler.configure(input=demuxer.audio_config, output=audio_sink.audio_output_config)
+        // 按 input(解码格式) → output(cpal 格式) 建 SwrContext; 自包含, 不感知"流"概念
     audio_clock.reset(0)                     // 时钟基准归 0, 冻结
 
     // ④ 会话状态
@@ -51,7 +53,8 @@ fn handle_open(src):
 | ② | `demuxer.open(src)` | 探测流信息（编码/分辨率/时长）→ MediaInfo + 暴露流配置（video_config/audio_config 纯数据） | demuxer.md（待设计）|
 | ③ | `video_decoder.configure(config)` | 用 config **自己建**视频解码器（含硬解上下文）；自包含，不感知流概念 | video_decoder.md |
 | ③ | `audio_decoder.configure(config)` | 用 config 自己建音频解码器 | audio_decoder.md |
-| ③ | `audio_sink.setup(config)` | 按音频参数（采样率/声道/位深）建 cpal 输出流，暂停态 | audio_sink.md |
+| ③ | `audio_sink.setup(config)` | 探测 cpal 能力、按支持的参数（采样率/声道/位深）建 cpal 输出流（暂停态）；产出 `audio_output_config` | audio_sink.md |
+| ③ | `audio_resampler.configure(input, output)` | 用 input(解码格式) → output(cpal 格式) 建 SwrContext；自包含，不感知流概念 | audio_resampler.md |
 | ③ | `audio_clock.reset(0)` | 时钟基准 PTS=0，冻结 | audio_clock.md |
 | ④ | 会话状态 | `player_state=Ready`、`target_start_pts=0`、记 current_media/duration | ApiLayer 内部 |
 

@@ -118,7 +118,8 @@ ApiLoop 串行取 Command:
 | **AudioPacketQueue** | 音频压缩包队列（每包带 generation） | Demuxer | AudioDecoder |
 | **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
 | **VideoFrameStore** | 视频帧（硬解原生格式，GPU 句柄 + PTS + generation） | VideoDecoder | VideoRenderer |
-| **AudioFrameStore** | 音频 PCM（无锁 SPSC `rtrb`，每块带 generation） | AudioDecoder | AudioSink |
+| **AudioFrameStore** | 音频 PCM（无锁 SPSC `rtrb`，每块带 generation） | AudioDecoder | AudioResampler |
+| **AudioResampledStore** | 重采样后音频 PCM（无锁 SPSC `rtrb`，cpal 目标格式，每块带 generation） | AudioResampler | AudioSink |
 | **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，GPU 句柄或 CPU buffer + PTS + generation） | VideoRenderer | Compositor |
 | **SubtitleFrameStore** | 渲染好的字幕位图（带 alpha 的 RGBA + 有效时间窗 + generation） | SubtitleRenderer | Compositor |
 | **FinalFrameStore** | 合成后的最终画面（宿主格式 + PTS + generation） | Compositor | VideoSync |
@@ -131,12 +132,13 @@ ApiLoop 串行取 Command:
 | **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；**seek 在此执行**：停旧读、av_seek_frame、generation+1、读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
 | **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解 → 喂 VideoFrameStore |
 | **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
+| **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 cpal 目标格式 → 喂 AudioResampledStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
 | **SubtitleDecoder** | 1 个 loop 线程 | 取字幕 packet → 解析成字幕事件（SRT/ASS/PGS…）→ 维护当前 PTS 该显示的事件。**只解析+时间轴匹配，不出像素** |
 | **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取硬解原生帧 → 格式转换（NV12 等 → 宿主 RGBA/BGRA）→ 喂 VideoRenderedStore。**纯转换，不碰字幕**。转换路径（GPU 直通 / copy-back）与图形上下文归属 TBD（见待确认项）|
 | **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
 | **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
 | **VideoSync** | 1 个 loop 线程 | 读 AudioClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付 Flutter。**回归纯粹末端消费者，不再驱动渲染/合成** |
-| **AudioSink** | **复用 cpal 实时线程** | 取 AudioFrameStore（丢弃旧 generation）→ 送声卡 → 写 AudioClock |
+| **AudioSink** | **复用 cpal 实时线程** | 取 AudioResampledStore（丢弃旧 generation）→ 送声卡 → 写 AudioClock |
 | **ProgressReporter** | 1 个线程 | 100ms 读 AudioClock → 推 StreamSink |
 
 ### 🚪 接口层
@@ -155,12 +157,12 @@ ApiLoop 串行取 Command:
 ```
 第0层(无依赖, 先构造): Generation, CommandQueue, Notifier, 
         VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue,
-        VideoFrameStore, AudioFrameStore,
+        VideoFrameStore, AudioFrameStore, AudioResampledStore,
         VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, AudioClock
-第1层: Demuxer, VideoDecoder, AudioDecoder, SubtitleDecoder   (注入第0层)
+第1层: Demuxer, VideoDecoder, AudioDecoder, AudioResampler, SubtitleDecoder   (注入第0层)
 第2层: VideoRenderer, SubtitleRenderer   (注入第1层产物 Store + 第0层下游 Store)
 第3层: Compositor   (注入 VideoRenderedStore + SubtitleFrameStore + FinalFrameStore)
-第4层: VideoSync, AudioSink, ProgressReporter   (注入第0层; VideoSync 消费 FinalFrameStore)
+第4层: VideoSync, AudioSink, ProgressReporter   (注入第0层; VideoSync 消费 FinalFrameStore, AudioSink 消费 AudioResampledStore)
 第5层: ApiLoop   (注入第1-4层模块 + CommandQueue, 串行派发命令)
 ```
 
@@ -174,12 +176,13 @@ ApiLoop 串行取 Command:
 | Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLoop 调 open()/start_reading()/seek()/stop_reading()/close()；阻塞时在自己的 cv 上等，Notifier 回调唤醒（QueueNotFull/Seek/Stop 等）|
 | VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, FFmpeg 解码器, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；查 generation 自 flush；Notifier 唤醒（QueueNotEmpty 等）|
 | AudioDecoder | AudioPacketQueue, AudioFrameStore, Generation, FFmpeg 解码器, Notifier | 同 VideoDecoder |
+| AudioResampler | AudioFrameStore, AudioResampledStore, Generation, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；取 AudioFrameStore 经 swr_convert 转 cpal 格式喂 AudioResampledStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|
 | SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | ApiLoop 调 start()/stop()/seek()；Notifier 唤醒（QueueNotEmpty 等）|
 | VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, 图形上下文(TBD), Notifier | ApiLoop 调 configure()/start()/stop()/seek()；从 VideoFrameStore 取帧转换后喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLoop 调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLoop 调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
 | VideoSync | FinalFrameStore, AudioClock, Generation, Notifier | ApiLoop 调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady/ClockJumped 等）|
-| AudioSink | AudioFrameStore, AudioClock, Generation, cpal | ApiLoop 调 setup()/start_playback()/stop_playback()/set_volume()；复用 cpal 实时线程（cpal 回调驱动，不需 Notifier）|
+| AudioSink | AudioResampledStore, AudioClock, Generation, cpal | ApiLoop 调 setup()/start_playback()/stop_playback()/set_volume()；复用 cpal 实时线程（cpal 回调驱动，不需 Notifier）|
 | ProgressReporter | AudioClock, StreamSink | 独立线程，读 AudioClock 推进度 |
 | CommandQueue | 无 | — |
 | Generation | 无 | — |
@@ -209,7 +212,7 @@ ApiLoop 串行取 Command:
                                                                                     ↓
                                                                             [VideoSync](读AudioClock选帧)→ 纹理
 
-            └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen) →[AudioSink]→ 声卡
+            └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioResampledStore(gen,cpal格式) →[AudioSink]→ 声卡
        ↑seek:gen+1                                                              │
        │                                                                        ▼
     Generation                                                            AudioClock ←── seek: ApiLayer 调 jump_to
