@@ -118,8 +118,8 @@ ApiLoop 串行取 Command:
 | **AudioPacketQueue** | 音频压缩包队列（每包带 generation） | Demuxer | AudioDecoder |
 | **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
 | **VideoFrameStore** | 视频帧（硬解原生格式，GPU 句柄 + PTS + generation） | VideoDecoder | VideoRenderer |
-| **AudioFrameStore** | 音频 PCM（无锁 SPSC `rtrb`，每块带 generation） | AudioDecoder | AudioResampler |
-| **AudioResampledStore** | 重采样后音频 PCM（无锁 SPSC `rtrb`，cpal 目标格式，每块带 generation） | AudioResampler | AudioSink |
+| **AudioFrameStore** | 音频 PCM（无锁 SPSC `rtrb`，每块带 pts + generation） | AudioDecoder | AudioResampler |
+| **AudioResampledStore** | 重采样后音频 PCM（无锁 SPSC `rtrb`，cpal 目标格式，每块带 pts + generation） | AudioResampler | AudioSink |
 | **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，GPU 句柄或 CPU buffer + PTS + generation） | VideoRenderer | Compositor |
 | **SubtitleFrameStore** | 渲染好的字幕位图（带 alpha 的 RGBA + 有效时间窗 + generation） | SubtitleRenderer | Compositor |
 | **FinalFrameStore** | 合成后的最终画面（宿主格式 + PTS + generation） | Compositor | VideoSync |
@@ -186,6 +186,7 @@ ApiLoop 串行取 Command:
 | ProgressReporter | AudioClock, StreamSink | 独立线程，读 AudioClock 推进度 |
 | CommandQueue | 无 | — |
 | Generation | 无 | — |
+| AudioClock | 无（被 AudioSink 写 / VideoSync·ProgressReporter 读 / ApiLoop 控制） | ApiLoop 调 reset()/freeze()/unfreeze()/jump_to();AudioSink 回调调 calibrate();读端无锁 current_pts() |
 | ApiLoop | CommandQueue + 各工作模块 Arc | — |
 | IoCContainer | 无（持有所有人） | — |
 
