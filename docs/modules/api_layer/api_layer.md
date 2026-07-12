@@ -53,7 +53,7 @@ ApiLayer 承担两个高度耦合的职责：
 - **独立模块会是贫血对象**：播放会话状态的方法只有 `get/set/check_legal`，全是读写自身字段、无独立逻辑；且使用者基本只有 ApiLayer（Dart 通过 ApiLayer 查询，不直接碰状态）。单一使用者 + 贫血逻辑 = 不该独立成模块。
 - **对比该独立的模块**：资源管理者（PacketQueue/AudioClock）有独立逻辑且多使用者，故独立；会话状态不具备这些特征。
 
-→ **不设独立的 PlayerState 模块**。状态字段内嵌在 ApiLayer。这也避免了模块清单膨胀（SeekCoordinator、EventBus 都经历过加了又砍）。
+→ **不设独立的 PlayerState 模块**。状态字段内嵌在 ApiLayer。这也避免了模块清单膨胀（SeekCoordinator 就经历过加了又砍）。
 
 ### 状态字段的线程可见性
 
