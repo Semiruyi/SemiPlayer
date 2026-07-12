@@ -109,6 +109,7 @@ ApiLoop 串行取 Command:
 | **CommandQueue** | 队列（无线程） | 接收 Dart 投递的 Command，供 ApiLoop 串行消费。每个 Command 关联一个 CommandHandle |
 | **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/EOF/ClockJumped/Error 等），状态变化方发送通知。**取代队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担**状态通知**职责（控制命令仍走 CommandQueue，不混入） |
 | **Generation** | 原子标量（无线程） | `AtomicU32`，全局 seek 世代号。Demuxer seek 时 +1，所有数据携带、所有消费者检查 |
+| **GpuDevice** | GPU 设备契约（无线程） | 抽象"一个 GPU 设备"的共性(设备 + 内存)，屏蔽 D3D11/Vulkan/OpenGL 等 API 差异。**纯契约不依赖 FFmpeg、不感知业务**。IoC 装配期按平台选实现(MVP: D3D11GpuDevice)。提供 api_type/device_handle/acquire_buffer 三个接口。copy-back 路下仅 FfmpegVideoDecoder 消费(硬解+download) |
 
 ### 📦 资源管理者层（无线程，seek 逻辑零改动）
 
@@ -117,10 +118,10 @@ ApiLoop 串行取 Command:
 | **VideoPacketQueue** | 视频压缩包队列（每包带 generation） | Demuxer | VideoDecoder |
 | **AudioPacketQueue** | 音频压缩包队列（每包带 generation） | Demuxer | AudioDecoder |
 | **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
-| **VideoFrameStore** | 视频帧（硬解原生格式，GPU 句柄 + PTS + generation） | VideoDecoder | VideoRenderer |
+| **VideoFrameStore** | 视频帧（硬解 download 后的 CPU 原生格式 NV12/P010 + PTS + generation） | VideoDecoder | VideoRenderer |
 | **AudioFrameStore** | 音频 PCM（无锁 SPSC `rtrb`，每块带 pts + generation） | AudioDecoder | AudioResampler |
 | **AudioResampledStore** | 重采样后音频 PCM（无锁 SPSC `rtrb`，cpal 目标格式，每块带 pts + generation） | AudioResampler | AudioSink |
-| **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，GPU 句柄或 CPU buffer + PTS + generation） | VideoRenderer | Compositor |
+| **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，CPU buffer + PTS + generation） | VideoRenderer | Compositor |
 | **SubtitleFrameStore** | 渲染好的字幕位图（带 alpha 的 RGBA + 有效时间窗 + generation） | SubtitleRenderer | Compositor |
 | **FinalFrameStore** | 合成后的最终画面（宿主格式 + PTS + generation） | Compositor | VideoSync |
 | **AudioClock** | pts↔Instant 映射 | AudioSink（写） | VideoSync / ProgressReporter（读）；seek 时 ApiLayer 直接调 clock.jump_to 跳点 |
@@ -130,11 +131,11 @@ ApiLoop 串行取 Command:
 | 模块 | 线程 | 职责 |
 |------|------|------|
 | **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；**seek 在此执行**：停旧读、av_seek_frame、generation+1、读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
-| **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解 → 喂 VideoFrameStore |
+| **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解（GPU）→ download 到 CPU → 喂 VideoFrameStore（CPU 原生格式帧）。硬解用注入的 GpuDevice，FFmpeg hwcontext 由 decoder 自构 |
 | **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
 | **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 cpal 目标格式 → 喂 AudioResampledStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
 | **SubtitleDecoder** | 1 个 loop 线程 | 取字幕 packet → 解析成字幕事件（SRT/ASS/PGS…）→ 维护当前 PTS 该显示的事件。**只解析+时间轴匹配，不出像素** |
-| **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取硬解原生帧 → 格式转换（NV12 等 → 宿主 RGBA/BGRA）→ 喂 VideoRenderedStore。**纯转换，不碰字幕**。转换路径（GPU 直通 / copy-back）与图形上下文归属 TBD（见待确认项）|
+| **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取 CPU 原生格式帧（NV12/P010）→ `sws_scale` 转 RGBA（CPU）→ 喂 VideoRenderedStore。**纯 CPU 转换，不碰 GPU、不碰字幕** |
 | **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
 | **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
 | **VideoSync** | 1 个 loop 线程 | 读 AudioClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付 Flutter。**回归纯粹末端消费者，不再驱动渲染/合成** |
@@ -155,7 +156,7 @@ ApiLoop 串行取 Command:
 依赖图是 DAG（资源/基础设施层不反向依赖工作模块），无真循环依赖。模块在**构造期**由 IoCContainer 注入 `Arc<依赖>`，运行时直接持有使用，不再查找容器。装配拓扑顺序：
 
 ```
-第0层(无依赖, 先构造): Generation, CommandQueue, Notifier, 
+第0层(无依赖, 先构造): Generation, CommandQueue, Notifier, GpuDevice, 
         VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue,
         VideoFrameStore, AudioFrameStore, AudioResampledStore,
         VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, AudioClock
@@ -174,11 +175,11 @@ ApiLoop 串行取 Command:
 |------|--------------|---------|
 | Notifier | 无（被所有人依赖）| — |
 | Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLoop 调 open()/start_reading()/seek()/stop_reading()/close()；阻塞时在自己的 cv 上等，Notifier 回调唤醒（QueueNotFull/Seek/Stop 等）|
-| VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, FFmpeg 解码器, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；查 generation 自 flush；Notifier 唤醒（QueueNotEmpty 等）|
+| VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；查 generation 自 flush；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
 | AudioDecoder | AudioPacketQueue, AudioFrameStore, Generation, FFmpeg 解码器, Notifier | 同 VideoDecoder |
 | AudioResampler | AudioFrameStore, AudioResampledStore, Generation, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；取 AudioFrameStore 经 swr_convert 转 cpal 格式喂 AudioResampledStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|
 | SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | ApiLoop 调 start()/stop()/seek()；Notifier 唤醒（QueueNotEmpty 等）|
-| VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, 图形上下文(TBD), Notifier | ApiLoop 调 configure()/start()/stop()/seek()；从 VideoFrameStore 取帧转换后喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
+| VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLoop 调 configure()/start()/stop()/seek()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLoop 调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLoop 调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
 | VideoSync | FinalFrameStore, AudioClock, Generation, Notifier | ApiLoop 调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady/ClockJumped 等）|
@@ -195,11 +196,11 @@ ApiLoop 串行取 Command:
 ### 数据流
 
 ```
-文件 →[Demuxer]→ VideoPacketQueue(gen) →[VideoDecoder]→ VideoFrameStore(gen,硬解原生帧)
+文件 →[Demuxer]→ VideoPacketQueue(gen) →[VideoDecoder](硬解GPU+download)→ VideoFrameStore(gen,CPU原生帧NV12/P010)
             │                                                            ↓
-            │                                              [VideoRenderer](转换:NV12→RGBA/BGRA)
+            │                                              [VideoRenderer](CPU sws_scale:NV12→RGBA/BGRA)
             │                                                            ↓
-            │                                              VideoRenderedStore(gen) ──┐
+            │                                              VideoRenderedStore(gen,CPU) ──┐
             │                                                                        │
             └─→ SubtitlePacketQueue(gen) →[SubtitleDecoder]→ 字幕事件(PTS匹配)      │
                                               ↓                                      │
@@ -275,9 +276,9 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 - [x] ~~外挂字幕是否支持~~ → 本阶段不做，只支持 demuxer 解出的内嵌字幕流
 - [ ] `get_state`：ApiLayer 维护 PlayerState 快照（仅投影不控制）——已倾向此方案，待认可
 - [ ] ProgressReporter 是否保留为独立模块（还是合并进 VideoSync 顺带推进度）
-- [ ] **VideoRenderer 转换路径**：GPU 直通（持有图形设备、shader 转换，保硬解收益但跨平台工作量大）vs copy-back（av_hwframe_transfer_data download + sws_scale 转 RGBA，简单但抵消部分硬解收益）。MVP 可先 copy-back，GPU 直通作未来优化
-- [ ] **图形上下文归属**：VideoRenderer/Compositor 都需要图形设备（D3D11/ANGLE/Vulkan），暂未抽象 GpuContext 模块。依赖表中标 TBD，待决定是否抽基础设施层的 GpuContext 供两者共享注入（避免重复创建设备 + 跨设备传纹理）
+- [x] ~~VideoRenderer 转换路径~~ → copy-back（硬解在 GPU，download 后 sws_scale 转 RGBA 在 CPU；合成 CPU）。GPU 直通作未来优化，GpuDevice trait 留扩展点
+- [x] ~~图形上下文归属~~ → 抽基础设施层 GpuDevice 契约（D3D11/Vulkan/OpenGL 实现），copy-back 路下仅 FfmpegVideoDecoder 依赖
 - [ ] **SubtitleDecoder → SubtitleRenderer 的事件传递**：SubtitleDecoder 检测到该显示的事件变化时主动推、SubtitleRenderer 被唤醒才渲染（事件驱动，倾向此），还是 SubtitleRenderer 轮询查询
 - [ ] 字幕轨选择/切换（多字幕轨、set_subtitle_track 命令）——本阶段暂不考虑，单轨
-- [ ] 各 rendered Store（VideoRenderedStore/SubtitleFrameStore/FinalFrameStore）的内部实现：有界队列 vs 单帧快照、GPU 句柄池化
+- [ ] 各 rendered Store（VideoRenderedStore/SubtitleFrameStore/FinalFrameStore）的内部实现：有界队列 vs 单帧快照（copy-back 路下均为 CPU buffer，无 GPU 句柄池化）
 - [ ] 进入下一阶段：逐模块讨论状态机与命令响应（当前进行中：Demuxer）
