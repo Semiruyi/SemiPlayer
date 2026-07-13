@@ -49,7 +49,7 @@ Player::init():
     if initialized: return Ok(())        // 幂等
     
     // 唯一职责: IoC 装配 (DAG 拓扑创建 + 依赖注入) + 启动 ApiLoop
-    // ★ 不碰任何技术细节 (FFmpeg/cpal 等是各模块内部职责, init 不可见)
+    // ★ 不碰任何技术细节 (FFmpeg/miniaudio 等是各模块内部职责, init 不可见)
     ioc = IoCContainer::assemble()
     api_loop = ApiLoop::new(ioc, command_queue)
     api_loop.spawn()
@@ -60,22 +60,22 @@ Player::init():
 
 ### init 的职责
 
-- **IoC 装配**：按 DAG 拓扑顺序创建所有模块、构造时注入 `Arc<依赖>`。模块各自的技术初始化（FFmpeg 注册、cpal host 获取等）在模块 `new()` 内部完成，**init 不知道这些**。
+- **IoC 装配**：按 DAG 拓扑顺序创建所有模块、构造时注入 `std::shared_ptr<依赖>`。模块各自的技术初始化（FFmpeg 注册、miniaudio host 获取等）在模块 `constructor` 内部完成，**init 不知道这些**。
 - **启动 ApiLoop**：命令执行线程跑起来。
 
 ### init 不做什么
 
-- ❌ 不做 FFmpeg/cpal 等具体技术初始化（各模块内部职责）
+- ❌ 不做 FFmpeg/miniaudio 等具体技术初始化（各模块内部职责）
 - ❌ 不打开任何媒体（那是 open）
 - ❌ 不绑定媒体流（那是 open 的 decoder.configure）
 - ❌ 不启动 demuxer/decoder 读数据（那是 play）
-- ❌ 不创建 cpal 流 / 解码器上下文（按媒体特性，open 时建）
+- ❌ 不创建 miniaudio 流 / 解码器上下文（按媒体特性，open 时建）
 
 ### 关键原则：init 不懂技术细节
 
 init 只知道"有这些模块类型、按依赖装配"，不知道模块内部用 FFmpeg 还是别的。换底层库不用改 init。这是**依赖倒置**——引导层只懂装配，不懂实现。
 
-模块初始化的全局协调（如 cpal host 进程级单例）由模块内部 `Lazy` 或共享注入解决，不归 init。
+模块初始化的全局协调（如 miniaudio 进程级单例）由模块内部局部静态（Meyers singleton）或共享注入解决，不归 init。
 
 ---
 
@@ -87,7 +87,7 @@ Player::shutdown():
     
     // 逆序释放: 先停 ApiLoop, 再逆序释放模块
     api_loop.stop()                      // ApiLoop 退出, 停止处理命令
-    ioc.dispose()                        // 逆序释放所有模块 (各模块 Drop 自管资源回收)
+    ioc.dispose()                        // 逆序释放所有模块 (各模块析构自管资源回收)
     
     initialized = false
     Ok(())
@@ -96,12 +96,12 @@ Player::shutdown():
 ### shutdown 的职责
 
 - **停 ApiLoop**：命令执行线程退出。
-- **逆序释放模块**：IoCContainer 按装配的逆序释放各模块。各模块的 `Drop` 自管资源回收（关 cpal 流、销毁解码器、关文件等），shutdown 不懂这些细节。
+- **逆序释放模块**：IoCContainer 按装配的逆序释放各模块。各模块的析构自管资源回收（关 miniaudio 流、销毁解码器、关文件等），shutdown 不懂这些细节。
 
 ### shutdown 不做什么
 
-- ❌ 不逐个调模块的清理方法（那是模块 Drop 的事）
-- ❌ 不懂 FFmpeg/cpal 的回收（模块内部）
+- ❌ 不逐个调模块的清理方法（那是模块析构的事）
+- ❌ 不懂 FFmpeg/miniaudio 的回收（模块内部）
 
 ### shutdown 是命令队列的最后一条命令
 
@@ -138,6 +138,6 @@ Uninitialized ──init()──▶ Idle (模块体系已装配, ApiLoop 运行,
 ## 边界（本文档不涉及）
 
 - ❌ IoC 装配的具体模块清单与拓扑 → architecture.md
-- ❌ 各模块内部技术初始化（FFmpeg/cpal）→ 各模块文档
+- ❌ 各模块内部技术初始化（FFmpeg/miniaudio）→ 各模块文档
 - ❌ open/play/seek 等命令编排 → api_layer/
 - ❌ close（媒体资源回收，非模块体系拆除）→ api_layer/close.md（待设计）

@@ -183,7 +183,7 @@ Constructed ─start()─▶ Running ⇄ Paused
 
 ## 依赖
 
-### 构造期注入(DI,Arc 持有)
+### 构造期注入(DI,shared_ptr 持有)
 
 | 依赖 | 用途 |
 |------|------|
@@ -228,7 +228,7 @@ seek 后 VideoSync 保留 seek 前的最后一帧。新数据没到时,选不到
 基于上一条,VideoSync 靠世代号 + 自然保持自洽 seek,不需要显式 seek() 方法。这是 architecture.md"seek 逻辑零改动"原则向工作模块的延伸——只要工作模块内部状态能靠"保持/丢弃"自洽,就不需要显式 seek。对比 decoder 需要 seek()(要 flush 内部参考帧),VideoSync 更简单。接口只有 start/pause/stop。
 
 ### 无 configure
-VideoSync 读 AudioClock + FinalFrameStore,接口固定,不需按媒体格式配置。和 decoder(configure 建解码器)/sink(setup 建 cpal 流)区别清晰——末端消费者不需要按媒体特性初始化。
+VideoSync 读 AudioClock + FinalFrameStore,接口固定,不需按媒体格式配置。和 decoder(configure 建解码器)/sink(setup 建 miniaudio 流)区别清晰——末端消费者不需要按媒体特性初始化。
 
 ---
 

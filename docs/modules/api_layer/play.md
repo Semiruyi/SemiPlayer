@@ -16,7 +16,7 @@
 ## play 命令的编排（ApiLoop 内）
 
 ```
-fn handle_play():
+void handle_play():
     // ① 边界处理
     if player_state == Playing:
         handle.resolve(Ok(())); return        // 已在播, 无操作
@@ -37,7 +37,7 @@ fn handle_play():
 
     // ④ 解冻 + 出声出画
     audio_clock.unfreeze()                     // 时钟开始推进
-    audio_sink.start_playback()                // cpal 取音频出声 (同时更新 AudioClock)
+    audio_sink.start_playback()                // miniaudio 取音频出声 (同时更新 AudioClock)
     video_sync.start()                         // VideoSync 按时钟贴帧
 
     player_state = Playing
@@ -63,12 +63,12 @@ fn handle_play():
 ## pause 命令的编排（ApiLoop 内）
 
 ```
-fn handle_pause():
+void handle_pause():
     if player_state != Playing:
         handle.resolve(Ok(())); return         // 非播放态, 无操作
 
     // ① 下游停消费
-    audio_sink.stop_playback()                 // cpal 切静音/暂停, 不取音频
+    audio_sink.stop_playback()                 // miniaudio 切静音/暂停, 不取音频
     audio_clock.freeze()                       // 时钟冻结 (带偏移修正, 保证 resume 不跳)
     video_sync.pause()                         // VideoSync 停在当前帧 (纹理保留)
 
@@ -96,14 +96,14 @@ fn handle_pause():
 | ② | `audio_decoder.start` | 启动音频解码线程，填 AudioFrameStore | audio_decoder.md |
 | ③ | 水位等待 | 等 AudioFrameStore/VideoFrameStore 达水位（仅冷启动）| ApiLoop 内部 |
 | ④ | `audio_clock.unfreeze` | 时钟解冻，开始推进 | audio_clock.md |
-| ④ | `audio_sink.start_playback` | cpal 开始取音频出声，更新 AudioClock | audio_sink.md |
+| ④ | `audio_sink.start_playback` | miniaudio 开始取音频出声，更新 AudioClock | audio_sink.md |
 | ④ | `video_sync.start` | VideoSync 按 AudioClock 贴帧 | video_sync.md（待设计）|
 
 ## pause 各步的职责
 
 | 步骤 | 模块方法 | 高层职责 |
 |------|---------|---------|
-| ① | `audio_sink.stop_playback` | cpal 暂停/切静音，不取音频 |
+| ① | `audio_sink.stop_playback` | miniaudio 暂停/切静音，不取音频 |
 | ① | `audio_clock.freeze` | 时钟冻结（偏移修正，resume 不跳）|
 | ① | `video_sync.pause` | 停在当前帧，纹理保留 |
 | — | （不动 demuxer/decoder）| 背压自然停 |

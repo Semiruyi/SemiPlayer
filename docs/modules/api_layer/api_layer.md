@@ -1,6 +1,6 @@
 # ApiLayer 模块设计
 
-> 对外接口层。Dart（Flutter 宿主）与 Rust 的唯一交互入口。
+> 对外接口层。Dart（Flutter 宿主）与 C++ 的唯一交互入口。
 > 基准原则见 `docs/architecture.md` 的"命令与句柄机制"章节。
 
 ## Context
@@ -13,7 +13,7 @@ ApiLayer 是播放器对外的门面。基于已定稿的控制模型——**命
 - **忠诚执行（哲学 A）**：播放器忠实执行每条命令，不擅自跳过/合并。所有命令一视同仁——完成才 resolve，无中间态。"聪明"（节流、跳过旧 seek）由使用方用 cancel/await 控制。
 - seek 是昂贵操作（触发重新定位 + 解码），使用方应清楚其成本，主动用 cancel 管理频率（如拖动时 cancel 旧 seek）。
 - 非法顺序检查：执行前校验状态，非法则 resolve(Err)。
-- 业务侧自治：命令节奏/时延由 Dart 控制，Rust 忠实串行执行。
+- 业务侧自治：命令节奏/时延由 Dart 控制，C++ 忠实串行执行。
 
 ---
 
@@ -59,9 +59,9 @@ ApiLayer 承担两个高度耦合的职责：
 
 `get_state()` 等查询由 **Dart 线程**同步调用（不走命令队列），而状态由 **ApiLoop 线程**修改。两线程访问同一状态字段，必须保证可见性：
 
-- `PlayerState`、音量等用原子类型（`AtomicUsize` 编码枚举、`AtomicU32` 存音量定点数）或细粒度 `Mutex`。
+- `PlayerState`、音量等用原子类型（`std::atomic<size_t>` 编码枚举、`std::atomic<uint32_t>` 存音量定点数）或细粒度 `Mutex`。
 - ApiLoop 写、get_state 读，原子读写、无锁快速。
-- 复合字段（如 MediaInfo）用 `arc-swap` 原子整体替换指针，保证读到的快照一致。
+- 复合字段（如 MediaInfo）用 `std::atomic<std::shared_ptr>` 原子整体替换指针，保证读到的快照一致。
 
 ---
 
@@ -70,7 +70,7 @@ ApiLayer 承担两个高度耦合的职责：
 ### 1. 生命周期控制命令（命令队列 + CommandHandle）
 
 ```
-open(src: String)    -> CommandHandle<Result<MediaInfo>>
+open(src: std::string)    -> CommandHandle<Result<MediaInfo>>
 ```
 - 打开媒体源（文件路径或 URL）。探测文件、建 AVFormatContext、取流信息。
 - 完成才 resolve：探测完拿 MediaInfo（含 duration/宽高/有无音视频流）。
@@ -100,11 +100,11 @@ play()               -> CommandHandle<Result<()>>
 ```
 pause()              -> CommandHandle<Result<()>>
 ```
-- 暂停。冻结音频时钟（带偏移修正，保证 resume 不跳）、cpal 切静音。
+- 暂停。冻结音频时钟（带偏移修正，保证 resume 不跳）、miniaudio 切静音。
 - 状态 → Paused。
 
 ```
-seek(position_us: i64) -> CommandHandle<Result<()>>
+seek(position_us: int64_t) -> CommandHandle<Result<()>>
 ```
 - 精确 seek 到目标时间（微秒）。
 - **昂贵操作**：触发 Demuxer 重新定位 + 解码器 flush + 管道重新填充。使用方应清楚成本。
@@ -113,12 +113,12 @@ seek(position_us: i64) -> CommandHandle<Result<()>>
 - 内部：Demuxer 执行 av_seek_frame + generation+1 + AudioClock 跳 PTS；其余模块靠世代号自洽 flush 旧世代数据，零协调。
 
 ```
-set_volume(v: f32)   -> CommandHandle<Result<()>>
+set_volume(v: float)   -> CommandHandle<Result<()>>
 ```
-- 设置音量 [0.0, 1.0]，超出范围 clamp。影响 cpal 输出。
+- 设置音量 [0.0, 1.0]，超出范围 clamp。影响 miniaudio 输出。
 
 ```
-set_speed(s: f32)    -> CommandHandle<Result<()>>   // 预留，暂不实现
+set_speed(s: float)    -> CommandHandle<Result<()>>   // 预留，暂不实现
 ```
 - 变速播放（如 0.5x/2x）。接口预留，后期实现（需音频重采样变速 + 视频跳帧策略）。
 
@@ -131,7 +131,7 @@ get_state()  -> PlayerState
 - 读 ApiLayer 维护的状态投影（不参与控制）。高频查询安全。
 
 ```
-get_duration() -> i64
+get_duration() -> int64_t
 ```
 - 立即返回媒体总时长（微秒）。0 表示未知/直播流。
 - 仅在 open 之后有意义；未 open 返回 0。
@@ -141,7 +141,7 @@ get_duration() -> i64
 ```
 progress_stream() -> Stream<Progress>
 ```
-- 100ms 推一次 `{ position_us: i64, duration_us: i64 }`。
+- 100ms 推一次 `{ position_us: int64_t, duration_us: int64_t }`。
 - ProgressReporter 独立线程读 AudioClock 推送，不经过命令队列。
 - Paused 时 ProgressReporter 读时钟冻结状态，position 停在暂停点。
 
@@ -154,7 +154,7 @@ progress_stream() -> Stream<Progress>
 ```
 CommandHandle<T> {
     // T = MediaInfo (open), 或 () (其余命令)
-    done: Future<Result<T>>,    // Dart 可 await 拿结果/错误/完成确认
+    done: std::future<Result<T>>,    // Dart 可 await 拿结果/错误/完成确认
     cancel(): void,             // 取消
 }
 ```
@@ -170,7 +170,7 @@ CommandHandle<T> {
 
 ### await 语义
 
-- 有返回值的命令（open）：`await handle.done` 拿 `MediaInfo`。
+- 有返回值的命令（open）：`await handle.done` 拿 `MediaInfo`（C++ 侧 `std::future::get()`）。
 - 无返回值的命令（play/pause/...）：`await handle.done` 拿 `()` 或错误，仅为确认"执行到了"。
 - Dart 可选 await：不关心完成就丢掉句柄。
 
@@ -242,13 +242,13 @@ ApiLoop (单线程) 循环:
 ## 范围边界
 
 - ✅ 接口清单、CommandHandle、状态机、命令流程已定稿
-- ❌ FRB 具体绑定代码（CommandHandle<T> 的 FRB 表达、cancel 信号机制）待实现阶段
+- ❌ dart:ffi 具体绑定代码（CommandHandle<T> 的 dart:ffi 表达、cancel 信号机制）待实现阶段
 - ❌ 各模块的 probe/start/stop/set_paused/do_seek 方法签名（逐模块设计时定）
-- ❌ Dart 侧使用示例（待 FRB 生成后补）
+- ❌ Dart 侧使用示例（待 dart:ffi 生成后补）
 
 ---
 
 ## 待确认
 
 - [ ] get_state 状态投影如何与各模块状态同步（open/play/pause 完成时 ApiLoop 更新投影）
-- [ ] CommandHandle 在 FRB v2 下的精确绑定形态（StreamSink? 自定义对象? cancel 信号?）
+- [ ] CommandHandle 在 dart:ffi v2 下的精确绑定形态（StreamSink? 自定义对象? cancel 信号?）
