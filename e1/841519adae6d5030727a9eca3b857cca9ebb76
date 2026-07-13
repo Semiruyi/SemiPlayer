@@ -1,0 +1,14 @@
+docs/architecture.md
+  h_71186a0a6bfb09 5,8-10,12,25,59,69,75,77,108,111,123,136,142,156,174,180,186,191,217,233,246,252,256,264,266,279
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "2.5.918",
+  "base_commit_sha": "e1841519adae6d5030727a9eca3b857cca9ebb76",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
