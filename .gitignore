@@ -1,0 +1,23 @@
+# ---- Build ----
+/build/
+/out/
+/build-*/
+
+# ---- CMake ----
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ---- Object / artifacts ----
+*.o
+*.obj
+*.a
+*.lib
+*.exp
+
+# ---- IDE / tooling ----
+.vs/
+.vscode/
+.cache/
+*.user
