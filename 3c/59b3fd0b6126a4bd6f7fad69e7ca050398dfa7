@@ -1,0 +1,14 @@
+src/CMakeLists.txt
+  h_71186a0a6bfb09 1-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "2.5.918",
+  "base_commit_sha": "3c59b3fd0b6126a4bd6f7fad69e7ca050398dfa7",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
