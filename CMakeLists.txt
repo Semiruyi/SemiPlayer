@@ -25,7 +25,17 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # ---- Options ----
-option(SEMI_BUILD_TESTS "Build unit tests" OFF)
+option(SEMI_BUILD_DLL    "Build the C ABI shared library for Dart FFI" ON)
+option(SEMI_BUILD_TESTS  "Build unit tests (links the static core, not the DLL)" OFF)
+
+# ---- 符号可见性（全局默认）----
+# 非 Windows(ELF/Mach-O)：默认隐藏，只有头里 SEMI_API(=visibility("default")) 才导出，
+# 与 Windows 的 dllexport 行为对齐。STATIC 库不受影响——可见性只管 SHARED 的动态导出，
+# 静态链接/exe 仍能见到全部符号（故测试链 STATIC core 不受此影响）。
+if(NOT WIN32)
+    set(CMAKE_CXX_VISIBILITY_PRESET hidden)
+    set(CMAKE_VISIBILITY_INLINES_HIDDEN ON)
+endif()
 
 # ---- Warnings (GCC/Clang) ----
 add_compile_options(

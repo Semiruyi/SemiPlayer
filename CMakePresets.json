@@ -4,15 +4,25 @@
   "configurePresets": [
     {
       "name": "mingw-default",
-      "displayName": "MinGW (default)",
+      "displayName": "MinGW (DLL)",
       "generator": "MinGW Makefiles",
       "binaryDir": "${sourceDir}/build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "mingw-tests",
+      "displayName": "MinGW (core + tests, no DLL)",
+      "generator": "MinGW Makefiles",
+      "binaryDir": "${sourceDir}/build-tests",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug"
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SEMI_BUILD_TESTS": "ON",
+        "SEMI_BUILD_DLL": "OFF"
       }
     }
   ],
   "buildPresets": [
-    { "name": "mingw-default", "configurePreset": "mingw-default" }
+    { "name": "mingw-default", "configurePreset": "mingw-default" },
+    { "name": "mingw-tests", "configurePreset": "mingw-tests" }
   ]
 }

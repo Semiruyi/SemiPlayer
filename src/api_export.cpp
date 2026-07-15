@@ -1,10 +1,9 @@
 #include "semi_player/semi_player.h"
 
-#include "player.hpp"
-
-// C ABI 导出层。每个函数转投到 C++ 引擎（ApiLayer/Player）。
-// 控制命令当前为桩：返回 0/invalid handle，待 ApiLayer 命令队列接入后实现。
-// 对应接口分类见 docs/modules/api_layer/api_layer.md。
+// C ABI 导出层（也是生命周期入口）。
+// init/shutdown 将直接调用 IoCContainer：assemble() 构造所有模块 + 注入 shared_ptr 并取得 ApiLayer；
+// shutdown → dispose() 逆序释放。控制命令将转投 ApiLayer 命令队列。
+// IoC 尚未落地，当前为桩。对应接口分类见 docs/modules/api_layer/api_layer.md。
 //
 // 导出只由头文件里的 SEMI_API（dllexport）声明负责：编译本目标时
 // SEMI_PLAYER_DLL_EXPORT 已定义，故头中声明带 dllexport，定义处无需再标。
@@ -12,12 +11,14 @@
 extern "C" {
 
 // ---- Lifecycle ----
+// TODO(IoC): init     → IoCContainer::assemble() + ApiLoop::spawn()
+//            shutdown → ApiLoop::stop() + IoCContainer::dispose()
 int semi_player_init(void) {
-    return semi::player_init();
+    return 0;
 }
 
 int semi_player_shutdown(void) {
-    return semi::player_shutdown();
+    return 0;
 }
 
 // ---- Control commands (TODO: post to ApiLayer command queue, return real handle) ----

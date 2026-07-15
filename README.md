@@ -11,4 +11,11 @@ cmake --preset mingw-default
 cmake --build --preset mingw-default
 ```
 
+## 测试构建&运行
+```sh
+cmake --preset mingw-tests
+cmake --build --preset mingw-tests
+ctest --test-dir build-tests
+```
+
 产物：`build/bin/semi_player.dll`（C ABI 共享库，给 Flutter 加载）。
