@@ -19,7 +19,7 @@ target_include_directories(semi_player_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # 各层测试子目录，与 src 同构。
 add_subdirectory(domain)
-# add_subdirectory(infrastructure)
+add_subdirectory(infrastructure)
 
 include(GoogleTest)
 gtest_discover_tests(semi_player_tests)

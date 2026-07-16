@@ -19,7 +19,7 @@ target_include_directories(semi_player_core
 # 各层子目录：domain（业务相关）、infrastructure（与业务无关的机制）。
 # 每层 CMakeLists 管理该层各模块子目录；模块 CMakeLists 把自己的 .cpp 追加到 core。
 add_subdirectory(domain)
-# add_subdirectory(infrastructure)   # 第一个机制模块（Notifier）落地时开启
+add_subdirectory(infrastructure)
 
 # ---- C ABI 共享库（给 Flutter 经 dart:ffi 加载）----
 # 纯逻辑/测试开发阶段可 -DSEMI_BUILD_DLL=OFF 跳过，只编 core + tests，不碰 FFI/导出。
@@ -44,5 +44,4 @@ if(SEMI_BUILD_DLL)
         set_target_properties(semi_player PROPERTIES PREFIX "")
     endif()
 endif()
-
 
