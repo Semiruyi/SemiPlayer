@@ -7,6 +7,10 @@ project(SemiPlayer
 
 include(FetchContent)
 
+# Keep subsequent configure runs offline-friendly after the first successful
+# dependency download. Initial population still requires network access.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "" FORCE)
+
 # ---- C++ standard ----
 # C++20: std::atomic<std::shared_ptr> (AudioClock / decoder target_pts 快照)、
 #         std::any + std::type_index (Notifier 异构槽) 都需要。
@@ -59,6 +63,17 @@ FetchContent_Declare(
     GIT_TAG v1.14.1
 )
 FetchContent_MakeAvailable(spdlog)
+
+# AppleClang 21 currently rejects fmt's consteval format-string path used by bundled
+# fmt in spdlog 1.14.x. Force FMT_CONSTEVAL off so the macOS build can complete.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+    if(TARGET spdlog)
+        target_compile_definitions(spdlog PUBLIC FMT_CONSTEVAL=)
+    endif()
+    if(TARGET spdlog_header_only)
+        target_compile_definitions(spdlog_header_only INTERFACE FMT_CONSTEVAL=)
+    endif()
+endif()
 
 add_subdirectory(src)
 

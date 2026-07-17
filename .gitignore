@@ -22,3 +22,6 @@ cmake_install.cmake
 .vscode/
 .cache/
 *.user
+
+# ---- macOS metadata ----
+._*

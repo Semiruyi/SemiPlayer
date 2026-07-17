@@ -11,6 +11,13 @@ cmake --preset mingw-default
 cmake --build --preset mingw-default
 ```
 
+## 构建（macOS），会拉取相关依赖，注意代理配置
+
+```sh
+cmake --preset macos-default
+cmake --build --preset macos-default
+```
+
 ## 测试构建&运行
 ```sh
 cmake --preset mingw-tests
@@ -18,4 +25,16 @@ cmake --build --preset mingw-tests
 ctest --test-dir build-tests
 ```
 
-产物：`build/bin/semi_player.dll`（C ABI 共享库，给 Flutter 加载）。
+## 测试构建&运行（macOS）
+
+```sh
+cmake --preset macos-tests
+cmake --build --preset macos-tests
+ctest --test-dir build-tests-macos
+```
+
+产物：
+- MinGW-w64: `build/bin/semi_player.dll`
+- macOS: `build-macos/bin/libsemi_player.dylib`
+
+以上产物均为 C ABI 共享库，给 Flutter 加载。

@@ -10,6 +10,13 @@
       "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
     },
     {
+      "name": "macos-default",
+      "displayName": "macOS (dylib)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-macos",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
       "name": "mingw-tests",
       "displayName": "MinGW (core + tests, no DLL)",
       "generator": "MinGW Makefiles",
@@ -19,10 +26,23 @@
         "SEMI_BUILD_TESTS": "ON",
         "SEMI_BUILD_DLL": "OFF"
       }
+    },
+    {
+      "name": "macos-tests",
+      "displayName": "macOS (core + tests, no dylib)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build-tests-macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SEMI_BUILD_TESTS": "ON",
+        "SEMI_BUILD_DLL": "OFF"
+      }
     }
   ],
   "buildPresets": [
     { "name": "mingw-default", "configurePreset": "mingw-default" },
-    { "name": "mingw-tests", "configurePreset": "mingw-tests" }
+    { "name": "macos-default", "configurePreset": "macos-default" },
+    { "name": "mingw-tests", "configurePreset": "mingw-tests" },
+    { "name": "macos-tests", "configurePreset": "macos-tests" }
   ]
 }

@@ -34,7 +34,7 @@ using LoggerPtr = std::shared_ptr<spdlog::logger>;
 std::atomic<State> g_state{State::Uninitialized};
 std::atomic<Level> g_min_level{Level::Info};
 std::atomic<Level> g_fallback_level{Level::Info};
-std::atomic<LoggerPtr> g_logger{};
+LoggerPtr g_logger{};
 std::mutex g_lifecycle_mutex;
 std::mutex g_stderr_mutex;
 
@@ -189,6 +189,21 @@ bool running_state(State state) noexcept {
     return state == State::Running || state == State::ConsoleOnly;
 }
 
+LoggerPtr load_logger() noexcept {
+    return std::atomic_load_explicit(&g_logger, std::memory_order_acquire);
+}
+
+void store_logger(LoggerPtr logger) noexcept {
+    std::atomic_store_explicit(&g_logger, std::move(logger), std::memory_order_release);
+}
+
+LoggerPtr exchange_logger(LoggerPtr logger = nullptr) noexcept {
+    return std::atomic_exchange_explicit(
+        &g_logger,
+        std::move(logger),
+        std::memory_order_acq_rel);
+}
+
 } // namespace
 
 InitResult init(const Config& config) noexcept {
@@ -243,7 +258,7 @@ InitResult init(const Config& config) noexcept {
         logger->set_pattern(std::string{kPattern});
         logger->flush_on(spdlog::level::err);
 
-        g_logger.store(logger);
+        store_logger(logger);
         g_state.store(result == InitResult::Ready ? State::Running : State::ConsoleOnly);
         return result;
     } catch (const std::exception& ex) {
@@ -252,7 +267,7 @@ InitResult init(const Config& config) noexcept {
         detail::report_internal_failure("logger init failed", "unknown exception");
     }
 
-    g_logger.store(nullptr);
+    store_logger(nullptr);
     spdlog::shutdown();
     g_state.store(State::Stopped);
     return InitResult::Failed;
@@ -269,7 +284,7 @@ void shutdown() noexcept {
 
     g_state.store(State::ShuttingDown);
 
-    auto logger = g_logger.exchange(nullptr);
+    auto logger = exchange_logger();
     if (logger) {
         try {
             logger->flush();
@@ -287,7 +302,7 @@ void shutdown() noexcept {
 }
 
 void flush() noexcept {
-    auto logger = g_logger.load();
+    auto logger = load_logger();
     if (!logger) {
         return;
     }
@@ -319,7 +334,7 @@ void write_formatted(Level level,
     try {
         const auto state = g_state.load();
         if (running_state(state)) {
-            auto logger = g_logger.load();
+            auto logger = load_logger();
             if (logger) {
                 logger->log(to_spdlog_level(level), "{}", render_payload(tag, location, message));
                 return;
