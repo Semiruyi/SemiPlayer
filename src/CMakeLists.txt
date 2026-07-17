@@ -16,10 +16,14 @@ target_include_directories(semi_player_core
         ${CMAKE_CURRENT_SOURCE_DIR}      # 内部头根 src/：使 include 形如 domain/.../x.hpp 生效
 )
 
-# 各层子目录：domain（业务相关）、infrastructure（与业务无关的机制）。
+# 各层子目录：
+#   domain/          — 业务相关模块
+#   infrastructure/  — 与业务无关的机制（如 log）
+#   ioc/             — composition-root 装配器（assemble / dispose）
 # 每层 CMakeLists 管理该层各模块子目录；模块 CMakeLists 把自己的 .cpp 追加到 core。
 add_subdirectory(domain)
 add_subdirectory(infrastructure)
+add_subdirectory(ioc)
 
 # ---- C ABI 共享库（给 Flutter 经 dart:ffi 加载）----
 # 纯逻辑/测试开发阶段可 -DSEMI_BUILD_DLL=OFF 跳过，只编 core + tests，不碰 FFI/导出。

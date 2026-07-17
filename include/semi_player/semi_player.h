@@ -7,7 +7,10 @@
  *   状态查询（同步直接返回快照，不走命令队列）
  *   事件流（progress，Stream）
  * 命令句柄的 await 结果 / 取消信号在 Dart 侧的具体绑定形态见 api_layer.md 待确认项。
+ * 同步返回的 int 状态码见 status.h / docs/error_convention.md。
  */
+
+#include "semi_player/status.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +38,7 @@ extern "C" {
 #endif
 
 /* ---- Lifecycle (Player layer; see docs/lifecycle.md) ---- */
+/* 返回 semi_status_t：SEMI_OK 或 SEMI_ERR_* */
 SEMI_API int semi_player_init(void);
 SEMI_API int semi_player_shutdown(void);
 

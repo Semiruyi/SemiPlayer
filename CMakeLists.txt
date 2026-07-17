@@ -77,6 +77,11 @@ endif()
 
 add_subdirectory(src)
 
+# 模拟宿主（依赖 C ABI 共享库）
+if(SEMI_BUILD_DLL)
+    add_subdirectory(tools/host_smoke)
+endif()
+
 if(SEMI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
