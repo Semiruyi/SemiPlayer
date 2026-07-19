@@ -42,12 +42,10 @@ ctest --test-dir build-tests-macos
 
 ## 模拟宿主（C ABI 冒烟）
 
-在开启 `SEMI_BUILD_DLL` 的 preset 下会编 `semi_player_host`，只调公开 C API，检查 init/shutdown 返回值与 IoC 日志：
+在开启 `SEMI_BUILD_DLL` 的 preset 下会编 `semi_player_host`，只调公开 C API：
 
 ```sh
 cmake --preset macos-default
 cmake --build --preset macos-default
 ./build-macos/bin/semi_player_host
 ```
-
-期望：每步打印 `SEMI_OK`；stderr 出现 `[ioc]` 的 assemble/dispose / skipped 日志；进程退出码 0。
