@@ -96,7 +96,7 @@ public:
         // ... 各 decoder / resampler
 
         // 第2-4层:逐层注入
-        // ... video_renderer / subtitle_renderer / compositor / video_sync / audio_sink / progress_reporter
+        // ... video_renderer / subtitle_renderer / compositor / video_sync / audio_sink
 
         // 第5层 + 接口层
         auto api_loop = std::make_shared<ApiLoop>(command_queue, /* 各工作模块 shared_ptr */);
@@ -115,7 +115,6 @@ public:
         // 第4层 -> 第0层 逆序
         video_sync.reset();
         audio_sink.reset();
-        progress_reporter.reset();
         compositor.reset();
         video_renderer.reset();
         subtitle_renderer.reset();
@@ -148,7 +147,7 @@ public:
 第1层: Demuxer, VideoDecoder, AudioDecoder, AudioResampler, SubtitleDecoder
 第2层: VideoRenderer, SubtitleRenderer
 第3层: Compositor
-第4层: VideoSync, AudioSink, ProgressReporter
+第4层: VideoSync, AudioSink
 第5层: ApiLoop
 接口层: ApiLayer(持有 ApiLoop + 各工作模块 shared_ptr)
 ```
@@ -236,7 +235,6 @@ GpuDevice 的具体实现按平台 #ifdef platform macro 选(Windows → D3D11Gp
 - ❌ IoC 是否需要暴露模块访问器(getter)→ 本设计选"装配后分发自持,运行时不访问 IoC",不需要 getter
         video_sync.reset();
         audio_sink.reset();
-        progress_reporter.reset();
         compositor.reset();
         video_renderer.reset();
         subtitle_renderer.reset();
@@ -261,4 +259,3 @@ GpuDevice 的具体实现按平台 #ifdef platform macro 选(Windows → D3D11Gp
 1. **`assemble()` 无参,返回 IoCContainer**:装配是确定性的(模块清单+依赖固定),不需要外部传配置。平台差异(如选哪个 GpuDevice 实现)在内部用 #ifdef 处理。
 2. **`dispose()` 接管所有权**:拿走所有权,手动逆序 reset 各字段。**显式写释放顺序**,不依赖 C++ 自动析构(见设计决策)。
 3. **持有所有模块 shared_ptr**:装配后 IoC 持有一切保活;ApiLayer/ApiLoop 在装配时就拿到所需 shared_ptr 的 copy 并自持,运行时不再访问 IoC。IoC 的唯一运行时作用是"持有 shared_ptr 让模块保活直到 dispose"。
-

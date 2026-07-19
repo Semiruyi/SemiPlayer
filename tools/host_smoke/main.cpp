@@ -21,6 +21,10 @@ const char* status_name(int status) {
         return "SEMI_ERR_ASSEMBLE_FAILED";
     case SEMI_ERR_INTERNAL:
         return "SEMI_ERR_INTERNAL";
+    case SEMI_ERR_INVALID_ARGUMENT:
+        return "SEMI_ERR_INVALID_ARGUMENT";
+    case SEMI_ERR_INVALID_HANDLE:
+        return "SEMI_ERR_INVALID_HANDLE";
     default:
         return "SEMI_STATUS_UNKNOWN";
     }
@@ -35,27 +39,49 @@ bool expect_ok(const char* step, int status) {
     return true;
 }
 
+bool expect_status(const char* step, int actual, int expected) {
+    std::printf("[host] %-14s -> %s (%d)\n", step, status_name(actual), actual);
+    if (actual != expected) {
+        std::fprintf(stderr, "[host] FAIL: %s expected %s\n", step, status_name(expected));
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main() {
     std::printf("=== semi_player host smoke (C ABI) ===\n");
-    std::printf("expect: all steps SEMI_OK; IoC logs on stderr (tag=ioc)\n\n");
+    std::printf("expect: lifecycle SEMI_OK; commands SEMI_ERR_INTERNAL until media is connected\n\n");
 
     bool ok = true;
 
     // 1) 首次 init → assemble
     ok = expect_ok("init#1", semi_player_init()) && ok;
 
-    // 2) 再次 init → 幂等成功，assemble skipped
+    // 2) 命令已由 ApiLayer 工作线程完成；媒体模块未接入，因此预期 Internal。
+    const semi_handle_t open_handle = semi_player_open("smoke.mp4");
+    if (open_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: open returned invalid handle\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_status("open await", semi_player_handle_await(open_handle, &result),
+                           SEMI_ERR_INTERNAL) && ok;
+        ok = expect_status("await consumed", semi_player_handle_await(open_handle, &result),
+                           SEMI_ERR_INVALID_HANDLE) && ok;
+    }
+
+    // 3) 再次 init → 幂等成功，assemble skipped
     ok = expect_ok("init#2 (idempotent)", semi_player_init()) && ok;
 
-    // 3) shutdown → dispose
+    // 4) shutdown → dispose
     ok = expect_ok("shutdown#1", semi_player_shutdown()) && ok;
 
-    // 4) 再次 shutdown → 幂等成功，dispose skipped
+    // 5) 再次 shutdown → 幂等成功，dispose skipped
     ok = expect_ok("shutdown#2 (idempotent)", semi_player_shutdown()) && ok;
 
-    // 5) 再 init/shutdown 一轮，确认可重复生命周期
+    // 6) 再 init/shutdown 一轮，确认可重复生命周期
     ok = expect_ok("init#3", semi_player_init()) && ok;
     ok = expect_ok("shutdown#3", semi_player_shutdown()) && ok;
 

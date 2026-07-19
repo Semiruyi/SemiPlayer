@@ -18,6 +18,7 @@ target_link_libraries(semi_player_tests PRIVATE semi_player_core GTest::gtest_ma
 target_include_directories(semi_player_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 # 各层测试子目录，与 src 同构。
+add_subdirectory(application)
 add_subdirectory(domain)
 add_subdirectory(infrastructure)
 

@@ -1,12 +1,15 @@
 #include "semi_player/semi_player.h"
 
+#include "application/api_layer.hpp"
 #include "infrastructure/log/log.hpp"
 #include "ioc/ioc_container.hpp"
+
+#include <memory>
 
 // C ABI 导出层（也是生命周期入口）。
 // init     → log::init + IoCContainer::assemble
 // shutdown → IoCContainer::dispose + log::shutdown
-// 控制命令后续转投 ApiLayer 命令队列（见 docs/modules/api_layer/api_layer.md）。
+// 控制命令由 ApiLayer 投递到其私有命令队列（见 docs/modules/api_layer/api_layer.md）。
 // 错误约定：docs/error_convention.md。
 //
 // 导出只由头文件里的 SEMI_API（dllexport）声明负责：编译本目标时
@@ -40,6 +43,16 @@ bool ensure_log_initialized() noexcept {
         return false;
     }
     return false;
+}
+
+std::shared_ptr<semi::application::ApiLayer> api_layer() noexcept {
+    return semi::ioc::IoCContainer::instance().api_layer();
+}
+
+int api_layer_unavailable_status() noexcept {
+    return semi::ioc::IoCContainer::instance().is_assembled()
+        ? SEMI_ERR_INTERNAL
+        : SEMI_ERR_NOT_INITIALIZED;
 }
 
 } // namespace
@@ -80,24 +93,74 @@ int semi_player_shutdown(void) {
     return SEMI_OK;
 }
 
-// ---- Control commands (TODO: post to ApiLayer command queue, return real handle) ----
-semi_handle_t semi_player_open(const char * /*src*/) { return 0; }
-semi_handle_t semi_player_play(void) { return 0; }
-semi_handle_t semi_player_pause(void) { return 0; }
-semi_handle_t semi_player_seek(long long /*position_us*/) { return 0; }
-semi_handle_t semi_player_close(void) { return 0; }
-int           semi_player_set_volume(unsigned int /*volume*/) { return SEMI_OK; }
+// ---- Control commands ----
+semi_handle_t semi_player_open(const char* src) {
+    if (src == nullptr) {
+        return 0;
+    }
+    const auto layer = api_layer();
+    return layer ? layer->open(src) : 0;
+}
 
-// ---- Queries (TODO: read ApiLayer session-state snapshot) ----
-int       semi_player_get_state(int * /*out_state*/) { return SEMI_OK; }
-long long semi_player_get_duration(void) { return 0; }
+semi_handle_t semi_player_play(void) {
+    const auto layer = api_layer();
+    return layer ? layer->play() : 0;
+}
+
+semi_handle_t semi_player_pause(void) {
+    const auto layer = api_layer();
+    return layer ? layer->pause() : 0;
+}
+
+semi_handle_t semi_player_seek(long long position_us) {
+    const auto layer = api_layer();
+    return layer ? layer->seek(position_us) : 0;
+}
+
+semi_handle_t semi_player_close(void) {
+    const auto layer = api_layer();
+    return layer ? layer->close() : 0;
+}
+
+semi_handle_t semi_player_set_volume(unsigned int volume) {
+    const auto layer = api_layer();
+    return layer ? layer->set_volume(volume) : 0;
+}
 
 // ---- Handle ----
-int semi_player_handle_cancel(semi_handle_t /*handle*/) { return SEMI_OK; }
+int semi_player_handle_await(semi_handle_t handle, semi_command_result_t* out_result) {
+    if (handle == 0 || out_result == nullptr) {
+        return handle == 0 ? SEMI_ERR_INVALID_HANDLE : SEMI_ERR_INVALID_ARGUMENT;
+    }
+    const auto layer = api_layer();
+    if (!layer) {
+        return api_layer_unavailable_status();
+    }
 
-// ---- Progress ----
-int semi_player_progress_subscribe(semi_progress_cb /*cb*/, void * /*user_data*/) {
-    return SEMI_OK;
+    semi::application::CommandResult result;
+    const semi_status_t status = layer->await(handle, result);
+    if (status == SEMI_ERR_INVALID_HANDLE) {
+        return status;
+    }
+    out_result->has_media_info = result.has_media_info ? 1U : 0U;
+    out_result->media_info.duration_us = result.media_info.duration_us;
+    out_result->media_info.video_width = result.media_info.video_width;
+    out_result->media_info.video_height = result.media_info.video_height;
+    out_result->media_info.has_audio = result.media_info.has_audio ? 1U : 0U;
+    out_result->media_info.has_video = result.media_info.has_video ? 1U : 0U;
+    out_result->media_info.has_subtitle = result.media_info.has_subtitle ? 1U : 0U;
+    return status;
+}
+
+int semi_player_handle_cancel(semi_handle_t handle) {
+    if (handle == 0) {
+        return SEMI_ERR_INVALID_HANDLE;
+    }
+    const auto layer = api_layer();
+    if (!layer) {
+        return api_layer_unavailable_status();
+    }
+    return layer->cancel(handle) ? SEMI_OK : SEMI_ERR_INVALID_STATE;
 }
 
 } // extern "C"
