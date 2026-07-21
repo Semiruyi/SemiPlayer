@@ -34,7 +34,7 @@ using LoggerPtr = std::shared_ptr<spdlog::logger>;
 std::atomic<State> g_state{State::Uninitialized};
 std::atomic<Level> g_min_level{Level::Info};
 std::atomic<Level> g_fallback_level{Level::Info};
-LoggerPtr g_logger{};
+std::atomic<LoggerPtr> g_logger{};
 std::mutex g_lifecycle_mutex;
 std::mutex g_stderr_mutex;
 
@@ -190,18 +190,15 @@ bool running_state(State state) noexcept {
 }
 
 LoggerPtr load_logger() noexcept {
-    return std::atomic_load_explicit(&g_logger, std::memory_order_acquire);
+    return g_logger.load(std::memory_order_acquire);
 }
 
 void store_logger(LoggerPtr logger) noexcept {
-    std::atomic_store_explicit(&g_logger, std::move(logger), std::memory_order_release);
+    g_logger.store(std::move(logger), std::memory_order_release);
 }
 
 LoggerPtr exchange_logger(LoggerPtr logger = nullptr) noexcept {
-    return std::atomic_exchange_explicit(
-        &g_logger,
-        std::move(logger),
-        std::memory_order_acq_rel);
+    return g_logger.exchange(std::move(logger), std::memory_order_acq_rel);
 }
 
 } // namespace
