@@ -1,0 +1,1 @@
+target_sources(semi_player_tests PRIVATE ffmpeg_dependency_test.cpp)

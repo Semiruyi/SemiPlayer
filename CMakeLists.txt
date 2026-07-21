@@ -46,8 +46,18 @@ add_compile_options(
 
 # ---- Third-party dependencies ----
 find_package(spdlog CONFIG REQUIRED)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+    libavcodec
+    libavformat
+    libavutil
+)
+
+add_library(semi_player_ffmpeg INTERFACE)
+target_link_libraries(semi_player_ffmpeg INTERFACE PkgConfig::FFMPEG)
 
 add_subdirectory(src)
+target_link_libraries(semi_player_core PRIVATE semi_player_ffmpeg)
 
 # 模拟宿主（依赖 C ABI 共享库）
 if(SEMI_BUILD_DLL)

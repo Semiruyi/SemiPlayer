@@ -5,7 +5,7 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(semi_player_tests)
 target_compile_features(semi_player_tests PRIVATE cxx_std_20)
-target_link_libraries(semi_player_tests PRIVATE semi_player_core GTest::gtest_main)
+target_link_libraries(semi_player_tests PRIVATE semi_player_core semi_player_ffmpeg GTest::gtest_main)
 # 能 include 内部头（domain/…/x.hpp）。
 target_include_directories(semi_player_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
