@@ -3,7 +3,7 @@ add_executable(semi_player_host main.cpp)
 target_compile_features(semi_player_host PRIVATE cxx_std_20)
 target_link_libraries(semi_player_host PRIVATE semi_player)
 
-# 运行时从同目录加载 dylib/dll（产物都在 ${CMAKE_BINARY_DIR}/bin）。
+# 运行时从同目录加载 DLL（产物都在 ${CMAKE_BINARY_DIR}/bin）。
 set_target_properties(semi_player_host PROPERTIES
     BUILD_RPATH "${CMAKE_BINARY_DIR}/bin"
     INSTALL_RPATH "@loader_path;$ORIGIN"

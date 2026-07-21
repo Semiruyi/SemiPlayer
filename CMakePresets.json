@@ -3,46 +3,18 @@
   "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
   "configurePresets": [
     {
-      "name": "mingw-default",
-      "displayName": "MinGW (DLL)",
-      "generator": "MinGW Makefiles",
-      "binaryDir": "${sourceDir}/build",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-    },
-    {
-      "name": "macos-default",
-      "displayName": "macOS (dylib)",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build-macos",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
-    },
-    {
-      "name": "mingw-tests",
-      "displayName": "MinGW (core + tests, no DLL)",
-      "generator": "MinGW Makefiles",
-      "binaryDir": "${sourceDir}/build-tests",
+      "name": "windows-all",
+      "displayName": "Windows UCRT64 Ninja (DLL + tests + smoke host)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "SEMI_BUILD_TESTS": "ON",
-        "SEMI_BUILD_DLL": "OFF"
-      }
-    },
-    {
-      "name": "macos-tests",
-      "displayName": "macOS (core + tests, no dylib)",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/build-tests-macos",
-      "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "SEMI_BUILD_TESTS": "ON",
-        "SEMI_BUILD_DLL": "OFF"
+        "SEMI_BUILD_DLL": "ON",
+        "SEMI_BUILD_TESTS": "ON"
       }
     }
   ],
   "buildPresets": [
-    { "name": "mingw-default", "configurePreset": "mingw-default" },
-    { "name": "macos-default", "configurePreset": "macos-default" },
-    { "name": "mingw-tests", "configurePreset": "mingw-tests" },
-    { "name": "macos-tests", "configurePreset": "macos-tests" }
+    { "name": "windows-all", "configurePreset": "windows-all" }
   ]
 }
