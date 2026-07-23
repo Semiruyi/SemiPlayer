@@ -11,9 +11,18 @@ namespace {
 class FakeDemuxer final : public domain::Demuxer {
 public:
     bool fail_open = false;
+    bool is_open = false;
+    int close_calls = 0;
 
     std::expected<domain::DemuxerOpenResult, domain::DemuxerError>
     open(std::string_view) override {
+        if (is_open) {
+            return std::unexpected(domain::DemuxerError{
+                .code = domain::DemuxerErrorCode::InvalidState,
+                .message = "demuxer is already open",
+                .backend_error = std::nullopt,
+            });
+        }
         if (fail_open) {
             return std::unexpected(domain::DemuxerError{
                 .code = domain::DemuxerErrorCode::BackendFailure,
@@ -25,6 +34,7 @@ public:
                 },
             });
         }
+        is_open = true;
         domain::DemuxerOpenResult result;
         result.container.duration_us = 1234567;
         result.video = domain::SelectedStream<domain::VideoCodecConfig>{
@@ -41,7 +51,10 @@ public:
         return result;
     }
 
-    void close() noexcept override {}
+    void close() noexcept override {
+        is_open = false;
+        ++close_calls;
+    }
 };
 
 std::shared_ptr<domain::Demuxer> make_fake_demuxer() {
@@ -98,6 +111,47 @@ TEST(ApiLayerTest, OpenReturnsInvalidResourceForBackendFailure) {
     CommandResult retry_result;
     EXPECT_EQ(layer.await(retry_handle, retry_result), SEMI_OK);
     EXPECT_TRUE(retry_result.has_media_info);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle first_open = layer.open("first.mp4");
+    ASSERT_NE(first_open, 0U);
+    EXPECT_EQ(layer.await(first_open, result), SEMI_OK);
+
+    const CommandHandle close = layer.close();
+    ASSERT_NE(close, 0U);
+    result = {};
+    EXPECT_EQ(layer.await(close, result), SEMI_OK);
+    EXPECT_FALSE(result.has_media_info);
+    EXPECT_EQ(demuxer->close_calls, 1);
+
+    const CommandHandle second_open = layer.open("second.mp4");
+    ASSERT_NE(second_open, 0U);
+    EXPECT_EQ(layer.await(second_open, result), SEMI_OK);
+    EXPECT_TRUE(result.has_media_info);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, CloseIsIdempotent) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle first_close = layer.close();
+    ASSERT_NE(first_close, 0U);
+    EXPECT_EQ(layer.await(first_close, result), SEMI_OK);
+
+    const CommandHandle second_close = layer.close();
+    ASSERT_NE(second_close, 0U);
+    EXPECT_EQ(layer.await(second_close, result), SEMI_OK);
+    EXPECT_EQ(demuxer->close_calls, 2);
     EXPECT_TRUE(layer.stop());
 }
 

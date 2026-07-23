@@ -156,6 +156,15 @@ CommandExecution execute_open(const OpenCommand& command, domain::Demuxer& demux
     return execution;
 }
 
+CommandExecution execute_close(domain::Demuxer& demuxer) noexcept {
+    demuxer.close();
+    SEMI_LOG_INFO("media closed");
+
+    CommandExecution execution;
+    execution.status = SEMI_OK;
+    return execution;
+}
+
 CommandExecution execute_command(const Command& command, domain::Demuxer& demuxer) noexcept {
     try {
         return std::visit(
@@ -166,7 +175,9 @@ CommandExecution execute_command(const Command& command, domain::Demuxer& demuxe
                 [](const PlayCommand&) -> CommandExecution { return {}; },
                 [](const PauseCommand&) -> CommandExecution { return {}; },
                 [](const SeekCommand&) -> CommandExecution { return {}; },
-                [](const CloseCommand&) -> CommandExecution { return {}; },
+                [&demuxer](const CloseCommand&) {
+                    return execute_close(demuxer);
+                },
                 [](const SetVolumeCommand&) -> CommandExecution { return {}; },
             },
             command);

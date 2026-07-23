@@ -77,6 +77,28 @@ int main() {
                            SEMI_ERR_INVALID_HANDLE) && ok;
     }
 
+    const semi_handle_t close_handle = semi_player_close();
+    if (close_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: close returned invalid handle\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_ok("close await", semi_player_handle_await(close_handle, &result)) && ok;
+        if (result.has_media_info) {
+            std::fprintf(stderr, "[host] FAIL: close returned media info\n");
+            ok = false;
+        }
+    }
+
+    const semi_handle_t reopen_handle = semi_player_open(SEMI_PLAYER_SMOKE_MEDIA_PATH);
+    if (reopen_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: reopen returned invalid handle\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_ok("reopen await", semi_player_handle_await(reopen_handle, &result)) && ok;
+    }
+
     // 3) 再次 init → 幂等成功，assemble skipped
     ok = expect_ok("init#2 (idempotent)", semi_player_init()) && ok;
 
