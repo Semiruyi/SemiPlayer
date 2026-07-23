@@ -25,6 +25,8 @@ const char* status_name(int status) {
         return "SEMI_ERR_INVALID_ARGUMENT";
     case SEMI_ERR_INVALID_HANDLE:
         return "SEMI_ERR_INVALID_HANDLE";
+    case SEMI_ERR_INVALID_RESOURCE:
+        return "SEMI_ERR_INVALID_RESOURCE";
     default:
         return "SEMI_STATUS_UNKNOWN";
     }
@@ -52,22 +54,25 @@ bool expect_status(const char* step, int actual, int expected) {
 
 int main() {
     std::printf("=== semi_player host smoke (C ABI) ===\n");
-    std::printf("expect: lifecycle SEMI_OK; commands SEMI_ERR_INTERNAL until media is connected\n\n");
+    std::printf("expect: lifecycle and sample-media open return SEMI_OK\n\n");
 
     bool ok = true;
 
     // 1) 首次 init → assemble
     ok = expect_ok("init#1", semi_player_init()) && ok;
 
-    // 2) 命令已由 ApiLayer 工作线程完成；媒体模块未接入，因此预期 Internal。
-    const semi_handle_t open_handle = semi_player_open("smoke.mp4");
+    // 2) 通过公开 C ABI 打开仓库内的真实 FFmpeg 测试媒体。
+    const semi_handle_t open_handle = semi_player_open(SEMI_PLAYER_SMOKE_MEDIA_PATH);
     if (open_handle == 0) {
         std::fprintf(stderr, "[host] FAIL: open returned invalid handle\n");
         ok = false;
     } else {
         semi_command_result_t result{};
-        ok = expect_status("open await", semi_player_handle_await(open_handle, &result),
-                           SEMI_ERR_INTERNAL) && ok;
+        ok = expect_ok("open await", semi_player_handle_await(open_handle, &result)) && ok;
+        if (!result.has_media_info || !result.media_info.has_video || !result.media_info.has_audio) {
+            std::fprintf(stderr, "[host] FAIL: sample media info is incomplete\n");
+            ok = false;
+        }
         ok = expect_status("await consumed", semi_player_handle_await(open_handle, &result),
                            SEMI_ERR_INVALID_HANDLE) && ok;
     }

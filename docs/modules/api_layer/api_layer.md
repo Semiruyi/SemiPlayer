@@ -8,7 +8,7 @@
 
 宿主对 handle 可调用：
 
-- `await(handle, out_result)`：阻塞到终态，复制最终结果并消费 handle。返回命令的 `semi_status_t`；成功 open 的 `MediaInfo` 在 `out_result` 中。
+- `await(handle, out_result)`：阻塞到终态，复制最终结果并消费 handle。返回命令的 `semi_status_t`；成功 open 的 `MediaInfo` 在 `out_result` 中。资源无法打开或探测时返回 `SEMI_ERR_INVALID_RESOURCE`，内部失败返回 `SEMI_ERR_INTERNAL`。
 - `cancel(handle)`：仅接受尚未开始任务的取消请求。任务不从队列移除，仍由命令线程取出并完成为 `SEMI_ERR_CANCELLED`。
 
 没有 `release`、独立 `get_media_info` 或会话查询接口。`await` 是唯一的结果读取与正常回收路径。

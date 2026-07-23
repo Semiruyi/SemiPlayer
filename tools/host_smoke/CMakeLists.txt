@@ -1,7 +1,11 @@
 # 模拟宿主：链接 C ABI 共享库，不碰内部头。
 add_executable(semi_player_host main.cpp)
-target_compile_features(semi_player_host PRIVATE cxx_std_20)
+target_compile_features(semi_player_host PRIVATE cxx_std_23)
 target_link_libraries(semi_player_host PRIVATE semi_player)
+
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/tests/resources/sample.mp4" SEMI_PLAYER_SMOKE_MEDIA_PATH)
+target_compile_definitions(semi_player_host PRIVATE
+    "SEMI_PLAYER_SMOKE_MEDIA_PATH=\"${SEMI_PLAYER_SMOKE_MEDIA_PATH}\"")
 
 # 运行时从同目录加载 DLL（产物都在 ${CMAKE_BINARY_DIR}/bin）。
 set_target_properties(semi_player_host PROPERTIES

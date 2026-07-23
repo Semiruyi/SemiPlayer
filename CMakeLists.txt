@@ -8,7 +8,7 @@ project(SemiPlayer
 # ---- C++ standard ----
 # C++20: std::atomic<std::shared_ptr> (AudioClock / decoder target_pts 快照)、
 #         std::any + std::type_index (Notifier 异构槽) 都需要。
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 

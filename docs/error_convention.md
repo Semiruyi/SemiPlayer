@@ -7,7 +7,9 @@
 | 层 | 怎么表达 |
 |----|----------|
 | **ApiLayer / C ABI / 命令句柄 resolve** | 统一 `semi_status`（见 `include/semi_player/status.h`） |
-| **内部模块同步调用** | 默认 `bool`：`true` = 成功，`false` = 失败 |
+| **内部模块同步调用** | 有业务成功值且失败需由调用方处理时，优先 `std::expected<T, Error>`；仅表达成功/失败时可用 `bool` |
+| **`std::expected` 细则** | 无成功值但需处理失败时用 `std::expected<void, Error>`；不会失败的查询直接返回值；EOF、队列满/空等正常分支用局部 `enum class` 或 `std::variant` |
+| **内部 `Error` 边界** | 包含模块、操作、后端原始错误码与消息；不得跨 C ABI；ApiLayer 仅在公共边界映射为 `semi_status`，并记录完整诊断 |
 | **多种合法结果（含非错误）** | 模块私有 `enum class`（如 `semi::log::InitResult`） |
 | **异步 / 跨线程失败** | 日志 + `Notifier` 通知；不硬塞返回值链路 |
 
@@ -46,6 +48,8 @@
 - 控制命令仍立即返回 handle；**完成结果**用同一套 `semi_status`（或带 payload 的 Result，status 字段共用）。
 - 非法状态（未 open 就 play）→ `SEMI_ERR_INVALID_STATE`。
 - 未 init → `SEMI_ERR_NOT_INITIALIZED`。
+- `open` 的媒体资源无法打开或探测（不存在、损坏、格式不支持等）→ `SEMI_ERR_INVALID_RESOURCE`；ApiLayer 记录一次完整诊断，调用方可提示用户更换资源并重试。
+- `open` 的内部依赖不可用或未预期异常 → `SEMI_ERR_INTERNAL`。
 
 ## 新增错误码
 

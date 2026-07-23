@@ -8,7 +8,7 @@
 
 # ---- 引擎核心（STATIC）：目标在此声明，源由各子目录追加 ----
 add_library(semi_player_core STATIC)
-target_compile_features(semi_player_core PUBLIC cxx_std_20)
+target_compile_features(semi_player_core PUBLIC cxx_std_23)
 target_include_directories(semi_player_core
     PUBLIC
         ${CMAKE_SOURCE_DIR}/include      # C ABI 公共头给消费者
@@ -33,7 +33,7 @@ if(SEMI_BUILD_DLL)
     add_library(semi_player SHARED
         api_export.cpp
     )
-    target_compile_features(semi_player PUBLIC cxx_std_20)
+    target_compile_features(semi_player PUBLIC cxx_std_23)
     target_include_directories(semi_player
         PUBLIC
             ${CMAKE_SOURCE_DIR}/include

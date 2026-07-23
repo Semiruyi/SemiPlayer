@@ -6,6 +6,10 @@
 #include <memory>
 #include <string>
 
+namespace semi::domain {
+class Demuxer;
+}
+
 namespace semi::application {
 
 using CommandHandle = std::uint64_t;
@@ -39,7 +43,7 @@ struct CommandResult {
 // 此类投递命令，不接触内部队列或业务模块。
 class ApiLayer final {
 public:
-    ApiLayer();
+    explicit ApiLayer(std::shared_ptr<domain::Demuxer> demuxer);
     ~ApiLayer();
 
     ApiLayer(const ApiLayer&) = delete;

@@ -63,7 +63,8 @@ SEMI_API semi_handle_t semi_player_close(void);
 SEMI_API semi_handle_t semi_player_set_volume(unsigned int volume);
 
 /* ---- Handle ---- */
-/* 阻塞到命令结束，写入结果并消费 handle；返回该命令的最终 semi_status。 */
+/* 阻塞到命令结束，写入结果并消费 handle；返回该命令的最终 semi_status。
+ * open 的资源无法打开或探测时返回 SEMI_ERR_INVALID_RESOURCE。 */
 SEMI_API int semi_player_handle_await(semi_handle_t handle, semi_command_result_t *out_result);
 /* 仅接受尚未开始执行的取消请求；任务仍由命令线程完成并通知 await。 */
 SEMI_API int semi_player_handle_cancel(semi_handle_t handle);

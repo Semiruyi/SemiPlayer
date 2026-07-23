@@ -1,10 +1,12 @@
 #include "application/api_layer.hpp"
 
+#include "domain/demuxer/demuxer.hpp"
 #include "infrastructure/log/log.hpp"
 
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <exception>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -33,6 +35,14 @@ struct SetVolumeCommand {
 using Command = std::variant<OpenCommand, PlayCommand, PauseCommand, SeekCommand, CloseCommand,
                              SetVolumeCommand>;
 
+template <typename... Handlers>
+struct Overloaded : Handlers... {
+    using Handlers::operator()...;
+};
+
+template <typename... Handlers>
+Overloaded(Handlers...) -> Overloaded<Handlers...>;
+
 enum class TaskState : std::uint8_t {
     Queued,
     CancelRequested,
@@ -50,6 +60,9 @@ constexpr std::size_t kMaxLiveTasks = 1024;
 } // namespace
 
 struct ApiLayer::Impl {
+    explicit Impl(std::shared_ptr<domain::Demuxer> injected_demuxer)
+        : demuxer(std::move(injected_demuxer)) {}
+
     struct Task {
         Task(CommandHandle task_handle, Command task_command)
             : handle(task_handle), command(std::move(task_command)) {}
@@ -70,6 +83,7 @@ struct ApiLayer::Impl {
     std::deque<std::shared_ptr<Task>> queue;
     std::deque<CommandHandle> completed_order;
     std::thread worker;
+    std::shared_ptr<domain::Demuxer> demuxer;
     CommandHandle next_handle = 1;
     bool accepting = false;
     bool stopping = false;
@@ -87,9 +101,82 @@ std::size_t discard_completed_until_space(ApiLayer::Impl& impl) {
     return discarded;
 }
 
-semi_status_t execute_command(const Command&) noexcept {
+[[maybe_unused]] semi_status_t execute_command(const Command&) noexcept {
     // 媒体业务模块尚未接入。任务基础设施仍须由命令线程完成并通知 await。
     return SEMI_ERR_INTERNAL;
+}
+
+struct CommandExecution {
+    semi_status_t status = SEMI_ERR_INTERNAL;
+    CommandResult result;
+};
+
+MediaInfo to_media_info(const domain::DemuxerOpenResult& opened) {
+    MediaInfo info;
+    info.duration_us = opened.container.duration_us.value_or(0);
+    info.has_video = opened.video.has_value();
+    info.has_audio = opened.audio.has_value();
+    info.has_subtitle = opened.subtitle.has_value();
+    if (opened.video) {
+        info.video_width = opened.video->config.coded_width;
+        info.video_height = opened.video->config.coded_height;
+    }
+    return info;
+}
+
+CommandExecution execute_open(const OpenCommand& command, domain::Demuxer& demuxer) {
+    auto opened = demuxer.open(command.source);
+    if (!opened) {
+        SEMI_LOG_ERROR("demuxer open failed: {}", opened.error().message);
+        CommandExecution execution;
+        switch (opened.error().code) {
+        case domain::DemuxerErrorCode::InvalidState:
+            execution.status = SEMI_ERR_INVALID_STATE;
+            break;
+        case domain::DemuxerErrorCode::BackendFailure:
+            execution.status = opened.error().backend_error.has_value()
+                ? SEMI_ERR_INVALID_RESOURCE
+                : SEMI_ERR_INTERNAL;
+            break;
+        }
+        return execution;
+    }
+
+    CommandExecution execution;
+    execution.status = SEMI_OK;
+    execution.result.has_media_info = true;
+    execution.result.media_info = to_media_info(*opened);
+    const MediaInfo& media_info = execution.result.media_info;
+    SEMI_LOG_INFO("media opened: duration_us={}, video={}x{}, audio={}, subtitle={}",
+                  media_info.duration_us,
+                  media_info.video_width,
+                  media_info.video_height,
+                  media_info.has_audio,
+                  media_info.has_subtitle);
+    return execution;
+}
+
+CommandExecution execute_command(const Command& command, domain::Demuxer& demuxer) noexcept {
+    try {
+        return std::visit(
+            Overloaded{
+                [&demuxer](const OpenCommand& value) {
+                    return execute_open(value, demuxer);
+                },
+                [](const PlayCommand&) -> CommandExecution { return {}; },
+                [](const PauseCommand&) -> CommandExecution { return {}; },
+                [](const SeekCommand&) -> CommandExecution { return {}; },
+                [](const CloseCommand&) -> CommandExecution { return {}; },
+                [](const SetVolumeCommand&) -> CommandExecution { return {}; },
+            },
+            command);
+    } catch (const std::exception& error) {
+        SEMI_LOG_ERROR("command execution failed: {}", error.what());
+        return {};
+    } catch (...) {
+        SEMI_LOG_ERROR("command execution failed with an unknown exception");
+        return {};
+    }
 }
 
 void complete_task(ApiLayer::Impl& impl,
@@ -143,15 +230,19 @@ void worker_main(ApiLayer::Impl& impl) {
             continue;
         }
 
-        CommandResult result;
-        const semi_status_t status = execute_command(task->command);
-        complete_task(impl, task, status, std::move(result));
+        if (!impl.demuxer) {
+            complete_task(impl, task, SEMI_ERR_INTERNAL, {});
+            continue;
+        }
+        CommandExecution execution = execute_command(task->command, *impl.demuxer);
+        complete_task(impl, task, execution.status, std::move(execution.result));
     }
 }
 
 } // namespace
 
-ApiLayer::ApiLayer() : impl_(std::make_unique<Impl>()) {}
+ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer)
+    : impl_(std::make_unique<Impl>(std::move(demuxer))) {}
 
 ApiLayer::~ApiLayer() {
     (void)stop();

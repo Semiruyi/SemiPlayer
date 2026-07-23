@@ -1,5 +1,18 @@
 # Demuxer 模块设计
 
+## 当前实现范围
+
+当前代码只实现 `open` / `close`。`Demuxer` 是 ApiLayer 依赖的抽象接口，
+`DefaultDemuxer` 负责打开状态和默认音频、视频、字幕轨选择；它通过
+`DemuxerBackend` 访问底层容器。`FfmpegDemuxerBackend` 持有
+`AVFormatContext` 并完成 FFmpeg 探测，但不暴露任何 `AV*` 类型给上层。
+
+`open` 成功时 Backend 返回所有 `StreamDescriptor`，DefaultDemuxer 返回选中的
+`DemuxerOpenResult`。结果和错误分别使用 `std::expected<T, Error>` 表达；错误
+在 ApiLayer 映射为 C ABI 的 `semi_status_t`。
+
+本文后续关于读包线程、队列背压、seek、EOF 的内容仍是后续设计，尚未实现。
+
 > 解封装模块。管道最上游，唯一持文件句柄、唯一懂"流"概念的模块。
 > 对外接口由 ApiLayer 调用（见 `docs/modules/api_layer/` 各命令编排）。本文件描述其内部设计。
 
