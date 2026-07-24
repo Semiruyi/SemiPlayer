@@ -32,9 +32,26 @@ Queued -> Running -> Completed
 
 当前内部固定最多保留 1024 个排队、执行中和未消费完成任务。新任务入队前会按完成顺序淘汰最早的未消费终态任务；若剩余任务都在排队或执行，则新命令返回 `0`。被淘汰 handle 后续 `await` 返回 `SEMI_ERR_INVALID_HANDLE`。
 
+## 会话状态机
+
+`ApiLayer` 在唯一命令线程内持有 `PlayerState`，初始状态为 `Idle`。状态校验发生在命令真正开始执行时，而不是入队时；因此连续提交的 `open -> play` 会让 `play` 看到前一个命令执行后的 `Ready`。
+
+命令执行结果可以携带下一状态，由命令线程在业务操作结束后统一提交。普通失败和非法命令不改变状态；替换媒体时若旧媒体已经关闭而新媒体打开失败，最终状态为 `Idle`。
+
+| 命令 | 合法状态 | 成功后的状态 |
+|------|----------|--------------|
+| `open` | 任意状态 | `Ready`；已有媒体时先关闭旧媒体 |
+| `play` | `Ready/Playing/Paused/Ended` | `Playing`；`Playing` 下为幂等成功 |
+| `pause` | `Ready/Playing/Paused/Ended` | `Playing` 时进入 `Paused`，其他合法状态为幂等成功 |
+| `seek` | `Ready/Playing/Paused/Ended` | 保持原播放意图；`Ended` 后续进入 `Paused` |
+| `close` | 任意状态 | `Idle`；`Idle` 下不访问媒体模块 |
+| `set_volume` | 任意状态 | 状态不变 |
+
+`Idle/Error` 下的 `play/pause/seek` 返回 `SEMI_ERR_INVALID_STATE`。普通资源错误不会进入 `Error`；只有模块可能处于不一致状态且无法回滚时才使用 `Error`，并可通过 `close` 恢复到 `Idle`。
+
 ## 执行边界
 
-当前只实现命令基础设施，媒体业务模块和会话状态机尚未接入。命令线程仍会把每个任务完成并通知 `await`，但控制命令统一返回 `SEMI_ERR_INTERNAL`，不会被伪装为成功。后续按模块实现进度直接在 ApiLayer 命令分发中加入实际操作。
+当前已接入 `open/close` 的真实业务和状态转移。`play/pause/seek/set_volume` 的状态前置条件已生效，但尚未接入的实际媒体操作仍返回 `SEMI_ERR_INTERNAL`，不会为了推进状态而伪装成功；不需要媒体操作的幂等分支可直接返回成功。
 
 ## 生命周期
 

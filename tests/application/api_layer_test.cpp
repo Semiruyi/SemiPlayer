@@ -12,10 +12,12 @@ class FakeDemuxer final : public domain::Demuxer {
 public:
     bool fail_open = false;
     bool is_open = false;
+    int open_calls = 0;
     int close_calls = 0;
 
     std::expected<domain::DemuxerOpenResult, domain::DemuxerError>
     open(std::string_view) override {
+        ++open_calls;
         if (is_open) {
             return std::unexpected(domain::DemuxerError{
                 .code = domain::DemuxerErrorCode::InvalidState,
@@ -84,7 +86,7 @@ TEST(ApiLayerTest, AwaitConsumesHandle) {
     ApiLayer layer(make_fake_demuxer());
     ASSERT_TRUE(layer.start());
 
-    const CommandHandle handle = layer.play();
+    const CommandHandle handle = layer.set_volume(50);
     ASSERT_NE(handle, 0U);
 
     CommandResult result;
@@ -114,6 +116,61 @@ TEST(ApiLayerTest, OpenReturnsInvalidResourceForBackendFailure) {
     EXPECT_TRUE(layer.stop());
 }
 
+TEST(ApiLayerTest, RejectsMediaCommandsThatAreInvalidInIdle) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    const CommandHandle play = layer.play();
+    const CommandHandle pause = layer.pause();
+    const CommandHandle seek = layer.seek(1000000);
+    ASSERT_NE(play, 0U);
+    ASSERT_NE(pause, 0U);
+    ASSERT_NE(seek, 0U);
+
+    CommandResult result;
+    EXPECT_EQ(layer.await(play, result), SEMI_ERR_INVALID_STATE);
+    EXPECT_EQ(layer.await(pause, result), SEMI_ERR_INVALID_STATE);
+    EXPECT_EQ(layer.await(seek, result), SEMI_ERR_INVALID_STATE);
+    EXPECT_EQ(demuxer->open_calls, 0);
+    EXPECT_EQ(demuxer->close_calls, 0);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, ChecksStateWhenQueuedCommandActuallyExecutes) {
+    ApiLayer layer(make_fake_demuxer());
+    ASSERT_TRUE(layer.start());
+
+    const CommandHandle open = layer.open("movie.mp4");
+    const CommandHandle play = layer.play();
+    ASSERT_NE(open, 0U);
+    ASSERT_NE(play, 0U);
+
+    CommandResult result;
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+    EXPECT_EQ(layer.await(play, result), SEMI_ERR_INTERNAL);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, FailedCommandDoesNotCommitItsTargetState) {
+    ApiLayer layer(make_fake_demuxer());
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_ERR_INTERNAL);
+
+    const CommandHandle pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_OK);
+    EXPECT_TRUE(layer.stop());
+}
+
 TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
     auto demuxer = std::make_shared<FakeDemuxer>();
     ApiLayer layer(demuxer);
@@ -138,6 +195,68 @@ TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
     EXPECT_TRUE(layer.stop());
 }
 
+TEST(ApiLayerTest, OpenReplacesTheCurrentMedia) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle first_open = layer.open("first.mp4");
+    ASSERT_NE(first_open, 0U);
+    EXPECT_EQ(layer.await(first_open, result), SEMI_OK);
+
+    const CommandHandle second_open = layer.open("second.mp4");
+    ASSERT_NE(second_open, 0U);
+    EXPECT_EQ(layer.await(second_open, result), SEMI_OK);
+    EXPECT_EQ(demuxer->open_calls, 2);
+    EXPECT_EQ(demuxer->close_calls, 1);
+    EXPECT_TRUE(demuxer->is_open);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, FailedReplacementLeavesThePlayerIdle) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle first_open = layer.open("first.mp4");
+    ASSERT_NE(first_open, 0U);
+    EXPECT_EQ(layer.await(first_open, result), SEMI_OK);
+
+    demuxer->fail_open = true;
+    const CommandHandle replacement = layer.open("missing.mp4");
+    ASSERT_NE(replacement, 0U);
+    EXPECT_EQ(layer.await(replacement, result), SEMI_ERR_INVALID_RESOURCE);
+    EXPECT_EQ(demuxer->close_calls, 1);
+    EXPECT_FALSE(demuxer->is_open);
+
+    const CommandHandle close = layer.close();
+    ASSERT_NE(close, 0U);
+    EXPECT_EQ(layer.await(close, result), SEMI_OK);
+    EXPECT_EQ(demuxer->close_calls, 1);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, InvalidOpenDoesNotCloseTheCurrentMedia) {
+    auto demuxer = std::make_shared<FakeDemuxer>();
+    ApiLayer layer(demuxer);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle invalid_open = layer.open("");
+    ASSERT_NE(invalid_open, 0U);
+    EXPECT_EQ(layer.await(invalid_open, result), SEMI_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(demuxer->open_calls, 1);
+    EXPECT_EQ(demuxer->close_calls, 0);
+    EXPECT_TRUE(demuxer->is_open);
+    EXPECT_TRUE(layer.stop());
+}
+
 TEST(ApiLayerTest, CloseIsIdempotent) {
     auto demuxer = std::make_shared<FakeDemuxer>();
     ApiLayer layer(demuxer);
@@ -151,7 +270,7 @@ TEST(ApiLayerTest, CloseIsIdempotent) {
     const CommandHandle second_close = layer.close();
     ASSERT_NE(second_close, 0U);
     EXPECT_EQ(layer.await(second_close, result), SEMI_OK);
-    EXPECT_EQ(demuxer->close_calls, 2);
+    EXPECT_EQ(demuxer->close_calls, 0);
     EXPECT_TRUE(layer.stop());
 }
 

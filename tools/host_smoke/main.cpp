@@ -61,6 +61,17 @@ int main() {
     // 1) 首次 init → assemble
     ok = expect_ok("init#1", semi_player_init()) && ok;
 
+    const semi_handle_t invalid_play_handle = semi_player_play();
+    if (invalid_play_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: play returned invalid handle\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_status("play while idle",
+                           semi_player_handle_await(invalid_play_handle, &result),
+                           SEMI_ERR_INVALID_STATE) && ok;
+    }
+
     // 2) 通过公开 C ABI 打开仓库内的真实 FFmpeg 测试媒体。
     const semi_handle_t open_handle = semi_player_open(SEMI_PLAYER_SMOKE_MEDIA_PATH);
     if (open_handle == 0) {

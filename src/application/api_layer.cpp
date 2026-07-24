@@ -84,6 +84,7 @@ struct ApiLayer::Impl {
     std::deque<CommandHandle> completed_order;
     std::thread worker;
     std::shared_ptr<domain::Demuxer> demuxer;
+    PlayerState player_state = PlayerState::Idle;
     CommandHandle next_handle = 1;
     bool accepting = false;
     bool stopping = false;
@@ -101,15 +102,30 @@ std::size_t discard_completed_until_space(ApiLayer::Impl& impl) {
     return discarded;
 }
 
-[[maybe_unused]] semi_status_t execute_command(const Command&) noexcept {
-    // 媒体业务模块尚未接入。任务基础设施仍须由命令线程完成并通知 await。
-    return SEMI_ERR_INTERNAL;
-}
-
 struct CommandExecution {
     semi_status_t status = SEMI_ERR_INTERNAL;
     CommandResult result;
+    std::optional<PlayerState> next_state;
 };
+
+bool can_execute(PlayerState state, const Command& command) noexcept {
+    return std::visit(
+        Overloaded{
+            [](const OpenCommand&) { return true; },
+            [state](const PlayCommand&) {
+                return state != PlayerState::Idle && state != PlayerState::Error;
+            },
+            [state](const PauseCommand&) {
+                return state != PlayerState::Idle && state != PlayerState::Error;
+            },
+            [state](const SeekCommand&) {
+                return state != PlayerState::Idle && state != PlayerState::Error;
+            },
+            [](const CloseCommand&) { return true; },
+            [](const SetVolumeCommand&) { return true; },
+        },
+        command);
+}
 
 MediaInfo to_media_info(const domain::DemuxerOpenResult& opened) {
     MediaInfo info;
@@ -124,8 +140,41 @@ MediaInfo to_media_info(const domain::DemuxerOpenResult& opened) {
     return info;
 }
 
-CommandExecution execute_open(const OpenCommand& command, domain::Demuxer& demuxer) {
-    auto opened = demuxer.open(command.source);
+CommandExecution execute_open(const OpenCommand& command,
+                              PlayerState current_state,
+                              domain::Demuxer& demuxer) {
+    if (command.source.empty()) {
+        CommandExecution execution;
+        execution.status = SEMI_ERR_INVALID_ARGUMENT;
+        return execution;
+    }
+
+    const bool replaced_media = current_state != PlayerState::Idle;
+    if (replaced_media) {
+        demuxer.close();
+    }
+
+    std::expected<domain::DemuxerOpenResult, domain::DemuxerError> opened;
+    try {
+        opened = demuxer.open(command.source);
+    } catch (const std::exception& error) {
+        SEMI_LOG_ERROR("demuxer open threw an exception: {}", error.what());
+        CommandExecution execution;
+        execution.status = SEMI_ERR_INTERNAL;
+        if (replaced_media) {
+            execution.next_state = PlayerState::Idle;
+        }
+        return execution;
+    } catch (...) {
+        SEMI_LOG_ERROR("demuxer open threw an unknown exception");
+        CommandExecution execution;
+        execution.status = SEMI_ERR_INTERNAL;
+        if (replaced_media) {
+            execution.next_state = PlayerState::Idle;
+        }
+        return execution;
+    }
+
     if (!opened) {
         SEMI_LOG_ERROR("demuxer open failed: {}", opened.error().message);
         CommandExecution execution;
@@ -139,11 +188,15 @@ CommandExecution execute_open(const OpenCommand& command, domain::Demuxer& demux
                 : SEMI_ERR_INTERNAL;
             break;
         }
+        if (replaced_media) {
+            execution.next_state = PlayerState::Idle;
+        }
         return execution;
     }
 
     CommandExecution execution;
     execution.status = SEMI_OK;
+    execution.next_state = PlayerState::Ready;
     execution.result.has_media_info = true;
     execution.result.media_info = to_media_info(*opened);
     const MediaInfo& media_info = execution.result.media_info;
@@ -156,27 +209,51 @@ CommandExecution execute_open(const OpenCommand& command, domain::Demuxer& demux
     return execution;
 }
 
-CommandExecution execute_close(domain::Demuxer& demuxer) noexcept {
-    demuxer.close();
-    SEMI_LOG_INFO("media closed");
-
+CommandExecution execute_close(PlayerState current_state, domain::Demuxer& demuxer) noexcept {
     CommandExecution execution;
     execution.status = SEMI_OK;
+    execution.next_state = PlayerState::Idle;
+    if (current_state != PlayerState::Idle) {
+        demuxer.close();
+        SEMI_LOG_INFO("media closed");
+    }
     return execution;
 }
 
-CommandExecution execute_command(const Command& command, domain::Demuxer& demuxer) noexcept {
+CommandExecution execute_command(PlayerState current_state,
+                                 const Command& command,
+                                 domain::Demuxer& demuxer) noexcept {
     try {
+        if (!can_execute(current_state, command)) {
+            CommandExecution execution;
+            execution.status = SEMI_ERR_INVALID_STATE;
+            return execution;
+        }
+
         return std::visit(
             Overloaded{
-                [&demuxer](const OpenCommand& value) {
-                    return execute_open(value, demuxer);
+                [&demuxer, current_state](const OpenCommand& value) {
+                    return execute_open(value, current_state, demuxer);
                 },
-                [](const PlayCommand&) -> CommandExecution { return {}; },
-                [](const PauseCommand&) -> CommandExecution { return {}; },
+                [current_state](const PlayCommand&) -> CommandExecution {
+                    if (current_state == PlayerState::Playing) {
+                        CommandExecution execution;
+                        execution.status = SEMI_OK;
+                        return execution;
+                    }
+                    return {};
+                },
+                [current_state](const PauseCommand&) -> CommandExecution {
+                    if (current_state != PlayerState::Playing) {
+                        CommandExecution execution;
+                        execution.status = SEMI_OK;
+                        return execution;
+                    }
+                    return {};
+                },
                 [](const SeekCommand&) -> CommandExecution { return {}; },
-                [&demuxer](const CloseCommand&) {
-                    return execute_close(demuxer);
+                [&demuxer, current_state](const CloseCommand&) {
+                    return execute_close(current_state, demuxer);
                 },
                 [](const SetVolumeCommand&) -> CommandExecution { return {}; },
             },
@@ -245,7 +322,10 @@ void worker_main(ApiLayer::Impl& impl) {
             complete_task(impl, task, SEMI_ERR_INTERNAL, {});
             continue;
         }
-        CommandExecution execution = execute_command(task->command, *impl.demuxer);
+        CommandExecution execution = execute_command(impl.player_state, task->command, *impl.demuxer);
+        if (execution.next_state.has_value()) {
+            impl.player_state = *execution.next_state;
+        }
         complete_task(impl, task, execution.status, std::move(execution.result));
     }
 }
