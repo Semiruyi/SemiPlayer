@@ -1,4 +1,4 @@
-#include "domain/generation/generation.hpp"
+#include "domain/resource/generation/generation.hpp"
 
 namespace semi::domain {
 
