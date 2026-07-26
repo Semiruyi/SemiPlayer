@@ -76,5 +76,32 @@ TEST(DefaultDemuxerTest, BackendFailureLeavesTheDemuxerClosed) {
     EXPECT_TRUE(demuxer.open("movie.mp4").has_value());
 }
 
+TEST(DefaultDemuxerTest, RequiresAnOpenMediaBeforeStartingOrSeeking) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->result = BackendProbeResult{};
+    DefaultDemuxer demuxer(backend);
+
+    const auto start = demuxer.start();
+    const auto seek = demuxer.seek(1'000'000);
+
+    ASSERT_FALSE(start.has_value());
+    EXPECT_EQ(start.error().code, DemuxerErrorCode::InvalidState);
+    ASSERT_FALSE(seek.has_value());
+    EXPECT_EQ(seek.error().code, DemuxerErrorCode::InvalidState);
+}
+
+TEST(DefaultDemuxerTest, SupportsStartStopAndSeekAfterOpen) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->result = BackendProbeResult{};
+    DefaultDemuxer demuxer(backend);
+
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    EXPECT_TRUE(demuxer.start().has_value());
+    EXPECT_TRUE(demuxer.seek(1'000'000).has_value());
+    demuxer.stop();
+    demuxer.stop();
+    EXPECT_TRUE(demuxer.start().has_value());
+}
+
 } // namespace
 } // namespace semi::domain

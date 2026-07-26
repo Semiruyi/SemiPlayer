@@ -2,6 +2,7 @@
 
 #include "contracts/demuxer/demuxer_backend.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <string>
@@ -62,6 +63,18 @@ public:
 
     [[nodiscard]] virtual std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) = 0;
+
+    // Starts packet production after a successful open. The operation is
+    // idempotent while the demuxer is already started.
+    [[nodiscard]] virtual std::expected<void, DemuxerError> start() = 0;
+
+    // Stops packet production without releasing the opened media resource.
+    virtual void stop() noexcept = 0;
+
+    // Requests a seek on the opened media. Before start, the target is
+    // remembered for the next start.
+    [[nodiscard]] virtual std::expected<void, DemuxerError>
+    seek(std::int64_t position_us) = 0;
 
     virtual void close() noexcept = 0;
 

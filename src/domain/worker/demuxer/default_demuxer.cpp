@@ -72,13 +72,47 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
     }
 
     opened_ = true;
+    started_ = false;
+    pending_seek_position_us_.reset();
     return select_default_streams(std::move(*probe));
+}
+
+std::expected<void, DemuxerError> DefaultDemuxer::start() {
+    if (!opened_) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer must be open before starting",
+            .backend_error = std::nullopt,
+        });
+    }
+
+    started_ = true;
+    return {};
+}
+
+void DefaultDemuxer::stop() noexcept {
+    started_ = false;
+}
+
+std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us) {
+    if (!opened_) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer must be open before seeking",
+            .backend_error = std::nullopt,
+        });
+    }
+
+    pending_seek_position_us_ = position_us;
+    return {};
 }
 
 void DefaultDemuxer::close() noexcept {
     if (backend_) {
         backend_->close();
     }
+    stop();
+    pending_seek_position_us_.reset();
     opened_ = false;
 }
 
