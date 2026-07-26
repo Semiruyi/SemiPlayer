@@ -1,6 +1,6 @@
 #pragma once
 
-#include "contracts/audio/encoded_audio_packet.hpp"
+#include "contracts/demuxer/packet/encoded_audio_packet.hpp"
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -14,7 +14,7 @@ extern "C" {
 #include <span>
 #include <string>
 
-namespace semi::infra::ffmpeg {
+namespace semi::infra::ffmpeg::demuxer::packet {
 
 enum class FfmpegEncodedAudioPacketErrorCode : std::uint8_t {
     InvalidTimeBase,
@@ -32,7 +32,8 @@ struct FfmpegEncodedAudioPacketError {
 // Owns an independent reference to an FFmpeg AVPacket and exposes it through
 // the backend-neutral EncodedAudioPacket contract. The source AVPacket may be
 // unreferenced or reused after create() returns.
-class FfmpegEncodedAudioPacket final : public contracts::audio::EncodedAudioPacket {
+class FfmpegEncodedAudioPacket final
+    : public contracts::demuxer::packet::EncodedAudioPacket {
 public:
     [[nodiscard]] static std::expected<std::unique_ptr<FfmpegEncodedAudioPacket>,
                                         FfmpegEncodedAudioPacketError>
@@ -69,4 +70,4 @@ private:
     std::optional<std::int64_t> duration_us_;
 };
 
-} // namespace semi::infra::ffmpeg
+} // namespace semi::infra::ffmpeg::demuxer::packet

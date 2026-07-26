@@ -1,6 +1,6 @@
 #pragma once
 
-#include "contracts/audio/encoded_audio_packet.hpp"
+#include "contracts/demuxer/packet/encoded_audio_packet.hpp"
 #include "domain/resource/generation/generation.hpp"
 
 #include <memory>
@@ -12,7 +12,7 @@ namespace semi::domain {
 class AudioPacket final {
 public:
     AudioPacket(
-        std::unique_ptr<contracts::audio::EncodedAudioPacket> encoded_packet,
+        std::unique_ptr<contracts::demuxer::packet::EncodedAudioPacket> encoded_packet,
         Generation::Value generation) noexcept;
 
     ~AudioPacket() = default;
@@ -23,10 +23,10 @@ public:
     AudioPacket& operator=(AudioPacket&&) noexcept = default;
 
     [[nodiscard]] Generation::Value generation() const noexcept;
-    [[nodiscard]] const contracts::audio::EncodedAudioPacket& encoded() const noexcept;
+    [[nodiscard]] const contracts::demuxer::packet::EncodedAudioPacket& encoded() const noexcept;
 
 private:
-    std::unique_ptr<contracts::audio::EncodedAudioPacket> encoded_packet_;
+    std::unique_ptr<contracts::demuxer::packet::EncodedAudioPacket> encoded_packet_;
     Generation::Value generation_;
 };
 

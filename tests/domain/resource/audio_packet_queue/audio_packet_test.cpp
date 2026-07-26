@@ -14,7 +14,7 @@
 namespace semi::domain {
 namespace {
 
-class TestEncodedAudioPacket final : public contracts::audio::EncodedAudioPacket {
+class TestEncodedAudioPacket final : public contracts::demuxer::packet::EncodedAudioPacket {
 public:
     explicit TestEncodedAudioPacket(
         bool& destroyed,

@@ -5,7 +5,7 @@
 #include <optional>
 #include <span>
 
-namespace semi::contracts::audio {
+namespace semi::contracts::demuxer::packet {
 
 // Backend-owned encoded audio packet. The byte view remains valid for the
 // lifetime of the implementing object and must not be mutated by callers.
@@ -39,4 +39,4 @@ protected:
     EncodedAudioPacket() = default;
 };
 
-} // namespace semi::contracts::audio
+} // namespace semi::contracts::demuxer::packet

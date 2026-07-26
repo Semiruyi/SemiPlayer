@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace semi::infra::ffmpeg {
+namespace semi::infra::ffmpeg::demuxer {
 
 class FfmpegDemuxerBackend final : public contracts::demuxer::DemuxerBackend {
 public:
@@ -22,4 +22,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace semi::infra::ffmpeg
+} // namespace semi::infra::ffmpeg::demuxer

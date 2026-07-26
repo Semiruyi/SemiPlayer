@@ -2,7 +2,7 @@
 
 #include "application/api_layer.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
-#include "infrastructure/ffmpeg/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
 #include "infrastructure/log/log.hpp"
 
 #define SEMI_LOG_TAG "ioc"
@@ -22,7 +22,7 @@ bool IoCContainer::assemble() noexcept {
 
     SEMI_LOG_INFO("assemble begin");
     try {
-        auto backend = std::make_shared<infra::ffmpeg::FfmpegDemuxerBackend>();
+        auto backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(std::move(backend));
         auto api_layer = std::make_shared<application::ApiLayer>(std::move(demuxer));
         if (!api_layer->start()) {

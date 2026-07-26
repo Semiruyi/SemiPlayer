@@ -4,7 +4,7 @@ extern "C" {
 #include <libavutil/mathematics.h>
 }
 
-#include "infrastructure/ffmpeg/ffmpeg_encoded_audio_packet.hpp"
+#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_audio_packet.hpp"
 
 #include <gtest/gtest.h>
 
@@ -12,7 +12,7 @@ extern "C" {
 #include <cstddef>
 #include <cstdint>
 
-namespace semi::infra::ffmpeg {
+namespace semi::infra::ffmpeg::demuxer::packet {
 namespace {
 
 class ScopedPacket {
@@ -93,4 +93,4 @@ TEST(FfmpegEncodedAudioPacketTest, RejectsInvalidTimeBase) {
 }
 
 } // namespace
-} // namespace semi::infra::ffmpeg
+} // namespace semi::infra::ffmpeg::demuxer::packet

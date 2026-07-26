@@ -1,4 +1,4 @@
-#include "infrastructure/ffmpeg/ffmpeg_encoded_audio_packet.hpp"
+#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_audio_packet.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -10,7 +10,7 @@ extern "C" {
 #include <new>
 #include <utility>
 
-namespace semi::infra::ffmpeg {
+namespace semi::infra::ffmpeg::demuxer::packet {
 namespace {
 
 using ErrorCode = FfmpegEncodedAudioPacketErrorCode;
@@ -131,4 +131,4 @@ std::optional<std::int64_t> FfmpegEncodedAudioPacket::duration_us() const noexce
     return duration_us_;
 }
 
-} // namespace semi::infra::ffmpeg
+} // namespace semi::infra::ffmpeg::demuxer::packet

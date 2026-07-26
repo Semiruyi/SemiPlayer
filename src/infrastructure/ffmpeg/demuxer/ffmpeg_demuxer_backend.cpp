@@ -1,4 +1,4 @@
-#include "infrastructure/ffmpeg/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -11,7 +11,7 @@ extern "C" {
 #include <limits>
 #include <utility>
 
-namespace semi::infra::ffmpeg {
+namespace semi::infra::ffmpeg::demuxer {
 namespace {
 
 using contracts::demuxer::BackendProbeResult;
@@ -173,4 +173,4 @@ void FfmpegDemuxerBackend::close() noexcept {
     }
 }
 
-} // namespace semi::infra::ffmpeg
+} // namespace semi::infra::ffmpeg::demuxer

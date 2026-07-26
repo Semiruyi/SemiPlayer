@@ -4,7 +4,7 @@ extern "C" {
 #include <libavutil/avutil.h>
 }
 
-#include "infrastructure/ffmpeg/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
 
 #include <gtest/gtest.h>
 
@@ -22,7 +22,7 @@ TEST(FFmpegDependencyTest, CoreLibrariesAreUsable) {
 }
 
 TEST(FfmpegDemuxerBackendTest, ReportsOpenFailureWithoutKeepingResources) {
-    semi::infra::ffmpeg::FfmpegDemuxerBackend backend;
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
 
     const auto failed = backend.open("this-file-does-not-exist.mp4");
 
@@ -48,7 +48,7 @@ TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
         ASSERT_TRUE(output.good());
     }
 
-    semi::infra::ffmpeg::FfmpegDemuxerBackend backend;
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
     const auto probed = backend.open(path.string());
 
     ASSERT_TRUE(probed.has_value()) << probed.error().message;
@@ -66,7 +66,7 @@ TEST(FfmpegDemuxerBackendTest, ProbesCommittedMp4Fixture) {
     const std::filesystem::path path = SEMI_PLAYER_TEST_MEDIA_PATH;
     ASSERT_TRUE(std::filesystem::exists(path));
 
-    semi::infra::ffmpeg::FfmpegDemuxerBackend backend;
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
     const auto probed = backend.open(path.string());
 
     ASSERT_TRUE(probed.has_value()) << probed.error().message;
