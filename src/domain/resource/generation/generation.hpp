@@ -19,6 +19,8 @@ namespace semi::domain {
 // DAG 第 0 层，无线程、无依赖。
 class Generation {
 public:
+    using Value = uint32_t;
+
     Generation() noexcept;
     ~Generation() = default;
 
@@ -29,13 +31,13 @@ public:
     void bump() noexcept;
 
     // 当前世代号。
-    uint32_t current() const noexcept;
+    Value current() const noexcept;
 
     // 数据携带的 generation 是否对应当前世代（消费者使用数据前检查）。
-    bool is_current(uint32_t gen) const noexcept;
+    bool is_current(Value gen) const noexcept;
 
 private:
-    std::atomic<uint32_t> value_{0};
+    std::atomic<Value> value_{0};
 };
 
 } // namespace semi::domain

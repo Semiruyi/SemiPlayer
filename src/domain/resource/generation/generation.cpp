@@ -8,11 +8,11 @@ void Generation::bump() noexcept {
     value_.fetch_add(1, std::memory_order_acq_rel);
 }
 
-uint32_t Generation::current() const noexcept {
+Generation::Value Generation::current() const noexcept {
     return value_.load(std::memory_order_acquire);
 }
 
-bool Generation::is_current(uint32_t gen) const noexcept {
+bool Generation::is_current(Value gen) const noexcept {
     return gen == current();
 }
 
