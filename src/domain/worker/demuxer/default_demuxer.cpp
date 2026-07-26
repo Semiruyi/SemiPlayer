@@ -43,7 +43,9 @@ DemuxerOpenResult select_default_streams(BackendProbeResult probe) {
 
 } // namespace
 
-DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend) : backend_(std::move(backend)) {}
+DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
+                               std::shared_ptr<AudioPacketSink> audio_packet_sink)
+    : backend_(std::move(backend)), audio_packet_sink_(std::move(audio_packet_sink)) {}
 
 DefaultDemuxer::~DefaultDemuxer() {
     close();
@@ -64,6 +66,13 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
             .backend_error = std::nullopt,
         });
     }
+    if (!audio_packet_sink_) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "audio packet sink is unavailable",
+            .backend_error = std::nullopt,
+        });
+    }
 
     auto probe = backend_->open(source);
     if (!probe) {
@@ -71,10 +80,17 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
         return std::unexpected(backend_failure(std::move(probe.error())));
     }
 
+    auto result = select_default_streams(std::move(*probe));
+    if (result.audio) {
+        audio_stream_id_ = result.audio->id;
+    } else {
+        audio_stream_id_.reset();
+    }
+
     opened_ = true;
     started_ = false;
     pending_seek_position_us_.reset();
-    return select_default_streams(std::move(*probe));
+    return result;
 }
 
 std::expected<void, DemuxerError> DefaultDemuxer::start() {
@@ -113,6 +129,7 @@ void DefaultDemuxer::close() noexcept {
     }
     stop();
     pending_seek_position_us_.reset();
+    audio_stream_id_.reset();
     opened_ = false;
 }
 

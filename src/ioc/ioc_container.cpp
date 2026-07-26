@@ -1,9 +1,11 @@
 #include "ioc/ioc_container.hpp"
 
 #include "application/api_layer.hpp"
+#include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
 #include "domain/worker/demuxer/default_demuxer.hpp"
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
 #include "infrastructure/log/log.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
 
 #define SEMI_LOG_TAG "ioc"
 
@@ -22,8 +24,11 @@ bool IoCContainer::assemble() noexcept {
 
     SEMI_LOG_INFO("assemble begin");
     try {
+        auto notifier = std::make_shared<infra::DefaultNotifier>();
         auto backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
-        auto demuxer = std::make_shared<domain::DefaultDemuxer>(std::move(backend));
+        auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
+        auto demuxer = std::make_shared<domain::DefaultDemuxer>(
+            std::move(backend), std::move(audio_packet_queue));
         auto api_layer = std::make_shared<application::ApiLayer>(std::move(demuxer));
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");

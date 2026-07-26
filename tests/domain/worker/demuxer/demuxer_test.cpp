@@ -1,5 +1,8 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 
+#include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
+
 #include <gtest/gtest.h>
 
 #include <memory>
@@ -49,7 +52,8 @@ TEST(DefaultDemuxerTest, SelectsTheFirstStreamOfEachPlayableKind) {
         StreamDescriptor{.id = {9}, .timing = {}, .config = SubtitleCodecConfig{}},
     };
     backend->result = probe;
-    DefaultDemuxer demuxer(backend);
+    DefaultDemuxer demuxer(
+        backend, std::make_shared<AudioPacketQueue>(std::make_shared<infra::DefaultNotifier>()));
 
     const auto opened = demuxer.open("movie.mp4");
 
@@ -67,7 +71,8 @@ TEST(DefaultDemuxerTest, SelectsTheFirstStreamOfEachPlayableKind) {
 TEST(DefaultDemuxerTest, BackendFailureLeavesTheDemuxerClosed) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = std::unexpected(DemuxerBackendError{.message = "cannot open source"});
-    DefaultDemuxer demuxer(backend);
+    DefaultDemuxer demuxer(
+        backend, std::make_shared<AudioPacketQueue>(std::make_shared<infra::DefaultNotifier>()));
 
     const auto failed = demuxer.open("missing.mp4");
 
@@ -84,7 +89,8 @@ TEST(DefaultDemuxerTest, BackendFailureLeavesTheDemuxerClosed) {
 TEST(DefaultDemuxerTest, RequiresAnOpenMediaBeforeStartingOrSeeking) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = BackendProbeResult{};
-    DefaultDemuxer demuxer(backend);
+    DefaultDemuxer demuxer(
+        backend, std::make_shared<AudioPacketQueue>(std::make_shared<infra::DefaultNotifier>()));
 
     const auto start = demuxer.start();
     const auto seek = demuxer.seek(1'000'000);
@@ -98,7 +104,8 @@ TEST(DefaultDemuxerTest, RequiresAnOpenMediaBeforeStartingOrSeeking) {
 TEST(DefaultDemuxerTest, SupportsStartStopAndSeekAfterOpen) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = BackendProbeResult{};
-    DefaultDemuxer demuxer(backend);
+    DefaultDemuxer demuxer(
+        backend, std::make_shared<AudioPacketQueue>(std::make_shared<infra::DefaultNotifier>()));
 
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
     EXPECT_TRUE(demuxer.start().has_value());
