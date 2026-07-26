@@ -15,6 +15,10 @@ public:
                                  contracts::demuxer::DemuxerBackendError>
     open(std::string_view source) override;
 
+    [[nodiscard]] std::expected<contracts::demuxer::BackendReadResult,
+                                 contracts::demuxer::DemuxerBackendError>
+    read_packet() override;
+
     void close() noexcept override;
 
 private:

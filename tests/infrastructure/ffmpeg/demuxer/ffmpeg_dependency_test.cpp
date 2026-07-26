@@ -33,6 +33,16 @@ TEST(FfmpegDemuxerBackendTest, ReportsOpenFailureWithoutKeepingResources) {
     backend.close();
 }
 
+TEST(FfmpegDemuxerBackendTest, RejectsReadingBeforeOpen) {
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
+
+    const auto result = backend.read_packet();
+
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().operation,
+              semi::contracts::demuxer::DemuxerBackendOperation::Read);
+}
+
 TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
     const auto path = std::filesystem::temp_directory_path() / "semi_player_demuxer_probe.wav";
     const std::array<unsigned char, 48> wav = {
@@ -58,6 +68,51 @@ TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
     ASSERT_NE(audio, nullptr);
     EXPECT_EQ(audio->sample_rate, 8000U);
     EXPECT_EQ(audio->channels, 1U);
+    backend.close();
+    EXPECT_TRUE(std::filesystem::remove(path));
+}
+
+TEST(FfmpegDemuxerBackendTest, ReadsPacketsAndReportsEndOfStream) {
+    const auto path = std::filesystem::temp_directory_path() / "semi_player_demuxer_read.wav";
+    const std::array<unsigned char, 48> wav = {
+        'R', 'I', 'F', 'F', 40, 0, 0, 0, 'W', 'A', 'V', 'E',
+        'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
+        0x40, 0x1F, 0, 0, 0x40, 0x1F, 0, 0, 1, 0, 8, 0,
+        'd', 'a', 't', 'a', 4, 0, 0, 0, 128, 128, 128, 128,
+    };
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        ASSERT_TRUE(output.is_open());
+        output.write(reinterpret_cast<const char*>(wav.data()), static_cast<std::streamsize>(wav.size()));
+        ASSERT_TRUE(output.good());
+    }
+
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
+    const auto probed = backend.open(path.string());
+    ASSERT_TRUE(probed.has_value()) << probed.error().message;
+
+    std::size_t packet_count = 0;
+    for (;;) {
+        const auto result = backend.read_packet();
+        ASSERT_TRUE(result.has_value()) << result.error().message;
+
+        if (std::holds_alternative<semi::contracts::demuxer::BackendEndOfStream>(*result)) {
+            break;
+        }
+
+        const auto* packet =
+            std::get_if<semi::contracts::demuxer::BackendPacket>(&*result);
+        ASSERT_NE(packet, nullptr);
+        ASSERT_NE(packet->packet, nullptr);
+        EXPECT_EQ(packet->stream_id.value, 0U);
+        if (packet_count == 0) {
+            EXPECT_EQ(packet->packet->payload().size(), 4U);
+            EXPECT_TRUE(packet->packet->pts_us().has_value());
+        }
+        ++packet_count;
+    }
+
+    EXPECT_GE(packet_count, 1U);
     backend.close();
     EXPECT_TRUE(std::filesystem::remove(path));
 }

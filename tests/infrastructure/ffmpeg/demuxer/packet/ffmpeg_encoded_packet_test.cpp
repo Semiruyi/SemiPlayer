@@ -4,7 +4,7 @@ extern "C" {
 #include <libavutil/mathematics.h>
 }
 
-#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_audio_packet.hpp"
+#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_packet.hpp"
 
 #include <gtest/gtest.h>
 
@@ -34,7 +34,7 @@ private:
     AVPacket* packet_;
 };
 
-TEST(FfmpegEncodedAudioPacketTest, OwnsPacketReferenceAndRescalesTimestamps) {
+TEST(FfmpegEncodedPacketTest, OwnsPacketReferenceAndRescalesTimestamps) {
     ScopedPacket source;
     ASSERT_NE(source.get(), nullptr);
     ASSERT_GE(av_new_packet(source.get(), 3), 0);
@@ -47,7 +47,7 @@ TEST(FfmpegEncodedAudioPacketTest, OwnsPacketReferenceAndRescalesTimestamps) {
     source.get()->duration = 1'024;
 
     constexpr AVRational time_base{1, 48'000};
-    const auto created = FfmpegEncodedAudioPacket::create(*source.get(), time_base);
+    const auto created = FfmpegEncodedPacket::create(*source.get(), time_base);
 
     ASSERT_TRUE(created.has_value()) << created.error().message;
     av_packet_unref(source.get());
@@ -66,7 +66,7 @@ TEST(FfmpegEncodedAudioPacketTest, OwnsPacketReferenceAndRescalesTimestamps) {
     EXPECT_EQ(*packet.duration_us(), av_rescale_q(1'024, time_base, AV_TIME_BASE_Q));
 }
 
-TEST(FfmpegEncodedAudioPacketTest, MapsMissingTimestampsToNullopt) {
+TEST(FfmpegEncodedPacketTest, MapsMissingTimestampsToNullopt) {
     ScopedPacket source;
     ASSERT_NE(source.get(), nullptr);
     ASSERT_GE(av_new_packet(source.get(), 1), 0);
@@ -74,7 +74,7 @@ TEST(FfmpegEncodedAudioPacketTest, MapsMissingTimestampsToNullopt) {
     source.get()->dts = AV_NOPTS_VALUE;
     source.get()->duration = 0;
 
-    const auto created = FfmpegEncodedAudioPacket::create(*source.get(), AVRational{1, 48'000});
+    const auto created = FfmpegEncodedPacket::create(*source.get(), AVRational{1, 48'000});
 
     ASSERT_TRUE(created.has_value()) << created.error().message;
     EXPECT_FALSE((**created).pts_us().has_value());
@@ -82,14 +82,14 @@ TEST(FfmpegEncodedAudioPacketTest, MapsMissingTimestampsToNullopt) {
     EXPECT_FALSE((**created).duration_us().has_value());
 }
 
-TEST(FfmpegEncodedAudioPacketTest, RejectsInvalidTimeBase) {
+TEST(FfmpegEncodedPacketTest, RejectsInvalidTimeBase) {
     ScopedPacket source;
     ASSERT_NE(source.get(), nullptr);
 
-    const auto created = FfmpegEncodedAudioPacket::create(*source.get(), AVRational{0, 48'000});
+    const auto created = FfmpegEncodedPacket::create(*source.get(), AVRational{0, 48'000});
 
     ASSERT_FALSE(created.has_value());
-    EXPECT_EQ(created.error().code, FfmpegEncodedAudioPacketErrorCode::InvalidTimeBase);
+    EXPECT_EQ(created.error().code, FfmpegEncodedPacketErrorCode::InvalidTimeBase);
 }
 
 } // namespace

@@ -14,6 +14,11 @@ public:
         return result;
     }
 
+    std::expected<contracts::demuxer::BackendReadResult, DemuxerBackendError>
+    read_packet() override {
+        return contracts::demuxer::BackendEndOfStream{};
+    }
+
     void close() noexcept override {
         ++close_calls;
     }

@@ -1,4 +1,4 @@
-#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_audio_packet.hpp"
+#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_packet.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -13,7 +13,7 @@ extern "C" {
 namespace semi::infra::ffmpeg::demuxer::packet {
 namespace {
 
-using ErrorCode = FfmpegEncodedAudioPacketErrorCode;
+using ErrorCode = FfmpegEncodedPacketErrorCode;
 
 bool valid_time_base(AVRational time_base) noexcept {
     return time_base.num > 0 && time_base.den > 0;
@@ -27,10 +27,10 @@ std::string ffmpeg_message(int error_code) {
     return buffer.data();
 }
 
-FfmpegEncodedAudioPacketError make_error(ErrorCode code,
-                                         int native_code,
-                                         std::string message) {
-    return FfmpegEncodedAudioPacketError{
+FfmpegEncodedPacketError make_error(ErrorCode code,
+                                    int native_code,
+                                    std::string message) {
+    return FfmpegEncodedPacketError{
         .code = code,
         .native_code = native_code,
         .message = std::move(message),
@@ -56,11 +56,11 @@ std::optional<std::int64_t> rescale_duration(std::int64_t duration,
 
 } // namespace
 
-void FfmpegEncodedAudioPacket::PacketDeleter::operator()(AVPacket* packet) const noexcept {
+void FfmpegEncodedPacket::PacketDeleter::operator()(AVPacket* packet) const noexcept {
     av_packet_free(&packet);
 }
 
-FfmpegEncodedAudioPacket::FfmpegEncodedAudioPacket(
+FfmpegEncodedPacket::FfmpegEncodedPacket(
     PacketPtr packet,
     std::optional<std::int64_t> pts_us,
     std::optional<std::int64_t> dts_us,
@@ -70,15 +70,15 @@ FfmpegEncodedAudioPacket::FfmpegEncodedAudioPacket(
       dts_us_(dts_us),
       duration_us_(duration_us) {}
 
-FfmpegEncodedAudioPacket::~FfmpegEncodedAudioPacket() = default;
+FfmpegEncodedPacket::~FfmpegEncodedPacket() = default;
 
-std::expected<std::unique_ptr<FfmpegEncodedAudioPacket>, FfmpegEncodedAudioPacketError>
-FfmpegEncodedAudioPacket::create(const AVPacket& packet, AVRational time_base) {
+std::expected<std::unique_ptr<FfmpegEncodedPacket>, FfmpegEncodedPacketError>
+FfmpegEncodedPacket::create(const AVPacket& packet, AVRational time_base) {
     if (!valid_time_base(time_base)) {
         return std::unexpected(make_error(
             ErrorCode::InvalidTimeBase,
             0,
-            "FFmpeg audio packet time base must have positive numerator and denominator"));
+            "FFmpeg packet time base must have positive numerator and denominator"));
     }
 
     try {
@@ -98,7 +98,7 @@ FfmpegEncodedAudioPacket::create(const AVPacket& packet, AVRational time_base) {
                 ffmpeg_message(status)));
         }
 
-        return std::unique_ptr<FfmpegEncodedAudioPacket>(new FfmpegEncodedAudioPacket(
+        return std::unique_ptr<FfmpegEncodedPacket>(new FfmpegEncodedPacket(
             std::move(owned_packet),
             rescale_timestamp(packet.pts, time_base),
             rescale_timestamp(packet.dts, time_base),
@@ -107,11 +107,11 @@ FfmpegEncodedAudioPacket::create(const AVPacket& packet, AVRational time_base) {
         return std::unexpected(make_error(
             ErrorCode::PacketAllocationFailed,
             AVERROR(ENOMEM),
-            "failed to allocate FFmpeg audio packet"));
+            "failed to allocate FFmpeg packet"));
     }
 }
 
-std::span<const std::byte> FfmpegEncodedAudioPacket::payload() const noexcept {
+std::span<const std::byte> FfmpegEncodedPacket::payload() const noexcept {
     if (!packet_ || packet_->data == nullptr || packet_->size <= 0) {
         return {};
     }
@@ -119,15 +119,15 @@ std::span<const std::byte> FfmpegEncodedAudioPacket::payload() const noexcept {
             static_cast<std::size_t>(packet_->size)};
 }
 
-std::optional<std::int64_t> FfmpegEncodedAudioPacket::pts_us() const noexcept {
+std::optional<std::int64_t> FfmpegEncodedPacket::pts_us() const noexcept {
     return pts_us_;
 }
 
-std::optional<std::int64_t> FfmpegEncodedAudioPacket::dts_us() const noexcept {
+std::optional<std::int64_t> FfmpegEncodedPacket::dts_us() const noexcept {
     return dts_us_;
 }
 
-std::optional<std::int64_t> FfmpegEncodedAudioPacket::duration_us() const noexcept {
+std::optional<std::int64_t> FfmpegEncodedPacket::duration_us() const noexcept {
     return duration_us_;
 }
 

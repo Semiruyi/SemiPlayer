@@ -7,7 +7,7 @@
 
 namespace semi::contracts::demuxer::packet {
 
-// Backend-owned encoded audio packet. The byte view remains valid for the
+// Backend-owned encoded media packet. The byte view remains valid for the
 // lifetime of the implementing object and must not be mutated by callers.
 //
 // Timestamp contract:
@@ -21,14 +21,14 @@ namespace semi::contracts::demuxer::packet {
 // - PTS and DTS are independent values; callers must not assume pts >= dts.
 // The backend is responsible for converting its native timestamp/time base to
 // this contract and mapping an invalid native timestamp to std::nullopt.
-class EncodedAudioPacket {
+class EncodedPacket {
 public:
-    virtual ~EncodedAudioPacket() = default;
+    virtual ~EncodedPacket() = default;
 
-    EncodedAudioPacket(const EncodedAudioPacket&) = delete;
-    EncodedAudioPacket& operator=(const EncodedAudioPacket&) = delete;
-    EncodedAudioPacket(EncodedAudioPacket&&) = delete;
-    EncodedAudioPacket& operator=(EncodedAudioPacket&&) = delete;
+    EncodedPacket(const EncodedPacket&) = delete;
+    EncodedPacket& operator=(const EncodedPacket&) = delete;
+    EncodedPacket(EncodedPacket&&) = delete;
+    EncodedPacket& operator=(EncodedPacket&&) = delete;
 
     [[nodiscard]] virtual std::span<const std::byte> payload() const noexcept = 0;
     [[nodiscard]] virtual std::optional<std::int64_t> pts_us() const noexcept = 0;
@@ -36,7 +36,7 @@ public:
     [[nodiscard]] virtual std::optional<std::int64_t> duration_us() const noexcept = 0;
 
 protected:
-    EncodedAudioPacket() = default;
+    EncodedPacket() = default;
 };
 
 } // namespace semi::contracts::demuxer::packet

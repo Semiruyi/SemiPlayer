@@ -14,15 +14,15 @@
 namespace semi::domain {
 namespace {
 
-class TestEncodedAudioPacket final : public contracts::demuxer::packet::EncodedAudioPacket {
+class TestEncodedPacket final : public contracts::demuxer::packet::EncodedPacket {
 public:
-    explicit TestEncodedAudioPacket(
+    explicit TestEncodedPacket(
         bool& destroyed,
         std::optional<std::int64_t> pts_us = 123'000,
         std::optional<std::int64_t> dts_us = 122'000)
         : destroyed_(destroyed), pts_us_(pts_us), dts_us_(dts_us) {}
 
-    ~TestEncodedAudioPacket() override {
+    ~TestEncodedPacket() override {
         destroyed_ = true;
     }
 
@@ -54,7 +54,7 @@ static_assert(!std::copyable<AudioPacket>);
 
 TEST(AudioPacket, OwnsEncodedPacketAndCarriesGeneration) {
     bool destroyed = false;
-    auto encoded = std::make_unique<TestEncodedAudioPacket>(destroyed);
+    auto encoded = std::make_unique<TestEncodedPacket>(destroyed);
     const auto* encoded_address = encoded.get();
 
     {
@@ -76,7 +76,7 @@ TEST(AudioPacket, OwnsEncodedPacketAndCarriesGeneration) {
 
 TEST(AudioPacket, TransfersEncodedPacketOwnershipWhenMoved) {
     bool destroyed = false;
-    auto encoded = std::make_unique<TestEncodedAudioPacket>(destroyed);
+    auto encoded = std::make_unique<TestEncodedPacket>(destroyed);
     const auto* encoded_address = encoded.get();
     AudioPacket original(std::move(encoded), 9);
 
@@ -89,7 +89,7 @@ TEST(AudioPacket, TransfersEncodedPacketOwnershipWhenMoved) {
 
 TEST(AudioPacket, PreservesMissingPresentationTimestamp) {
     bool destroyed = false;
-    auto encoded = std::make_unique<TestEncodedAudioPacket>(destroyed, std::nullopt);
+    auto encoded = std::make_unique<TestEncodedPacket>(destroyed, std::nullopt);
 
     AudioPacket packet(std::move(encoded), 3);
 
@@ -98,7 +98,7 @@ TEST(AudioPacket, PreservesMissingPresentationTimestamp) {
 
 TEST(AudioPacket, PreservesMissingDecodeTimestamp) {
     bool destroyed = false;
-    auto encoded = std::make_unique<TestEncodedAudioPacket>(destroyed, 123'000, std::nullopt);
+    auto encoded = std::make_unique<TestEncodedPacket>(destroyed, 123'000, std::nullopt);
 
     AudioPacket packet(std::move(encoded), 3);
 

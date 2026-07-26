@@ -1,6 +1,6 @@
 #pragma once
 
-#include "contracts/demuxer/packet/encoded_audio_packet.hpp"
+#include "contracts/demuxer/packet/encoded_packet.hpp"
 
 extern "C" {
 #include <libavcodec/packet.h>
@@ -16,35 +16,34 @@ extern "C" {
 
 namespace semi::infra::ffmpeg::demuxer::packet {
 
-enum class FfmpegEncodedAudioPacketErrorCode : std::uint8_t {
+enum class FfmpegEncodedPacketErrorCode : std::uint8_t {
     InvalidTimeBase,
     PacketAllocationFailed,
     PacketReferenceFailed,
 };
 
-struct FfmpegEncodedAudioPacketError {
-    FfmpegEncodedAudioPacketErrorCode code =
-        FfmpegEncodedAudioPacketErrorCode::PacketReferenceFailed;
+struct FfmpegEncodedPacketError {
+    FfmpegEncodedPacketErrorCode code =
+        FfmpegEncodedPacketErrorCode::PacketReferenceFailed;
     int native_code = 0;
     std::string message;
 };
 
 // Owns an independent reference to an FFmpeg AVPacket and exposes it through
-// the backend-neutral EncodedAudioPacket contract. The source AVPacket may be
+// the backend-neutral EncodedPacket contract. The source AVPacket may be
 // unreferenced or reused after create() returns.
-class FfmpegEncodedAudioPacket final
-    : public contracts::demuxer::packet::EncodedAudioPacket {
+class FfmpegEncodedPacket final : public contracts::demuxer::packet::EncodedPacket {
 public:
-    [[nodiscard]] static std::expected<std::unique_ptr<FfmpegEncodedAudioPacket>,
-                                        FfmpegEncodedAudioPacketError>
+    [[nodiscard]] static std::expected<std::unique_ptr<FfmpegEncodedPacket>,
+                                        FfmpegEncodedPacketError>
     create(const AVPacket& packet, AVRational time_base);
 
-    ~FfmpegEncodedAudioPacket() override;
+    ~FfmpegEncodedPacket() override;
 
-    FfmpegEncodedAudioPacket(const FfmpegEncodedAudioPacket&) = delete;
-    FfmpegEncodedAudioPacket& operator=(const FfmpegEncodedAudioPacket&) = delete;
-    FfmpegEncodedAudioPacket(FfmpegEncodedAudioPacket&&) = delete;
-    FfmpegEncodedAudioPacket& operator=(FfmpegEncodedAudioPacket&&) = delete;
+    FfmpegEncodedPacket(const FfmpegEncodedPacket&) = delete;
+    FfmpegEncodedPacket& operator=(const FfmpegEncodedPacket&) = delete;
+    FfmpegEncodedPacket(FfmpegEncodedPacket&&) = delete;
+    FfmpegEncodedPacket& operator=(FfmpegEncodedPacket&&) = delete;
 
     [[nodiscard]] std::span<const std::byte> payload() const noexcept override;
     [[nodiscard]] std::optional<std::int64_t> pts_us() const noexcept override;
@@ -58,7 +57,7 @@ private:
 
     using PacketPtr = std::unique_ptr<AVPacket, PacketDeleter>;
 
-    FfmpegEncodedAudioPacket(
+    FfmpegEncodedPacket(
         PacketPtr packet,
         std::optional<std::int64_t> pts_us,
         std::optional<std::int64_t> dts_us,

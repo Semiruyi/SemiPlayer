@@ -15,7 +15,6 @@ using contracts::demuxer::DemuxerBackend;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
 using contracts::media::AudioCodecConfig;
-using contracts::media::BackendStreamId;
 using contracts::media::CodecCommon;
 using contracts::media::ContainerInfo;
 using contracts::media::OtherStreamConfig;
@@ -29,7 +28,7 @@ using contracts::media::VideoCodecConfig;
 
 template <typename Config>
 struct SelectedStream {
-    BackendStreamId id;
+    contracts::media::DemuxerStreamId id;
     StreamTiming timing;
     Config config;
 };

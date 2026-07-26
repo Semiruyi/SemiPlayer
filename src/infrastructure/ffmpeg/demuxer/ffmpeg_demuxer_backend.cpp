@@ -1,4 +1,5 @@
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_packet.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -15,10 +16,10 @@ namespace semi::infra::ffmpeg::demuxer {
 namespace {
 
 using contracts::demuxer::BackendProbeResult;
+using contracts::demuxer::BackendReadResult;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
 using contracts::media::AudioCodecConfig;
-using contracts::media::BackendStreamId;
 using contracts::media::CodecCommon;
 using contracts::media::OtherStreamConfig;
 using contracts::media::OtherStreamKind;
@@ -27,6 +28,14 @@ using contracts::media::StreamTiming;
 using contracts::media::SubtitleCodecConfig;
 using contracts::media::TimeBase;
 using contracts::media::VideoCodecConfig;
+
+struct AvPacketDeleter {
+    void operator()(AVPacket* packet) const noexcept {
+        av_packet_free(&packet);
+    }
+};
+
+using AvPacketPtr = std::unique_ptr<AVPacket, AvPacketDeleter>;
 
 std::string ffmpeg_message(int error_code) {
     std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
@@ -79,7 +88,7 @@ OtherStreamKind other_kind(AVMediaType type) {
 StreamDescriptor make_stream_descriptor(const AVStream& stream) {
     const AVCodecParameters& parameters = *stream.codecpar;
     StreamDescriptor descriptor;
-    descriptor.id = BackendStreamId{static_cast<std::uint32_t>(stream.index)};
+    descriptor.id = contracts::media::DemuxerStreamId{static_cast<std::uint32_t>(stream.index)};
     descriptor.timing = StreamTiming{
         .time_base = TimeBase{stream.time_base.num, stream.time_base.den},
         .start_pts = optional_timestamp(stream.start_time),
@@ -164,6 +173,63 @@ FfmpegDemuxerBackend::open(std::string_view source) {
     }
 
     impl_->format_context = context;
+    return result;
+}
+
+std::expected<BackendReadResult, DemuxerBackendError>
+FfmpegDemuxerBackend::read_packet() {
+    if (impl_->format_context == nullptr) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .message = "FFmpeg demuxer backend is not open",
+        });
+    }
+
+    AvPacketPtr packet(av_packet_alloc());
+    if (packet == nullptr) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = AVERROR(ENOMEM),
+            .message = "failed to allocate FFmpeg packet",
+        });
+    }
+
+    const int status = av_read_frame(impl_->format_context, packet.get());
+    if (status == AVERROR_EOF) {
+        return contracts::demuxer::BackendEndOfStream{};
+    }
+    if (status < 0) {
+        return std::unexpected(make_error(DemuxerBackendOperation::Read, status));
+    }
+
+    if (packet->stream_index < 0 ||
+        static_cast<unsigned int>(packet->stream_index) >= impl_->format_context->nb_streams) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = AVERROR_INVALIDDATA,
+            .message = "FFmpeg packet contains an invalid stream index",
+        });
+    }
+
+    const auto stream_id = contracts::media::DemuxerStreamId{
+        static_cast<std::uint32_t>(packet->stream_index)};
+    const AVStream& stream = *impl_->format_context->streams[packet->stream_index];
+    auto encoded = packet::FfmpegEncodedPacket::create(
+        *packet,
+        stream.time_base);
+    if (!encoded) {
+        const auto error = encoded.error();
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = error.native_code,
+            .message = error.message,
+        });
+    }
+
+    contracts::demuxer::BackendPacket result{
+        .stream_id = stream_id,
+        .packet = std::move(*encoded),
+    };
     return result;
 }
 

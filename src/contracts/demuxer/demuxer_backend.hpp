@@ -1,5 +1,6 @@
 #pragma once
 
+#include "contracts/demuxer/packet/packet_read_result.hpp"
 #include "contracts/media/media_types.hpp"
 
 #include <cstdint>
@@ -11,7 +12,6 @@
 namespace semi::contracts::demuxer {
 
 using media::AudioCodecConfig;
-using media::BackendStreamId;
 using media::ContainerInfo;
 using media::OtherStreamConfig;
 using media::TimeBase;
@@ -20,6 +20,9 @@ using media::StreamDescriptor;
 using media::StreamTiming;
 using media::SubtitleCodecConfig;
 using media::VideoCodecConfig;
+using packet::BackendEndOfStream;
+using packet::BackendPacket;
+using packet::BackendReadResult;
 
 struct BackendProbeResult {
     ContainerInfo container;
@@ -29,6 +32,7 @@ struct BackendProbeResult {
 enum class DemuxerBackendOperation : std::uint8_t {
     Open,
     Probe,
+    Read,
 };
 
 struct DemuxerBackendError {
@@ -48,6 +52,9 @@ public:
 
     [[nodiscard]] virtual std::expected<BackendProbeResult, DemuxerBackendError>
     open(std::string_view source) = 0;
+
+    [[nodiscard]] virtual std::expected<BackendReadResult, DemuxerBackendError>
+    read_packet() = 0;
 
     virtual void close() noexcept = 0;
 

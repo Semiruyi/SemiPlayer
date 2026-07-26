@@ -9,7 +9,7 @@
 
 namespace semi::contracts::media {
 
-struct BackendStreamId {
+struct DemuxerStreamId {
     std::uint32_t value = 0;
 };
 
@@ -62,7 +62,7 @@ using StreamConfig = std::variant<VideoCodecConfig, AudioCodecConfig, SubtitleCo
                                   OtherStreamConfig>;
 
 struct StreamDescriptor {
-    BackendStreamId id;
+    DemuxerStreamId id;
     StreamTiming timing;
     StreamConfig config;
 };
