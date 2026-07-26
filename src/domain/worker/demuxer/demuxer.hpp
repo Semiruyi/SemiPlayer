@@ -11,6 +11,8 @@
 namespace semi::domain {
 
 using contracts::demuxer::BackendProbeResult;
+using contracts::demuxer::BackendEndOfStream;
+using contracts::demuxer::BackendPacket;
 using contracts::demuxer::DemuxerBackend;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;

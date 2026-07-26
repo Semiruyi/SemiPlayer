@@ -1,6 +1,8 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 
 #include <concepts>
+#include <exception>
+#include <variant>
 #include <utility>
 
 namespace semi::domain {
@@ -44,14 +46,27 @@ DemuxerOpenResult select_default_streams(BackendProbeResult probe) {
 } // namespace
 
 DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
-                               std::shared_ptr<AudioPacketSink> audio_packet_sink)
-    : backend_(std::move(backend)), audio_packet_sink_(std::move(audio_packet_sink)) {}
+                               std::shared_ptr<AudioPacketSink> audio_packet_sink,
+                               std::shared_ptr<infra::Notifier> notifier)
+    : backend_(std::move(backend)),
+      audio_packet_sink_(std::move(audio_packet_sink)),
+      notifier_(std::move(notifier)) {
+    if (notifier_) {
+        audio_queue_not_full_subscription_ = notifier_->subscribe<AudioQueueNotFull>(
+            [this](const AudioQueueNotFull&) {
+                queue_not_full_hint_.store(true, std::memory_order_release);
+                cv_.notify_one();
+            });
+    }
+}
 
 DefaultDemuxer::~DefaultDemuxer() {
     close();
+    audio_queue_not_full_subscription_.reset();
 }
 
 std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_view source) {
+    std::unique_lock lock(mutex_);
     if (opened_) {
         return std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
@@ -88,12 +103,16 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
     }
 
     opened_ = true;
-    started_ = false;
+    state_ = State::Idle;
+    stop_requested_ = false;
+    queue_not_full_hint_.store(false, std::memory_order_release);
+    pending_audio_packet_.reset();
     pending_seek_position_us_.reset();
     return result;
 }
 
 std::expected<void, DemuxerError> DefaultDemuxer::start() {
+    std::unique_lock lock(mutex_);
     if (!opened_) {
         return std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
@@ -102,12 +121,76 @@ std::expected<void, DemuxerError> DefaultDemuxer::start() {
         });
     }
 
-    started_ = true;
+    if (state_ == State::Reading) {
+        return {};
+    }
+    if (state_ == State::Stopping) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer is stopping",
+            .backend_error = std::nullopt,
+        });
+    }
+
+    stop_requested_ = false;
+    state_ = State::Reading;
+    if (!worker_running_) {
+        if (worker_.joinable()) {
+            lock.unlock();
+            worker_.join();
+            lock.lock();
+            if (!opened_) {
+                return std::unexpected(DemuxerError{
+                    .code = DemuxerErrorCode::InvalidState,
+                    .message = "demuxer was closed while restarting its worker",
+                    .backend_error = std::nullopt,
+                });
+            }
+        }
+
+        try {
+            worker_running_ = true;
+            worker_ = std::thread([this] {
+                worker_main();
+            });
+        } catch (...) {
+            worker_running_ = false;
+            state_ = State::Idle;
+            return std::unexpected(DemuxerError{
+                .code = DemuxerErrorCode::BackendFailure,
+                .message = "failed to start demuxer worker",
+                .backend_error = std::nullopt,
+            });
+        }
+    }
+    cv_.notify_one();
     return {};
 }
 
 void DefaultDemuxer::stop() noexcept {
-    started_ = false;
+    std::thread worker;
+    {
+        std::lock_guard lock(mutex_);
+        if (!opened_ || !worker_.joinable()) {
+            return;
+        }
+
+        stop_requested_ = true;
+        state_ = State::Stopping;
+        worker = std::move(worker_);
+    }
+
+    cv_.notify_one();
+    if (worker.joinable()) {
+        worker.join();
+    }
+
+    std::lock_guard lock(mutex_);
+    worker_running_ = false;
+    stop_requested_ = false;
+    pending_audio_packet_.reset();
+    queue_not_full_hint_.store(false, std::memory_order_release);
+    state_ = State::Stopped;
 }
 
 std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us) {
@@ -124,13 +207,125 @@ std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us)
 }
 
 void DefaultDemuxer::close() noexcept {
+    stop();
+
+    std::lock_guard lock(mutex_);
     if (backend_) {
         backend_->close();
     }
-    stop();
     pending_seek_position_us_.reset();
     audio_stream_id_.reset();
+    pending_audio_packet_.reset();
     opened_ = false;
+    state_ = State::Constructed;
+}
+
+void DefaultDemuxer::worker_main() noexcept {
+    try {
+        bool running = true;
+        while (running) {
+            std::optional<AudioPacket> pending_audio_packet;
+            {
+                std::unique_lock lock(mutex_);
+                cv_.wait(lock, [this] {
+                    return stop_requested_ ||
+                           (state_ == State::Reading &&
+                            (!pending_audio_packet_.has_value() ||
+                             queue_not_full_hint_.load(std::memory_order_acquire)));
+                });
+
+                if (stop_requested_) {
+                    break;
+                }
+
+                if (pending_audio_packet_) {
+                    queue_not_full_hint_.store(false, std::memory_order_release);
+                    pending_audio_packet = std::move(pending_audio_packet_);
+                    pending_audio_packet_.reset();
+                }
+            }
+
+            if (pending_audio_packet) {
+                const auto push_result = audio_packet_sink_->try_push(
+                    std::move(*pending_audio_packet));
+                if (push_result == AudioPacketPushResult::Full) {
+                    std::lock_guard lock(mutex_);
+                    pending_audio_packet_ = std::move(pending_audio_packet);
+                }
+                continue;
+            }
+
+            auto read_result = backend_->read_packet();
+            {
+                std::lock_guard lock(mutex_);
+                if (stop_requested_) {
+                    break;
+                }
+            }
+
+            if (!read_result) {
+                notify_read_error(std::move(read_result.error()));
+                std::lock_guard lock(mutex_);
+                state_ = State::Idle;
+                continue;
+            }
+
+            if (std::holds_alternative<BackendEndOfStream>(*read_result)) {
+                notify_end_of_stream();
+                std::lock_guard lock(mutex_);
+                state_ = State::Idle;
+                continue;
+            }
+
+            auto backend_packet = std::get<BackendPacket>(std::move(*read_result));
+            if (!audio_stream_id_ || backend_packet.stream_id.value != audio_stream_id_->value) {
+                continue;
+            }
+
+            AudioPacket audio_packet(std::move(backend_packet.packet), generation_.current());
+            const auto push_result = audio_packet_sink_->try_push(std::move(audio_packet));
+            if (push_result == AudioPacketPushResult::Full) {
+                std::lock_guard lock(mutex_);
+                pending_audio_packet_ = std::move(audio_packet);
+            }
+        }
+    } catch (...) {
+        notify_read_error(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = 0,
+            .message = "demuxer worker failed",
+        });
+        std::lock_guard lock(mutex_);
+        state_ = stop_requested_ ? State::Stopping : State::Idle;
+    }
+
+    std::lock_guard lock(mutex_);
+    worker_running_ = false;
+    if (!stop_requested_ && state_ == State::Reading) {
+        state_ = State::Idle;
+    }
+}
+
+void DefaultDemuxer::notify_end_of_stream() noexcept {
+    if (!notifier_) {
+        return;
+    }
+
+    try {
+        (void)notifier_->send(DemuxerEndOfStream{});
+    } catch (...) {
+    }
+}
+
+void DefaultDemuxer::notify_read_error(DemuxerBackendError error) noexcept {
+    if (!notifier_) {
+        return;
+    }
+
+    try {
+        (void)notifier_->send(DemuxerReadError{.error = std::move(error)});
+    } catch (...) {
+    }
 }
 
 } // namespace semi::domain

@@ -28,7 +28,7 @@ bool IoCContainer::assemble() noexcept {
         auto backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
-            std::move(backend), std::move(audio_packet_queue));
+            std::move(backend), std::move(audio_packet_queue), std::move(notifier));
         auto api_layer = std::make_shared<application::ApiLayer>(std::move(demuxer));
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");
