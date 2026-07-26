@@ -3,7 +3,6 @@
 #include "contracts/demuxer/demuxer_backend.hpp"
 
 #include <expected>
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -68,21 +67,6 @@ public:
 
 protected:
     Demuxer() = default;
-};
-
-class DefaultDemuxer final : public Demuxer {
-public:
-    explicit DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend);
-    ~DefaultDemuxer() override;
-
-    [[nodiscard]] std::expected<DemuxerOpenResult, DemuxerError>
-    open(std::string_view source) override;
-
-    void close() noexcept override;
-
-private:
-    std::shared_ptr<DemuxerBackend> backend_;
-    bool opened_ = false;
 };
 
 } // namespace semi::domain
