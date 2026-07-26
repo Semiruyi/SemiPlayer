@@ -1,17 +1,18 @@
 #pragma once
 
-#include "domain/worker/demuxer/demuxer_backend.hpp"
+#include "contracts/demuxer/demuxer_backend.hpp"
 
 #include <memory>
 
 namespace semi::infra::ffmpeg {
 
-class FfmpegDemuxerBackend final : public domain::DemuxerBackend {
+class FfmpegDemuxerBackend final : public contracts::demuxer::DemuxerBackend {
 public:
     FfmpegDemuxerBackend();
     ~FfmpegDemuxerBackend() override;
 
-    [[nodiscard]] std::expected<domain::BackendProbeResult, domain::DemuxerBackendError>
+    [[nodiscard]] std::expected<contracts::demuxer::BackendProbeResult,
+                                 contracts::demuxer::DemuxerBackendError>
     open(std::string_view source) override;
 
     void close() noexcept override;

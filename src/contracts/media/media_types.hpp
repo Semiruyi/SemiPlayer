@@ -2,26 +2,24 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <optional>
 #include <string>
-#include <string_view>
 #include <variant>
 #include <vector>
 
-namespace semi::domain {
+namespace semi::contracts::media {
 
 struct BackendStreamId {
     std::uint32_t value = 0;
 };
 
-struct Rational {
+struct TimeBase {
     std::int32_t numerator = 0;
     std::int32_t denominator = 1;
 };
 
 struct StreamTiming {
-    Rational time_base;
+    TimeBase time_base;
     std::optional<std::int64_t> start_pts;
     std::optional<std::int64_t> duration_pts;
 };
@@ -73,38 +71,4 @@ struct ContainerInfo {
     std::optional<std::int64_t> duration_us;
 };
 
-struct BackendProbeResult {
-    ContainerInfo container;
-    std::vector<StreamDescriptor> streams;
-};
-
-enum class DemuxerBackendOperation : std::uint8_t {
-    Open,
-    Probe,
-};
-
-struct DemuxerBackendError {
-    DemuxerBackendOperation operation = DemuxerBackendOperation::Open;
-    int native_code = 0;
-    std::string message;
-};
-
-class DemuxerBackend {
-public:
-    virtual ~DemuxerBackend() = default;
-
-    DemuxerBackend(const DemuxerBackend&) = delete;
-    DemuxerBackend& operator=(const DemuxerBackend&) = delete;
-    DemuxerBackend(DemuxerBackend&&) = delete;
-    DemuxerBackend& operator=(DemuxerBackend&&) = delete;
-
-    [[nodiscard]] virtual std::expected<BackendProbeResult, DemuxerBackendError>
-    open(std::string_view source) = 0;
-
-    virtual void close() noexcept = 0;
-
-protected:
-    DemuxerBackend() = default;
-};
-
-} // namespace semi::domain
+} // namespace semi::contracts::media

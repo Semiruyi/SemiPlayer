@@ -14,19 +14,19 @@ extern "C" {
 namespace semi::infra::ffmpeg {
 namespace {
 
-using domain::AudioCodecConfig;
-using domain::BackendProbeResult;
-using domain::BackendStreamId;
-using domain::CodecCommon;
-using domain::DemuxerBackendError;
-using domain::DemuxerBackendOperation;
-using domain::OtherStreamConfig;
-using domain::OtherStreamKind;
-using domain::Rational;
-using domain::StreamDescriptor;
-using domain::StreamTiming;
-using domain::SubtitleCodecConfig;
-using domain::VideoCodecConfig;
+using contracts::demuxer::BackendProbeResult;
+using contracts::demuxer::DemuxerBackendError;
+using contracts::demuxer::DemuxerBackendOperation;
+using contracts::media::AudioCodecConfig;
+using contracts::media::BackendStreamId;
+using contracts::media::CodecCommon;
+using contracts::media::OtherStreamConfig;
+using contracts::media::OtherStreamKind;
+using contracts::media::StreamDescriptor;
+using contracts::media::StreamTiming;
+using contracts::media::SubtitleCodecConfig;
+using contracts::media::TimeBase;
+using contracts::media::VideoCodecConfig;
 
 std::string ffmpeg_message(int error_code) {
     std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
@@ -81,7 +81,7 @@ StreamDescriptor make_stream_descriptor(const AVStream& stream) {
     StreamDescriptor descriptor;
     descriptor.id = BackendStreamId{static_cast<std::uint32_t>(stream.index)};
     descriptor.timing = StreamTiming{
-        .time_base = Rational{stream.time_base.num, stream.time_base.den},
+        .time_base = TimeBase{stream.time_base.num, stream.time_base.den},
         .start_pts = optional_timestamp(stream.start_time),
         .duration_pts = optional_timestamp(stream.duration),
     };

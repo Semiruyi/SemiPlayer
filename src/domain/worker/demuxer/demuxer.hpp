@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/worker/demuxer/demuxer_backend.hpp"
+#include "contracts/demuxer/demuxer_backend.hpp"
 
 #include <expected>
 #include <memory>
@@ -9,6 +9,23 @@
 #include <string_view>
 
 namespace semi::domain {
+
+using contracts::demuxer::BackendProbeResult;
+using contracts::demuxer::DemuxerBackend;
+using contracts::demuxer::DemuxerBackendError;
+using contracts::demuxer::DemuxerBackendOperation;
+using contracts::media::AudioCodecConfig;
+using contracts::media::BackendStreamId;
+using contracts::media::CodecCommon;
+using contracts::media::ContainerInfo;
+using contracts::media::OtherStreamConfig;
+using contracts::media::OtherStreamKind;
+using contracts::media::StreamConfig;
+using contracts::media::StreamDescriptor;
+using contracts::media::StreamTiming;
+using contracts::media::SubtitleCodecConfig;
+using contracts::media::TimeBase;
+using contracts::media::VideoCodecConfig;
 
 template <typename Config>
 struct SelectedStream {

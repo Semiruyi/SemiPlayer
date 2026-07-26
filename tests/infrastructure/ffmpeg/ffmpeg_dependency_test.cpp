@@ -27,7 +27,8 @@ TEST(FfmpegDemuxerBackendTest, ReportsOpenFailureWithoutKeepingResources) {
     const auto failed = backend.open("this-file-does-not-exist.mp4");
 
     ASSERT_FALSE(failed.has_value());
-    EXPECT_EQ(failed.error().operation, semi::domain::DemuxerBackendOperation::Open);
+    EXPECT_EQ(failed.error().operation,
+              semi::contracts::demuxer::DemuxerBackendOperation::Open);
     EXPECT_NE(failed.error().message, "");
     backend.close();
 }
@@ -52,7 +53,8 @@ TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
 
     ASSERT_TRUE(probed.has_value()) << probed.error().message;
     ASSERT_EQ(probed->streams.size(), 1U);
-    const auto* audio = std::get_if<semi::domain::AudioCodecConfig>(&probed->streams.front().config);
+    const auto* audio =
+        std::get_if<semi::contracts::media::AudioCodecConfig>(&probed->streams.front().config);
     ASSERT_NE(audio, nullptr);
     EXPECT_EQ(audio->sample_rate, 8000U);
     EXPECT_EQ(audio->channels, 1U);
@@ -72,18 +74,20 @@ TEST(FfmpegDemuxerBackendTest, ProbesCommittedMp4Fixture) {
     EXPECT_GT(*probed->container.duration_us, 0);
 
     const auto video = std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
-        return std::holds_alternative<semi::domain::VideoCodecConfig>(stream.config);
+        return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(stream.config);
     });
     ASSERT_NE(video, probed->streams.end());
-    const auto& video_config = std::get<semi::domain::VideoCodecConfig>(video->config);
+    const auto& video_config =
+        std::get<semi::contracts::media::VideoCodecConfig>(video->config);
     EXPECT_EQ(video_config.coded_width, 320U);
     EXPECT_EQ(video_config.coded_height, 180U);
 
     const auto audio = std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
-        return std::holds_alternative<semi::domain::AudioCodecConfig>(stream.config);
+        return std::holds_alternative<semi::contracts::media::AudioCodecConfig>(stream.config);
     });
     ASSERT_NE(audio, probed->streams.end());
-    const auto& audio_config = std::get<semi::domain::AudioCodecConfig>(audio->config);
+    const auto& audio_config =
+        std::get<semi::contracts::media::AudioCodecConfig>(audio->config);
     EXPECT_EQ(audio_config.sample_rate, 48000U);
     EXPECT_EQ(audio_config.channels, 1U);
     backend.close();
