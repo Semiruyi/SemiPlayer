@@ -53,6 +53,7 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 
 ```cpp
 enum class AudioSampleFormat {
+    Unknown,
     U8,
     S16,
     S32,

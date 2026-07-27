@@ -14,6 +14,7 @@ target_compile_definitions(semi_player_tests PRIVATE
     "SEMI_PLAYER_TEST_MEDIA_PATH=\"${SEMI_PLAYER_TEST_MEDIA_PATH}\"")
 
 # 各层测试子目录，与 src 同构。
+add_subdirectory(contracts)
 add_subdirectory(application)
 add_subdirectory(domain)
 add_subdirectory(infrastructure)
