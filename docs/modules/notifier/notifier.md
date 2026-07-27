@@ -1,7 +1,7 @@
 # Notifier 模块设计
 
 > 基础设施模块。**通知中心**——模块注册感兴趣的通知、状态变化方发送通知，纯机制，无业务语义。
-> 所有跨模块的"状态变化通知"（队列状态、EOF、时钟跳点、错误等）都流经它。
+> 所有跨模块的"状态变化通知"（队列状态、时钟跳点、错误等）都流经它；有序数据结束由数据队列中的结束项传递。
 
 ## 定位
 
@@ -9,7 +9,7 @@
 |------|------|
 | 层 | 基础设施层 |
 | 是否模块 | ✅ 是（基础设施模块）|
-| **业务语义** | ❌ **无**——不认识 VideoQueueNotFull / Eof / ClockJumped 是什么意思 |
+| **业务语义** | ❌ **无**——不认识 VideoQueueNotFull / DemuxerReadError / ClockJumped 是什么意思 |
 | 线程 | 无（被各线程调用）|
 | 职责 | 提供通知中心机制：按**通知类型**注册回调、按**通知类型**分发通知 |
 | 实例 | 一个全局实例，`std::shared_ptr<Notifier>` 注入给所有需要发/收通知的模块 |
@@ -55,8 +55,8 @@ VideoDecoder (第1层): 依赖 VideoPacketQueue (消费包 + 引用通知类型�
 AudioClock (第0层) 定义 ClockJumped
 VideoSync (第1层): 依赖 AudioClock (读时钟 + 引用 ClockJumped 注册)  ← 顺向 第1→第0 ✓
 
-Demuxer (第1层) 定义 Eof / DemuxError
-ApiLayer (第3层): 依赖 Demuxer (调方法 + 引用 Eof 注册)  ← 顺向 第3→第1 ✓
+Demuxer (第1层) 定义 DemuxerReadError
+ApiLayer (第3层): 依赖 Demuxer (调方法 + 引用 DemuxerReadError 注册)  ← 顺向 第3→第1 ✓
 ```
 
 所有"接收方引用发送方通知类型"都是 DAG 上的顺向路径，不构成环。
@@ -76,9 +76,8 @@ struct VideoQueueNotFull {};
 struct AudioQueueNotEmpty {};
 struct AudioQueueNotFull {};
 
-// 在 Demuxer 模块里
-struct Eof {};
-struct DemuxError { std::string msg; };        // ★ 通知可携带数据
+// 在 Demuxer 模块里：输入结束走队列中的有序结束项，不是 Notifier 通知
+struct DemuxerReadError { std::string msg; };  // ★ 通知可携带数据
 
 // 在 AudioClock 模块里
 struct ClockJumped { int64_t pts; };   // ★ 通知可携带数据
@@ -98,7 +97,7 @@ struct VideoFrameReady {};
 ```cpp
 // 通知携带数据
 struct ClockJumped { int64_t pts; };
-struct DemuxError { std::string msg; };
+struct DemuxerReadError { std::string msg; };
 
 // 回调能读数据
 notifier.register<ClockJumped>([](const ClockJumped& event) {
@@ -115,7 +114,7 @@ notifier.send(ClockJumped{ 1000 });
 ## 同步回调（已定）
 
 - **send 在发送方线程同步调用回调**——不排队、无独立通知线程、无延迟。
-- 回调在 send 调用方的线程上执行。例：Demuxer（demuxer 线程）send(Eof) → 在 demuxer 线程调 ApiLayer 的回调。
+- 回调在 send 调用方的线程上执行。例：Demuxer（demuxer 线程）send(DemuxerReadError) → 在 demuxer 线程调订阅者回调。
 - **回调必须极轻量**——只做"读通知数据 + 设标志 + notify 自己的 cv"，不拿重锁、不干重活、不阻塞。
 - **回调里不能反向等待发送方**（防死锁）——比如回调里不能去 join 发送方线程。
 
@@ -202,6 +201,6 @@ events 模块 (中立数据定义处, 大家都依赖):
 
 ## 边界（本文档不涉及）
 
-- ❌ 各业务通知类型的具体定义（VideoQueueNotEmpty / Eof / ClockJumped 等）→ 各业务模块文档
+- ❌ 各业务通知类型的具体定义（VideoQueueNotEmpty / DemuxerReadError / ClockJumped 等）→ 各业务模块文档
 - ❌ 工作模块如何用 Notifier 唤醒自己的 cv → 各工作模块文档（如 demuxer.md）
 - ❌ std::type_index 异构存储的具体实现细节 → 实现阶段

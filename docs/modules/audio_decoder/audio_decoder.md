@@ -26,8 +26,8 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 |---|---|
 | `AudioPacketQueue` | 输入：消费带 generation 的压缩音频包 |
 | `AudioFrameStore` | 输出：生产带 generation 的原始 PCM 帧 |
-| `Generation` | 丢弃旧世代包，识别 seek 后的新解码上下文 |
-| `Notifier` | 接收队列/Store 状态变化和 Demuxer EOF；发送 Decoder 自身事件 |
+| `Generation` | 与 Demuxer 共享；丢弃旧媒体会话和旧 seek 世代的包，识别当前解码上下文 |
+| `Notifier` | 接收队列/Store 状态变化；发送 Decoder 自身事件 |
 | `AudioDecoderBackend` | 纯解码后端抽象；当前由 FFmpeg 实现 |
 
 ### 谁依赖 AudioDecoder
@@ -41,8 +41,8 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 
 ### 不依赖什么
 
-- 不依赖 Demuxer 实例：只消费其写入的队列。订阅 `DemuxerEndOfStream` 仅是接收
-  Notifier 事件，不取得 Demuxer 的运行时引用。
+- 不依赖 Demuxer 实例：只消费其写入的队列。输入结束通过队列中的
+  `AudioPacketEndOfInput` 表达，不订阅 Demuxer 的运行时事件。
 - 不依赖 AudioSink、miniaudio 或 AudioClock。
 - 不依赖 AudioResampler：Decoder 不知道输出设备目标格式。
 
@@ -140,16 +140,18 @@ worker 生命周期与 Demuxer 一致：首次 `start` 时创建，直到 `stop/
 
 AudioDecoder 订阅：
 
-- `AudioQueueNotEmpty`，输入可读时唤醒；
+- `AudioQueueNotEmpty`，输入可读时唤醒；普通 `AudioPacket` 和
+  `AudioPacketEndOfInput` 共用这条有序输入通道；
 - `AudioFrameStoreNotFull`，输出可写时唤醒；
-- `DemuxerEndOfStream`，请求 worker drain 解码器；
 - 自身 `stop/seek` 控制信号。
 
 Notifier 回调只设置原子标志并 `cv.notify_one()`，不解码、不持有重锁、不等待其他线程。
 
-## Generation 与 seek
+## Generation 与媒体会话/seek
 
-Demuxer 完成定位后才推进 Generation。随后 ApiLayer 调用 `audio_decoder.seek(target_us)`；
+IoC 创建一个共享的 `Generation` 实例并注入 Demuxer、AudioDecoder 及后续管道模块。
+每次成功打开新的媒体会话时，Demuxer 先推进 Generation；成功完成定位后也才推进
+Generation。随后 ApiLayer 调用 `audio_decoder.seek(target_us)`；
 Decoder 将 `{generation, target_us}` 作为不可撕裂的整体快照提交给 worker。
 
 worker 处理该快照时：
@@ -164,9 +166,12 @@ worker 处理该快照时：
 
 ## EOF 与错误
 
-Demuxer 发出 `DemuxerEndOfStream` 后，AudioDecoder 不能立即宣告结束：AAC 等 codec 可能
-仍有内部延迟帧。worker 必须向 Backend 执行 drain（等价于向 FFmpeg 送空 packet 并持续
-receive frame），将当前 generation 的剩余 PCM 全部写入 `AudioFrameStore`，然后发送：
+AudioDecoder 从 `AudioPacketQueue` 取到队列项后，worker 必须先检查其 generation。旧世代的普通
+`AudioPacket` 和 `AudioPacketEndOfInput` 都直接丢弃；只有当前世代的结束项才进入 EOF 处理。
+取到当前世代的 `AudioPacketEndOfInput` 后，不能立即宣告结束：AAC 等 codec 可能仍有内部延迟帧。
+worker 必须先确认结束项之前的普通包已经处理完，再向 Backend
+执行一次 drain（等价于向 FFmpeg 送空 packet 并持续 receive frame），将当前 generation 的
+剩余 PCM 全部写入 `AudioFrameStore`，然后发送：
 
 ```cpp
 struct AudioDecoderEndOfStream {
@@ -179,6 +184,7 @@ struct AudioDecoderError {
 ```
 
 `AudioDecoderEndOfStream` 由 AudioResampler 接收，以便它继续 drain 自己的 `SwrContext`。
+它表示 Decoder 的输出已经结束，不等同于 Demuxer 的输入结束；最终播放结束由输出链路确认。
 错误也经 Notifier 上报；worker 回到可停止的等待状态，不在通知回调中执行恢复策略。
 
 ## FFmpeg 后端封装

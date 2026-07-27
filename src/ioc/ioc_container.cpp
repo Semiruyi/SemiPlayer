@@ -25,10 +25,12 @@ bool IoCContainer::assemble() noexcept {
     SEMI_LOG_INFO("assemble begin");
     try {
         auto notifier = std::make_shared<infra::DefaultNotifier>();
+        auto generation = std::make_shared<domain::Generation>();
         auto backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
-            std::move(backend), std::move(audio_packet_queue), std::move(notifier));
+            std::move(backend), std::move(audio_packet_queue), std::move(notifier),
+            std::move(generation));
         auto api_layer = std::make_shared<application::ApiLayer>(std::move(demuxer));
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");

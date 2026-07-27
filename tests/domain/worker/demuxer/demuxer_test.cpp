@@ -99,6 +99,10 @@ std::uint8_t packet_marker(const AudioPacket& packet_value) {
     return std::to_integer<std::uint8_t>(packet_value.encoded().payload().front());
 }
 
+const AudioPacket* packet_value(const AudioPacketQueueItem& item) noexcept {
+    return std::get_if<AudioPacket>(&item);
+}
+
 StreamDescriptor video_stream(std::uint32_t id, std::uint32_t width) {
     return StreamDescriptor{
         .id = {id},
@@ -112,6 +116,7 @@ struct DemuxerDependencies {
     std::shared_ptr<infra::DefaultNotifier> notifier = std::make_shared<infra::DefaultNotifier>();
     std::shared_ptr<AudioPacketQueue> audio_queue =
         std::make_shared<AudioPacketQueue>(notifier);
+    std::shared_ptr<Generation> generation = std::make_shared<Generation>();
 };
 
 TEST(DefaultDemuxerTest, SelectsTheFirstStreamOfEachPlayableKind) {
@@ -127,7 +132,8 @@ TEST(DefaultDemuxerTest, SelectsTheFirstStreamOfEachPlayableKind) {
     };
     backend->result = probe;
     DemuxerDependencies dependencies;
-    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier);
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
 
     const auto opened = demuxer.open("movie.mp4");
 
@@ -146,7 +152,8 @@ TEST(DefaultDemuxerTest, BackendFailureLeavesTheDemuxerClosed) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = std::unexpected(DemuxerBackendError{.message = "cannot open source"});
     DemuxerDependencies dependencies;
-    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier);
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
 
     const auto failed = demuxer.open("missing.mp4");
 
@@ -164,7 +171,8 @@ TEST(DefaultDemuxerTest, RequiresAnOpenMediaBeforeStartingOrSeeking) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = BackendProbeResult{};
     DemuxerDependencies dependencies;
-    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier);
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
 
     const auto start = demuxer.start();
     const auto seek = demuxer.seek(1'000'000);
@@ -179,7 +187,8 @@ TEST(DefaultDemuxerTest, SupportsStartStopAndSeekAfterOpen) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = BackendProbeResult{};
     DemuxerDependencies dependencies;
-    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier);
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
 
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
     EXPECT_TRUE(demuxer.start().has_value());
@@ -201,20 +210,112 @@ TEST(DefaultDemuxerTest, ReadsSelectedAudioPacketsAndSkipsOtherStreams) {
     backend->packets.push_back(packet(7, 4));
 
     DemuxerDependencies dependencies;
-    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier);
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+
+    ASSERT_TRUE(wait_until([&dependencies] {
+        return dependencies.audio_queue->size() >= 2;
+    }));
+    auto audio_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(audio_item.has_value());
+    const auto* audio_packet = packet_value(*audio_item);
+    ASSERT_NE(audio_packet, nullptr);
+    EXPECT_EQ(packet_marker(*audio_packet), 4U);
+    EXPECT_EQ(audio_packet->generation(), 1U);
+
+    auto end_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(end_item.has_value());
+    const auto* end = std::get_if<AudioPacketEndOfInput>(&*end_item);
+    ASSERT_NE(end, nullptr);
+    EXPECT_EQ(end->generation, 1U);
+    EXPECT_GE(backend->read_calls.load(), 3);
+
+    demuxer.stop();
+}
+
+TEST(DefaultDemuxerTest, QueuesEndOfInputWhenAudioHasNoPackets) {
+    auto backend = std::make_shared<FakeBackend>();
+    BackendProbeResult probe;
+    probe.streams = {
+        StreamDescriptor{.id = {7}, .timing = {},
+                         .config = AudioCodecConfig{.common = {}, .sample_rate = 48000, .channels = 2}},
+    };
+    backend->result = probe;
+
+    DemuxerDependencies dependencies;
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
+    ASSERT_TRUE(demuxer.open("empty-audio.mp4").has_value());
     ASSERT_TRUE(demuxer.start().has_value());
 
     ASSERT_TRUE(wait_until([&dependencies] {
         return !dependencies.audio_queue->empty();
     }));
-    auto audio_packet = dependencies.audio_queue->try_pop();
-    ASSERT_TRUE(audio_packet.has_value());
-    EXPECT_EQ(packet_marker(*audio_packet), 4U);
-    EXPECT_EQ(audio_packet->generation(), 0U);
-    EXPECT_GE(backend->read_calls.load(), 3);
+    auto end_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(end_item.has_value());
+    const auto* end = std::get_if<AudioPacketEndOfInput>(&*end_item);
+    ASSERT_NE(end, nullptr);
+    EXPECT_EQ(end->generation, 1U);
 
     demuxer.stop();
+}
+
+TEST(DefaultDemuxerTest, StartsNewSessionWithNextGeneration) {
+    auto backend = std::make_shared<FakeBackend>();
+    BackendProbeResult probe;
+    probe.streams = {
+        StreamDescriptor{.id = {7}, .timing = {},
+                         .config = AudioCodecConfig{.common = {}, .sample_rate = 48000, .channels = 2}},
+    };
+    backend->result = probe;
+    backend->packets.push_back(packet(7, 4));
+
+    DemuxerDependencies dependencies;
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&dependencies] {
+        return dependencies.audio_queue->size() >= 2;
+    }));
+
+    demuxer.close();
+
+    backend->packets.push_back(packet(7, 5));
+    ASSERT_TRUE(demuxer.open("movie-again.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&dependencies] {
+        return dependencies.audio_queue->size() >= 4;
+    }));
+
+    auto first_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(first_item.has_value());
+    const auto* first_packet = packet_value(*first_item);
+    ASSERT_NE(first_packet, nullptr);
+    EXPECT_EQ(packet_marker(*first_packet), 4U);
+    EXPECT_EQ(first_packet->generation(), 1U);
+
+    auto first_end_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(first_end_item.has_value());
+    const auto* first_end = std::get_if<AudioPacketEndOfInput>(&*first_end_item);
+    ASSERT_NE(first_end, nullptr);
+    EXPECT_EQ(first_end->generation, 1U);
+
+    auto second_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(second_item.has_value());
+    const auto* second_packet = packet_value(*second_item);
+    ASSERT_NE(second_packet, nullptr);
+    EXPECT_EQ(packet_marker(*second_packet), 5U);
+    EXPECT_EQ(second_packet->generation(), 2U);
+
+    auto second_end_item = dependencies.audio_queue->try_pop();
+    ASSERT_TRUE(second_end_item.has_value());
+    const auto* second_end = std::get_if<AudioPacketEndOfInput>(&*second_end_item);
+    ASSERT_NE(second_end, nullptr);
+    EXPECT_EQ(second_end->generation, 2U);
+    EXPECT_EQ(backend->close_calls, 1);
 }
 
 TEST(DefaultDemuxerTest, StopWakesWorkerWaitingForAFullAudioQueue) {
@@ -230,7 +331,8 @@ TEST(DefaultDemuxerTest, StopWakesWorkerWaitingForAFullAudioQueue) {
 
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     auto audio_queue = std::make_shared<AudioPacketQueue>(notifier, 1);
-    DefaultDemuxer demuxer(backend, audio_queue, notifier);
+    auto generation = std::make_shared<Generation>();
+    DefaultDemuxer demuxer(backend, audio_queue, notifier, generation);
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
     ASSERT_TRUE(demuxer.start().has_value());
 
@@ -241,8 +343,10 @@ TEST(DefaultDemuxerTest, StopWakesWorkerWaitingForAFullAudioQueue) {
 
     demuxer.stop();
 
-    auto first_packet = audio_queue->try_pop();
-    ASSERT_TRUE(first_packet.has_value());
+    auto first_item = audio_queue->try_pop();
+    ASSERT_TRUE(first_item.has_value());
+    const auto* first_packet = packet_value(*first_item);
+    ASSERT_NE(first_packet, nullptr);
     EXPECT_EQ(packet_marker(*first_packet), 1U);
 }
 

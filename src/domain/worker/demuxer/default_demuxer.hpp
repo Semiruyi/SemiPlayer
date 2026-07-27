@@ -21,7 +21,8 @@ class DefaultDemuxer final : public Demuxer {
 public:
     DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
                    std::shared_ptr<AudioPacketSink> audio_packet_sink,
-                   std::shared_ptr<infra::Notifier> notifier);
+                   std::shared_ptr<infra::Notifier> notifier,
+                   std::shared_ptr<Generation> generation);
     ~DefaultDemuxer() override;
 
     [[nodiscard]] std::expected<DemuxerOpenResult, DemuxerError>
@@ -47,12 +48,12 @@ private:
     };
 
     void worker_main() noexcept;
-    void notify_end_of_stream() noexcept;
     void notify_read_error(DemuxerBackendError error) noexcept;
 
     std::shared_ptr<DemuxerBackend> backend_;
     std::shared_ptr<AudioPacketSink> audio_packet_sink_;
     std::shared_ptr<infra::Notifier> notifier_;
+    std::shared_ptr<Generation> generation_;
     std::shared_ptr<infra::Notifier::Subscription> audio_queue_not_full_subscription_;
 
     mutable std::mutex mutex_;
@@ -62,12 +63,12 @@ private:
     bool stop_requested_ = false;
     bool worker_running_ = false;
     std::atomic_bool queue_not_full_hint_{false};
-    std::optional<AudioPacket> pending_audio_packet_;
+    std::optional<AudioPacketQueueItem> pending_audio_item_;
+    bool input_end_queued_ = false;
 
     std::optional<contracts::media::DemuxerStreamId> audio_stream_id_;
     bool opened_ = false;
     std::optional<std::int64_t> pending_seek_position_us_;
-    Generation generation_;
 };
 
 } // namespace semi::domain

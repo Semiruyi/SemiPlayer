@@ -47,10 +47,12 @@ DemuxerOpenResult select_default_streams(BackendProbeResult probe) {
 
 DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
                                std::shared_ptr<AudioPacketSink> audio_packet_sink,
-                               std::shared_ptr<infra::Notifier> notifier)
+                               std::shared_ptr<infra::Notifier> notifier,
+                               std::shared_ptr<Generation> generation)
     : backend_(std::move(backend)),
       audio_packet_sink_(std::move(audio_packet_sink)),
-      notifier_(std::move(notifier)) {
+      notifier_(std::move(notifier)),
+      generation_(std::move(generation)) {
     if (notifier_) {
         audio_queue_not_full_subscription_ = notifier_->subscribe<AudioQueueNotFull>(
             [this](const AudioQueueNotFull&) {
@@ -88,6 +90,13 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
             .backend_error = std::nullopt,
         });
     }
+    if (!generation_) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "generation is unavailable",
+            .backend_error = std::nullopt,
+        });
+    }
 
     auto probe = backend_->open(source);
     if (!probe) {
@@ -96,6 +105,7 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
     }
 
     auto result = select_default_streams(std::move(*probe));
+    generation_->bump();
     if (result.audio) {
         audio_stream_id_ = result.audio->id;
     } else {
@@ -106,7 +116,8 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
     state_ = State::Idle;
     stop_requested_ = false;
     queue_not_full_hint_.store(false, std::memory_order_release);
-    pending_audio_packet_.reset();
+    pending_audio_item_.reset();
+    input_end_queued_ = false;
     pending_seek_position_us_.reset();
     return result;
 }
@@ -188,7 +199,7 @@ void DefaultDemuxer::stop() noexcept {
     std::lock_guard lock(mutex_);
     worker_running_ = false;
     stop_requested_ = false;
-    pending_audio_packet_.reset();
+    pending_audio_item_.reset();
     queue_not_full_hint_.store(false, std::memory_order_release);
     state_ = State::Stopped;
 }
@@ -215,7 +226,8 @@ void DefaultDemuxer::close() noexcept {
     }
     pending_seek_position_us_.reset();
     audio_stream_id_.reset();
-    pending_audio_packet_.reset();
+    pending_audio_item_.reset();
+    input_end_queued_ = false;
     opened_ = false;
     state_ = State::Constructed;
 }
@@ -224,13 +236,13 @@ void DefaultDemuxer::worker_main() noexcept {
     try {
         bool running = true;
         while (running) {
-            std::optional<AudioPacket> pending_audio_packet;
+            std::optional<AudioPacketQueueItem> pending_audio_item;
             {
                 std::unique_lock lock(mutex_);
                 cv_.wait(lock, [this] {
                     return stop_requested_ ||
-                           (state_ == State::Reading &&
-                            (!pending_audio_packet_.has_value() ||
+                           (state_ == State::Reading && !input_end_queued_ &&
+                            (!pending_audio_item_.has_value() ||
                              queue_not_full_hint_.load(std::memory_order_acquire)));
                 });
 
@@ -238,19 +250,25 @@ void DefaultDemuxer::worker_main() noexcept {
                     break;
                 }
 
-                if (pending_audio_packet_) {
+                if (pending_audio_item_) {
                     queue_not_full_hint_.store(false, std::memory_order_release);
-                    pending_audio_packet = std::move(pending_audio_packet_);
-                    pending_audio_packet_.reset();
+                    pending_audio_item = std::move(pending_audio_item_);
+                    pending_audio_item_.reset();
                 }
             }
 
-            if (pending_audio_packet) {
+            if (pending_audio_item) {
+                const bool is_end_of_input =
+                    std::holds_alternative<AudioPacketEndOfInput>(*pending_audio_item);
                 const auto push_result = audio_packet_sink_->try_push(
-                    std::move(*pending_audio_packet));
+                    std::move(*pending_audio_item));
                 if (push_result == AudioPacketPushResult::Full) {
                     std::lock_guard lock(mutex_);
-                    pending_audio_packet_ = std::move(pending_audio_packet);
+                    pending_audio_item_ = std::move(pending_audio_item);
+                } else if (is_end_of_input) {
+                    std::lock_guard lock(mutex_);
+                    input_end_queued_ = true;
+                    state_ = State::Idle;
                 }
                 continue;
             }
@@ -271,9 +289,25 @@ void DefaultDemuxer::worker_main() noexcept {
             }
 
             if (std::holds_alternative<BackendEndOfStream>(*read_result)) {
-                notify_end_of_stream();
+                if (!audio_stream_id_) {
+                    std::lock_guard lock(mutex_);
+                    input_end_queued_ = true;
+                    state_ = State::Idle;
+                    continue;
+                }
+
+                AudioPacketQueueItem end_of_input = AudioPacketEndOfInput{
+                    .generation = generation_->current(),
+                };
+                const auto push_result = audio_packet_sink_->try_push(
+                    std::move(end_of_input));
                 std::lock_guard lock(mutex_);
-                state_ = State::Idle;
+                if (push_result == AudioPacketPushResult::Full) {
+                    pending_audio_item_ = std::move(end_of_input);
+                } else {
+                    input_end_queued_ = true;
+                    state_ = State::Idle;
+                }
                 continue;
             }
 
@@ -282,11 +316,15 @@ void DefaultDemuxer::worker_main() noexcept {
                 continue;
             }
 
-            AudioPacket audio_packet(std::move(backend_packet.packet), generation_.current());
-            const auto push_result = audio_packet_sink_->try_push(std::move(audio_packet));
+            AudioPacketQueueItem audio_item{
+                std::in_place_type<AudioPacket>,
+                std::move(backend_packet.packet),
+                generation_->current(),
+            };
+            const auto push_result = audio_packet_sink_->try_push(std::move(audio_item));
             if (push_result == AudioPacketPushResult::Full) {
                 std::lock_guard lock(mutex_);
-                pending_audio_packet_ = std::move(audio_packet);
+                pending_audio_item_ = std::move(audio_item);
             }
         }
     } catch (...) {
@@ -303,17 +341,6 @@ void DefaultDemuxer::worker_main() noexcept {
     worker_running_ = false;
     if (!stop_requested_ && state_ == State::Reading) {
         state_ = State::Idle;
-    }
-}
-
-void DefaultDemuxer::notify_end_of_stream() noexcept {
-    if (!notifier_) {
-        return;
-    }
-
-    try {
-        (void)notifier_->send(DemuxerEndOfStream{});
-    } catch (...) {
     }
 }
 

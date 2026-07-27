@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/resource/audio_packet_queue/audio_packet.hpp"
+#include "domain/resource/audio_packet_queue/audio_packet_queue_item.hpp"
 
 #include <cstdint>
 
@@ -11,8 +11,8 @@ enum class AudioPacketPushResult : std::uint8_t {
     Full,
 };
 
-// Producer-side port for delivering domain audio packets. The sink must not
-// consume the packet when it reports Full.
+// Producer-side port for delivering ordered audio input items. The sink must
+// not consume the item when it reports Full.
 class AudioPacketSink {
 public:
     virtual ~AudioPacketSink() = default;
@@ -22,7 +22,7 @@ public:
     AudioPacketSink(AudioPacketSink&&) = delete;
     AudioPacketSink& operator=(AudioPacketSink&&) = delete;
 
-    [[nodiscard]] virtual AudioPacketPushResult try_push(AudioPacket&& packet) = 0;
+    [[nodiscard]] virtual AudioPacketPushResult try_push(AudioPacketQueueItem&& item) = 0;
 
 protected:
     AudioPacketSink() = default;

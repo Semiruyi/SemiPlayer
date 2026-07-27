@@ -36,14 +36,8 @@ void handle_close():
     // ③ 停 demux 线程 (并等退出)
     demuxer.stop_reading()
 
-    // ④ (所有线程已停, 安全) 清空队列数据
-    video_packet_queue.clear()
-    audio_packet_queue.clear()
-    video_frame_store.clear()
-    audio_frame_store.clear()
-    audio_resampled_store.clear()
-
-    // ⑤ 释放媒体相关资源 (模块对象留着, 只释放媒体上下文)
+    // ④ 释放媒体相关资源 (模块对象留着, 只释放媒体上下文)
+    // 队列不主动 clear；下一次 open 推进 generation，消费者丢弃旧项
     demuxer.close()                      // 关文件, 释放 AVFormatContext
     video_decoder.unconfigure()          // 释放解码器实例 (configure 的逆)
     audio_decoder.unconfigure()
@@ -51,7 +45,7 @@ void handle_close():
     audio_sink.teardown()                // 释放 miniaudio 流 (setup 的逆)
     audio_clock.reset(0)                 // 时钟归零冻结
 
-    // ⑥ 会话状态
+    // ⑤ 会话状态
     player_state = Idle
     current_media = None
     target_start_pts = 0
@@ -71,7 +65,8 @@ void handle_close():
 - **再停 demux**：不再读包，PacketQueue 不再增长。
 - **所有线程停了，才清队列 + 释放资源**：避免线程访问已清空/已释放的数据导致崩溃。
 
-这是**安全顺序**（避免 use-after-free），不是为了数据正确性——close 是终结操作，停了就停了，不像 seek 有"清空了又被填回"的竞态。
+这是**安全顺序**（避免 use-after-free），不是为了数据正确性。数据正确性由 generation 保证：
+close 后遗留在队列中的旧包和结束项，在新会话中由消费者检查并丢弃。
 
 ### 释放资源的步骤是 configure/setup 的逆
 ⑤ 步：`demuxer.close`（open 的逆）、`decoder.unconfigure`（configure 的逆）、`audio_sink.teardown`（setup 的逆）。模块对象本身不销毁（不析构），只释放它持有的媒体相关内部资源。
@@ -80,8 +75,10 @@ void handle_close():
 
 ## 关键设计决策
 
-### close 比 seek 简单（无需世代号）
-close 是终结操作，之后无数据流动，不需要 seek 那种"识别旧数据"的精细机制。直接"停所有线程 → 清空 → 释放"即可，停了就停了，不会有新数据污染。
+### close 与 seek 统一采用世代号
+close 停止线程并释放当前媒体上下文，但不负责清空跨模块队列。下一次成功 open
+推进 generation，旧数据和旧的 `AudioPacketEndOfInput` 自动失效；这样 close/open 与 seek
+使用同一套数据正确性规则。
 
 ### "完成才返回" = 等所有线程停 + 资源释放完
 close 的 resolve 要汇聚：所有工作线程确认退出（stop 等线程 join）、资源释放完。这是 close 唯一的并发点——**汇聚所有线程的停止确认**。符合"完成才返回、无中间态"原则。
@@ -94,8 +91,9 @@ close 内部处理任何状态：
 
 使用方可随心 close，不要求"先 pause 再 close"。
 
-### 显式清空队列
-close 时显式 `clear` 所有队列，让模块干净地进入 Idle 态（不残留旧媒体数据）。虽世代号也能让下次 open 的旧数据作废，但 close 是终结操作，清空更干净彻底，下次 open 面对的是空队列。
+### 不主动清空队列
+close 不调用队列的 `clear()`。队列项携带 generation，消费者在取出后先做过期检查；
+因此旧媒体数据可以安全留在 FIFO 中，不需要为不参与播放流程的清理动作扩展生产者契约。
 
 ### close 不拆模块对象
 模块对象（Demuxer/Decoder/Sink 实例）在 close 后**仍然存活**——只释放它们持有的媒体资源（解码器、miniaudio流、文件句柄）。模块对象本身到 `shutdown` 才销毁。这样 close→open 可复用模块（尤其硬解 device 等昂贵资源），符合 lifecycle 设计。
@@ -111,12 +109,11 @@ close 时显式 `clear` 所有队列，让模块干净地进入 Idle 态（不�
 | ② | `video_decoder.stop` | 停视频解码线程，等退出 | video_decoder.md |
 | ② | `audio_decoder.stop` | 停音频解码线程，等退出 | audio_decoder.md |
 | ③ | `demuxer.stop_reading` | 停解封装线程，等退出 | demuxer.md |
-| ④ | `*.clear()` | 清空 PacketQueue/FrameStore 数据 | 各队列文档 |
-| ⑤ | `demuxer.close` | 关文件，释放 AVFormatContext（open 的逆）| demuxer.md |
-| ⑤ | `video_decoder.unconfigure` | 释放解码器实例（configure 的逆）| video_decoder.md |
-| ⑤ | `audio_decoder.unconfigure` | 同上 | audio_decoder.md |
-| ⑤ | `audio_sink.teardown` | 释放 miniaudio 流（setup 的逆）| audio_sink.md |
-| ⑤ | `audio_clock.reset(0)` | 时钟归零冻结 | audio_clock.md |
+| ④ | `demuxer.close` | 关文件，释放 AVFormatContext（open 的逆）| demuxer.md |
+| ④ | `video_decoder.unconfigure` | 释放解码器实例（configure 的逆）| video_decoder.md |
+| ④ | `audio_decoder.unconfigure` | 同上 | audio_decoder.md |
+| ④ | `audio_sink.teardown` | 释放 miniaudio 流（setup 的逆）| audio_sink.md |
+| ④ | `audio_clock.reset(0)` | 时钟归零冻结 | audio_clock.md |
 
 ---
 
@@ -142,12 +139,12 @@ close 后任何会话状态都回到 Idle，模块可被 open 复用。
 | `audio_sink.setup`（建 miniaudio 流）| `audio_sink.teardown`（释放）|
 | `audio_clock.reset(0)` | `audio_clock.reset(0)`（归零）|
 | play 启动的工作线程 | close 的 stop（停线程）|
-| play 填的队列数据 | close 的 clear（清队列）|
+| play 填的队列数据 | 保留在队列中，由下一会话的 generation 检查自动丢弃 |
 
 ---
 
 ## 边界（本文档不涉及）
 
-- ❌ 各模块 stop/unconfigure/teardown/clear 内部实现 → 各模块文档
+- ❌ 各模块 stop/unconfigure/teardown 内部实现 → 各模块文档
 - ❌ shutdown（模块体系拆除）→ docs/lifecycle.md
 - ❌ 工作线程如何"等退出"（join/完成信号）的并发细节 → 各模块文档

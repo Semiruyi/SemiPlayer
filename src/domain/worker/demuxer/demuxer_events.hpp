@@ -4,8 +4,6 @@
 
 namespace semi::domain {
 
-struct DemuxerEndOfStream {};
-
 struct DemuxerReadError {
     DemuxerBackendError error;
 };

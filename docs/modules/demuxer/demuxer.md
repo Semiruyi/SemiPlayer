@@ -16,10 +16,12 @@
   已打开的媒体资源。
 - 音频读包：工作线程从 Backend 持续读取，只将选中音频流的包封装为带当前
   generation 的 `AudioPacket`，并推入注入的 `AudioPacketSink`；其他流当前跳过。
+- 输入结束：Backend 返回 EOF 后，工作线程向音频队列按 FIFO 推入带当前 generation 的
+  `AudioPacketEndOfInput`。结束项和普通包共用队列容量与背压，不绕过队列顺序。
 - 有界队列背压：队列满时暂存一个待推包，收到 `AudioQueueNotFull` 通知后继续推送；
   `stop` 可唤醒等待中的线程。
-- EOF / 读包错误：分别发送 `DemuxerEndOfStream` / `DemuxerReadError` 通知，读线程
-  回到空闲状态。
+- 读包错误：发送 `DemuxerReadError` 通知，读线程回到空闲状态；正常输入结束不通过
+  Notifier 通知 ApiLayer，也不等同于播放结束。
 
 当前尚未实现：
 
@@ -43,7 +45,7 @@
 - **唯一持 AVFormatContext**（文件句柄）。
 - **唯一懂流概念**：探测流信息、产出建解码器配置（video_config/audio_config）、包分流。流级别知识集中于此，不泄漏给下游。
 - **不依赖 AudioClock**（seek 跳点 clock.jump_to 由 ApiLayer 直接调）。
-- **不依赖任何 Decoder**（decoder 靠世代号自洽 flush，不需 demuxer 通知）。
+- **不依赖任何 Decoder**（decoder 只消费队列中的数据项和结束项，不需订阅 demuxer 通知）。
 
 ---
 
@@ -55,8 +57,8 @@
 |------|------|
 | `VideoPacketQueue` | 推视频包 |
 | `AudioPacketQueue` | 推音频包 |
-| `Generation` | seek 时 +1；读包时给包打标记 |
-| `Notifier` | 注册 QueueNotFull 通知（队列满时被唤醒）；发送 EOF / Error 通知 |
+| `Generation` | 由 IoC 创建并与下游共享；每次成功 `open` 开始新媒体会话时推进，未来成功 seek 后也推进；读包时给包和结束项打标记 |
+| `Notifier` | 注册 QueueNotFull 通知（队列满时被唤醒）；发送读包错误通知 |
 
 ### 内部状态（非注入，自己持有）
 
@@ -75,7 +77,7 @@
 ```
 Constructed ─open()─▶ Idle ─start_reading()─▶ Reading ⇄ Seeking
                         ▲                          │
-                        │   EOF (发 EOF 通知, 线程 wait 在 Idle, 不退出)
+                        │   EOF (向队列推入 EndOfInput, 线程 wait 在 Idle, 不退出)
                         │
                         └─stop_reading()/close()─▶ Stopping ─▶ Stopped (线程退出)
 ```
@@ -105,7 +107,7 @@ Constructed ─open()─▶ Idle ─start_reading()─▶ Reading ⇄ Seeking
 | `start_reading(start_pts)` | play 命令（冷启动）| 首次 spawn 线程；若 start_pts≠0 先定位+gen+1；state=Reading |
 | `seek(pos)` | seek 命令 | 设 SeekIntent + 唤醒 + std::promise 等定位完成 |
 | `stop_reading()` | close 命令 | state=Stopping + 唤醒，等线程退出（join）|
-| `close()` | close 命令 | 确保 stop_reading；释放 AVFormatContext；state=Constructed |
+| `close()` | close 命令 | 确保 stop_reading；不清空输入队列，依靠 generation 让旧项失效；释放 AVFormatContext；state=Constructed |
 
 ### 接口细节
 
@@ -114,6 +116,7 @@ Constructed ─open()─▶ Idle ─start_reading()─▶ Reading ⇄ Seeking
 - `avformat_open_input` + `avformat_find_stream_info`。
 - 找出视频流/音频流索引。
 - 构造 MediaInfo（duration/宽高/流标志）+ video_config/audio_config（含 extradata/codecpar，纯数据，给 decoder configure）。
+- 成功探测后推进共享 `Generation`；首个成功媒体会话使用 generation `1`。
 - state = Idle。**不启动工作线程**（start_reading 的事）。
 
 #### `start_reading(start_pts)`
@@ -143,6 +146,7 @@ seek(pos):
 
 #### `close()`
 - 确保 stop_reading 已调（线程已 Stopped）。
+- 不清空音频输入队列；旧媒体的普通包和 `AudioPacketEndOfInput` 保留在 FIFO 中，由下游先检查 generation 后丢弃。
 - `avformat_close_input`，释放 AVFormatContext。
 - state = Constructed（回空壳，可再 open）。
 
@@ -185,7 +189,8 @@ void run_loop():
                 pkt = av_read_frame()                  # 可能短暂阻塞(不特殊处理, 见下)
                 switch (pkt):
                     case EOF:
-                        notifier.send(EOF)            # → ApiLayer 设 player_state=Ended
+                        end = AudioPacketEndOfInput{generation}
+                        try_push(queue, end)           # 结束项也受队列背压
                         state = Idle                   # 回 Idle, 线程 wait(不退出)
                         continue                       # 回顶 wait
                     case Error{e}:
@@ -217,12 +222,12 @@ void run_loop():
 try_push(queue, pkt) -> bool:        # 返回是否成功放入
     if queue.is_full():
         return false                  # 满, 告诉调用方"没放", 由循环顶决定 wait
-    queue.push(pkt)
-    notifier.send(QueueNotEmpty)      # 通知 decoder 可取包
+    queue.push(pkt)                   # 队列负责发送 QueueNotEmpty
     return true
 ```
 
-**try_push 纯粹**：不 wait、不处理 seek/stop、不持 state 锁。只判断满不满、放数据、发通知。所有控制流和 wait 都在循环顶。
+**try_push 纯粹**：不 wait、不处理 seek/stop、不持 state 锁。只判断满不满并放入数据项；
+队列负责发送 `QueueNotEmpty`，所有控制流和 wait 都在循环顶。
 
 ### 为什么 push 满了是 continue 回循环顶（而不是在 push 里 wait）
 
@@ -242,9 +247,9 @@ try_push(queue, pkt) -> bool:        # 返回是否成功放入
   - 回调在**发送方线程**（decoder pop 包的线程）执行——必须极轻量（仅 `cv.notify_one()`），不拿重锁、不干重活。
 
 ### 发送（通知别人）
-- **EOF**：读到文件结尾 → send(EOF) → ApiLayer 注册，设 player_state=Ended。
-- **Error**：解封装出错 → send(Error) → ApiLayer 处理。
-- **QueueNotEmpty**：push 包后队列非空 → send → decoder 注册，唤醒它取包。
+- **Error**：解封装出错 → send(`DemuxerReadError`) → ApiLayer 处理。
+- **QueueNotEmpty**：普通包或 `AudioPacketEndOfInput` 入队后，队列状态从空变为非空，
+  由队列发送通知唤醒 decoder。
 
 ### 自有 cv 的唤醒来源（统一唤醒点）
 demuxer 的 cv 可被多方 notify，醒来在循环顶统一检查：
@@ -268,9 +273,15 @@ std::promise 天然是"请求-响应"语义，防 lost wakeup。seek 设 SeekInt
 
 ### generation+1 与定位绑定
 SeekIntent 分支内：av_seek_frame **之后**、读新数据**之前** +1。保证 generation 永远对应定位后的新数据（不会把定位过程中读到的旧包标成新世代）。
+成功 `open` 也先推进一次 generation，再允许工作线程产生首批包；因此 close 后遗留的旧包和旧
+`AudioPacketEndOfInput` 不会被新会话误认为当前输入的结束。
+
+下游处理有序结束项时必须先检查 `AudioPacketEndOfInput.generation`。只有它等于共享
+Generation 当前值时才可以触发 decoder drain；旧结束项和旧普通包一样直接丢弃。
 
 ### EOF 后回 Idle，线程不退出
-EOF 发通知后 state=Idle，线程 wait（方案 Y）。可再 seek（调起点重播）或 close。ApiLayer 收 EOF 设 player_state=Ended。
+EOF 将 `AudioPacketEndOfInput` 入队后 state=Idle，线程 wait（方案 Y）。可再 seek（调起点
+重播）或 close。EOF 只表示输入端不再产生新包，不表示宿主应立即收到播放结束。
 
 ### av_read_frame 阻塞不特殊处理
 seek/stop 时若工作线程正阻塞在 av_read_frame（读文件 I/O），接受"读完当前包回循环顶才响应"的短暂延迟。本地文件 av_read_frame 极快（<1ms），无感。不引入自定义 I/O 中断的复杂度。
@@ -306,4 +317,4 @@ close 必须先 stop_reading（线程 Stopped）再释放 AVFormatContext，否�
 - ❌ FFmpeg API 的具体调用细节（avformat_open_input 参数等）→ 实现阶段
 - ❌ PacketQueue 的内部实现（无 cv + Notifier 协作）→ packet_queue.md（待设计）
 - ❌ video_config/audio_config 的具体字段 → 实现阶段 / decoder 文档
-- ❌ ApiLayer 如何注册 EOF/Error 通知 → api_layer.md（待补）
+- ❌ ApiLayer 如何注册读包错误，以及播放链路何时通知宿主 `PlaybackEnded` → api_layer.md（待补）

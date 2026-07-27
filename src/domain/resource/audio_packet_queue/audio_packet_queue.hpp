@@ -25,8 +25,8 @@ public:
     AudioPacketQueue(AudioPacketQueue&&) = delete;
     AudioPacketQueue& operator=(AudioPacketQueue&&) = delete;
 
-    [[nodiscard]] AudioPacketPushResult try_push(AudioPacket&& packet) override;
-    [[nodiscard]] std::optional<AudioPacket> try_pop();
+    [[nodiscard]] AudioPacketPushResult try_push(AudioPacketQueueItem&& item) override;
+    [[nodiscard]] std::optional<AudioPacketQueueItem> try_pop();
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool full() const noexcept;
@@ -41,7 +41,7 @@ private:
     std::shared_ptr<infra::Notifier> notifier_;
     const std::size_t capacity_;
     mutable std::mutex mutex_;
-    std::deque<AudioPacket> packets_;
+    std::deque<AudioPacketQueueItem> packets_;
 };
 
 } // namespace semi::domain

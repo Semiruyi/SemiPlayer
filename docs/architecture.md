@@ -22,7 +22,8 @@ seek 这种跨管道事务，**真正的物理依赖只有两个**：定位只�
 
 ### 机制
 
-- 维护一个全局原子 `generation: std::atomic<uint32_t>`。
+- 由 IoC 创建一个共享的 `Generation` 实例（内部使用原子值），注入 Demuxer、各 Decoder 和后续管道模块。
+- 每次成功打开新的媒体会话时推进一次；成功 seek 定位后也推进一次。
 - 所有跨模块传递的数据（packet、视频帧、音频 PCM 块）**携带 generation 标记**。
 - 消费者使用数据前**检查 generation**：等于当前则用，不等于则丢弃。
 
@@ -92,7 +93,7 @@ ApiLayer 命令线程串行取 Command:
 
 ```
 
-→ 控制信号走命令队列串行派发。状态通知（队列满/空、EOF、时钟跳点等）由 Notifier 通知中心承担，与控制命令分离、互不混入。
+→ 控制信号走命令队列串行派发。状态通知（队列满/空、错误、时钟跳点等）由 Notifier 通知中心承担，与控制命令分离、互不混入。输入结束通过队列中的有序结束项传递。
 
 ---
 
@@ -105,8 +106,8 @@ ApiLayer 命令线程串行取 Command:
 | 模块 | 类型 | 职责 |
 |------|------|------|
 | **IoCContainer** | 装配器（无线程） | init 时按 DAG 拓扑顺序构造所有模块、构造时注入 `std::shared_ptr<依赖>`；shutdown 时逆序释放。装配完成后持有各模块 shared_ptr 供 ApiLayer 取用。纯装配，不提供运行时服务定位 |
-| **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/EOF/ClockJumped/Error 等），状态变化方发送通知。**取代资源队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担状态通知职责；控制命令仍由 ApiLayer 私有队列处理 |
-| **Generation** | 原子标量（无线程） | `std::atomic<uint32_t>`，全局 seek 世代号。Demuxer seek 时 +1，所有数据携带、所有消费者检查 |
+| **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/ClockJumped/Error 等），状态变化方发送通知。**取代资源队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担状态通知职责；有序输入结束通过队列数据项传递；控制命令仍由 ApiLayer 私有队列处理 |
+| **Generation** | 共享原子标量（无线程） | IoC 创建一个 `std::shared_ptr<Generation>` 并注入各工作模块；新媒体会话和成功 seek 后推进，所有数据携带、所有消费者检查 |
 | **GpuDevice** | GPU 设备契约（无线程） | 抽象"一个 GPU 设备"的共性(设备 + 内存)，屏蔽 D3D11/Vulkan/OpenGL 等 API 差异。**纯契约不依赖 FFmpeg、不感知业务**。IoC 装配期按平台选实现(MVP: D3D11GpuDevice)。提供 api_type/device_handle/acquire_buffer 三个接口。copy-back 路下仅 FfmpegVideoDecoder 消费(硬解+download) |
 
 ### 📦 资源管理者层（无线程，seek 逻辑零改动）
@@ -114,7 +115,7 @@ ApiLayer 命令线程串行取 Command:
 | 模块 | 持有 | 生产者 | 消费者 |
 |------|------|--------|--------|
 | **VideoPacketQueue** | 视频压缩包队列（每包带 generation） | Demuxer | VideoDecoder |
-| **AudioPacketQueue** | 音频压缩包队列（每包带 generation） | Demuxer | AudioDecoder |
+| **AudioPacketQueue** | 音频压缩包队列（每个包和有序 `AudioPacketEndOfInput` 都带 generation） | Demuxer | AudioDecoder |
 | **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
 | **VideoFrameStore** | 视频帧（硬解 download 后的 CPU 原生格式 NV12/P010 + PTS + generation） | VideoDecoder | VideoRenderer |
 | **AudioFrameStore** | 音频 PCM（无锁 SPSC，每块带 pts + generation） | AudioDecoder | AudioResampler |
@@ -128,7 +129,7 @@ ApiLayer 命令线程串行取 Command:
 
 | 模块 | 线程 | 职责 |
 |------|------|------|
-| **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；**seek 在此执行**：停旧读、av_seek_frame、generation+1、读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
+| **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；新会话和**成功 seek 在此推进 generation**，再读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
 | **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解（GPU）→ download 到 CPU → 喂 VideoFrameStore（CPU 原生格式帧）。硬解用注入的 GpuDevice，FFmpeg hwcontext 由 decoder 自构 |
 | **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
 | **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 miniaudio 目标格式 → 喂 AudioResampledStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
@@ -209,7 +210,7 @@ ApiLayer 命令线程串行取 Command:
                                                                             [VideoSync](读AudioClock选帧)→ 纹理
 
             └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioResampledStore(gen,miniaudio输出格式) →[AudioSink]→ 声卡
-       ↑seek:gen+1                                                              │
+       ↑new open / successful seek: gen+1                                       │
        │                                                                        ▼
     Generation                                                            AudioClock ←── seek: ApiLayer 调 jump_to
                                                                                   ▲
