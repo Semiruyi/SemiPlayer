@@ -2,16 +2,33 @@
 
 ## 当前实现范围
 
-当前代码只实现 `open` / `close`。`Demuxer` 是 ApiLayer 依赖的抽象接口，
-`DefaultDemuxer` 负责打开状态和默认音频、视频、字幕轨选择；它通过
-`DemuxerBackend` 访问底层容器。`FfmpegDemuxerBackend` 持有
-`AVFormatContext` 并完成 FFmpeg 探测，但不暴露任何 `AV*` 类型给上层。
+`Demuxer` 是 ApiLayer 依赖的抽象接口。当前 `DefaultDemuxer` 通过
+`DemuxerBackend` 访问底层容器；`FfmpegDemuxerBackend` 持有
+`AVFormatContext`，完成 FFmpeg 打开、探测和逐包读取，但不向上层暴露任何
+`AV*` 类型。
 
-`open` 成功时 Backend 返回所有 `StreamDescriptor`，DefaultDemuxer 返回选中的
-`DemuxerOpenResult`。结果和错误分别使用 `std::expected<T, Error>` 表达；错误
-在 ApiLayer 映射为 C ABI 的 `semi_status_t`。
+当前已实现：
 
-本文后续关于读包线程、队列背压、seek、EOF 的内容仍是后续设计，尚未实现。
+- `open` / `close`：打开、探测、释放媒体资源；`open` 成功时 Backend 返回全部
+  `StreamDescriptor`，DefaultDemuxer 选择首个视频、音频、字幕流并返回
+  `DemuxerOpenResult`。
+- `start` / `stop`：`start` 按需创建读包线程，`stop` 停止并 join 该线程，但不释放
+  已打开的媒体资源。
+- 音频读包：工作线程从 Backend 持续读取，只将选中音频流的包封装为带当前
+  generation 的 `AudioPacket`，并推入注入的 `AudioPacketSink`；其他流当前跳过。
+- 有界队列背压：队列满时暂存一个待推包，收到 `AudioQueueNotFull` 通知后继续推送；
+  `stop` 可唤醒等待中的线程。
+- EOF / 读包错误：分别发送 `DemuxerEndOfStream` / `DemuxerReadError` 通知，读线程
+  回到空闲状态。
+
+当前尚未实现：
+
+- 真实 seek：现有 `seek` 仅记录目标位置；`DemuxerBackend` 尚无定位契约，未调用
+  FFmpeg 定位，也未推进 generation。
+- 视频包、字幕包的生产，以及下游 decoder 的消费。
+
+所有结果和错误使用 `std::expected<T, Error>` 表达；错误由 ApiLayer 映射为 C ABI
+的 `semi_status_t`。
 
 > 解封装模块。管道最上游，唯一持文件句柄、唯一懂"流"概念的模块。
 > 对外接口由 ApiLayer 调用（见 `docs/modules/api_layer/` 各命令编排）。本文件描述其内部设计。
