@@ -39,15 +39,56 @@ public:
 
 private:
     enum class State : std::uint8_t {
-        Constructed,
-        Idle,
+        Closed,
+        Ready,
         Reading,
-        Seeking,
         Stopping,
+        Exhausted,
+        Failed,
+    };
+
+    enum class Event : std::uint8_t {
+        OpenSucceeded,
+        StartRequested,
+        WorkerStartFailed,
+        StopRequested,
+        WorkerStopped,
+        InputExhausted,
+        ReadFailed,
+        CloseRequested,
+    };
+
+    enum class WorkAction : std::uint8_t {
+        Stop,
+        RetryPending,
+        ReadBackend,
+    };
+
+    enum class DeliveryResult : std::uint8_t {
+        Accepted,
+        Full,
+    };
+
+    enum class WorkerExit : std::uint8_t {
         Stopped,
+        Exhausted,
+        Failed,
+    };
+
+    struct WorkerSession {
+        Generation::Value generation = 0;
+        std::optional<contracts::media::DemuxerStreamId> audio_stream_id;
+        std::optional<AudioPacketQueueItem> pending_item;
     };
 
     void worker_main() noexcept;
+    [[nodiscard]] WorkAction wait_for_work(bool has_pending_item);
+    [[nodiscard]] std::optional<WorkerExit> retry_pending_item(WorkerSession& session);
+    [[nodiscard]] std::optional<WorkerExit> read_and_route_packet(WorkerSession& session);
+    [[nodiscard]] DeliveryResult submit_or_defer(WorkerSession& session,
+                                                  AudioPacketQueueItem&& item);
+    [[nodiscard]] bool transition_locked(Event event) noexcept;
+    void complete_worker_locked(WorkerExit exit) noexcept;
     void notify_read_error(DemuxerBackendError error) noexcept;
 
     std::shared_ptr<DemuxerBackend> backend_;
@@ -59,15 +100,11 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::thread worker_;
-    State state_ = State::Constructed;
-    bool stop_requested_ = false;
+    State state_ = State::Closed;
     bool worker_running_ = false;
     std::atomic_bool queue_not_full_hint_{false};
-    std::optional<AudioPacketQueueItem> pending_audio_item_;
-    bool input_end_queued_ = false;
 
     std::optional<contracts::media::DemuxerStreamId> audio_stream_id_;
-    bool opened_ = false;
     std::optional<std::int64_t> pending_seek_position_us_;
 };
 

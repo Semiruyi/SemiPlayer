@@ -1,5 +1,6 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 
+#include <cassert>
 #include <concepts>
 #include <exception>
 #include <variant>
@@ -7,6 +8,14 @@
 
 namespace semi::domain {
 namespace {
+
+template <typename... Functions>
+struct Overloaded : Functions... {
+    using Functions::operator()...;
+};
+
+template <typename... Functions>
+Overloaded(Functions...) -> Overloaded<Functions...>;
 
 DemuxerError backend_failure(DemuxerBackendError error) {
     DemuxerError result;
@@ -69,7 +78,7 @@ DefaultDemuxer::~DefaultDemuxer() {
 
 std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_view source) {
     std::unique_lock lock(mutex_);
-    if (opened_) {
+    if (state_ != State::Closed) {
         return std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = "demuxer is already open",
@@ -112,19 +121,16 @@ std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_
         audio_stream_id_.reset();
     }
 
-    opened_ = true;
-    state_ = State::Idle;
-    stop_requested_ = false;
+    const bool opened = transition_locked(Event::OpenSucceeded);
+    assert(opened);
     queue_not_full_hint_.store(false, std::memory_order_release);
-    pending_audio_item_.reset();
-    input_end_queued_ = false;
     pending_seek_position_us_.reset();
     return result;
 }
 
 std::expected<void, DemuxerError> DefaultDemuxer::start() {
     std::unique_lock lock(mutex_);
-    if (!opened_) {
+    if (state_ == State::Closed) {
         return std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = "demuxer must be open before starting",
@@ -142,15 +148,29 @@ std::expected<void, DemuxerError> DefaultDemuxer::start() {
             .backend_error = std::nullopt,
         });
     }
+    if (state_ == State::Exhausted) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer input is exhausted; reopen before starting again",
+            .backend_error = std::nullopt,
+        });
+    }
+    if (state_ == State::Failed) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer read failed; reopen before starting again",
+            .backend_error = std::nullopt,
+        });
+    }
 
-    stop_requested_ = false;
-    state_ = State::Reading;
+    const bool started = transition_locked(Event::StartRequested);
+    assert(started);
     if (!worker_running_) {
         if (worker_.joinable()) {
             lock.unlock();
             worker_.join();
             lock.lock();
-            if (!opened_) {
+            if (state_ == State::Closed) {
                 return std::unexpected(DemuxerError{
                     .code = DemuxerErrorCode::InvalidState,
                     .message = "demuxer was closed while restarting its worker",
@@ -166,7 +186,8 @@ std::expected<void, DemuxerError> DefaultDemuxer::start() {
             });
         } catch (...) {
             worker_running_ = false;
-            state_ = State::Idle;
+            const bool reset_to_ready = transition_locked(Event::WorkerStartFailed);
+            assert(reset_to_ready);
             return std::unexpected(DemuxerError{
                 .code = DemuxerErrorCode::BackendFailure,
                 .message = "failed to start demuxer worker",
@@ -182,12 +203,14 @@ void DefaultDemuxer::stop() noexcept {
     std::thread worker;
     {
         std::lock_guard lock(mutex_);
-        if (!opened_ || !worker_.joinable()) {
+        if (state_ == State::Closed || !worker_.joinable()) {
             return;
         }
 
-        stop_requested_ = true;
-        state_ = State::Stopping;
+        if (state_ == State::Reading) {
+            const bool stopping = transition_locked(Event::StopRequested);
+            assert(stopping);
+        }
         worker = std::move(worker_);
     }
 
@@ -197,15 +220,12 @@ void DefaultDemuxer::stop() noexcept {
     }
 
     std::lock_guard lock(mutex_);
-    worker_running_ = false;
-    stop_requested_ = false;
-    pending_audio_item_.reset();
     queue_not_full_hint_.store(false, std::memory_order_release);
-    state_ = State::Stopped;
 }
 
 std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us) {
-    if (!opened_) {
+    std::lock_guard lock(mutex_);
+    if (state_ == State::Closed) {
         return std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = "demuxer must be open before seeking",
@@ -226,107 +246,38 @@ void DefaultDemuxer::close() noexcept {
     }
     pending_seek_position_us_.reset();
     audio_stream_id_.reset();
-    pending_audio_item_.reset();
-    input_end_queued_ = false;
-    opened_ = false;
-    state_ = State::Constructed;
+    if (state_ != State::Closed) {
+        const bool closed = transition_locked(Event::CloseRequested);
+        assert(closed);
+    }
 }
 
 void DefaultDemuxer::worker_main() noexcept {
     try {
-        bool running = true;
-        while (running) {
-            std::optional<AudioPacketQueueItem> pending_audio_item;
-            {
-                std::unique_lock lock(mutex_);
-                cv_.wait(lock, [this] {
-                    return stop_requested_ ||
-                           (state_ == State::Reading && !input_end_queued_ &&
-                            (!pending_audio_item_.has_value() ||
-                             queue_not_full_hint_.load(std::memory_order_acquire)));
-                });
+        WorkerSession session;
+        {
+            std::lock_guard lock(mutex_);
+            session.generation = generation_->current();
+            session.audio_stream_id = audio_stream_id_;
+        }
 
-                if (stop_requested_) {
-                    break;
-                }
-
-                if (pending_audio_item_) {
-                    queue_not_full_hint_.store(false, std::memory_order_release);
-                    pending_audio_item = std::move(pending_audio_item_);
-                    pending_audio_item_.reset();
-                }
-            }
-
-            if (pending_audio_item) {
-                const bool is_end_of_input =
-                    std::holds_alternative<AudioPacketEndOfInput>(*pending_audio_item);
-                const auto push_result = audio_packet_sink_->try_push(
-                    std::move(*pending_audio_item));
-                if (push_result == AudioPacketPushResult::Full) {
-                    std::lock_guard lock(mutex_);
-                    pending_audio_item_ = std::move(pending_audio_item);
-                } else if (is_end_of_input) {
-                    std::lock_guard lock(mutex_);
-                    input_end_queued_ = true;
-                    state_ = State::Idle;
-                }
-                continue;
-            }
-
-            auto read_result = backend_->read_packet();
-            {
-                std::lock_guard lock(mutex_);
-                if (stop_requested_) {
-                    break;
-                }
-            }
-
-            if (!read_result) {
-                notify_read_error(std::move(read_result.error()));
-                std::lock_guard lock(mutex_);
-                state_ = State::Idle;
-                continue;
-            }
-
-            if (std::holds_alternative<BackendEndOfStream>(*read_result)) {
-                if (!audio_stream_id_) {
-                    std::lock_guard lock(mutex_);
-                    input_end_queued_ = true;
-                    state_ = State::Idle;
-                    continue;
-                }
-
-                AudioPacketQueueItem end_of_input = AudioPacketEndOfInput{
-                    .generation = generation_->current(),
-                };
-                const auto push_result = audio_packet_sink_->try_push(
-                    std::move(end_of_input));
-                std::lock_guard lock(mutex_);
-                if (push_result == AudioPacketPushResult::Full) {
-                    pending_audio_item_ = std::move(end_of_input);
-                } else {
-                    input_end_queued_ = true;
-                    state_ = State::Idle;
-                }
-                continue;
-            }
-
-            auto backend_packet = std::get<BackendPacket>(std::move(*read_result));
-            if (!audio_stream_id_ || backend_packet.stream_id.value != audio_stream_id_->value) {
-                continue;
-            }
-
-            AudioPacketQueueItem audio_item{
-                std::in_place_type<AudioPacket>,
-                std::move(backend_packet.packet),
-                generation_->current(),
-            };
-            const auto push_result = audio_packet_sink_->try_push(std::move(audio_item));
-            if (push_result == AudioPacketPushResult::Full) {
-                std::lock_guard lock(mutex_);
-                pending_audio_item_ = std::move(audio_item);
+        std::optional<WorkerExit> exit;
+        while (!exit) {
+            switch (wait_for_work(session.pending_item.has_value())) {
+            case WorkAction::Stop:
+                exit = WorkerExit::Stopped;
+                break;
+            case WorkAction::RetryPending:
+                exit = retry_pending_item(session);
+                break;
+            case WorkAction::ReadBackend:
+                exit = read_and_route_packet(session);
+                break;
             }
         }
+
+        std::lock_guard lock(mutex_);
+        complete_worker_locked(*exit);
     } catch (...) {
         notify_read_error(DemuxerBackendError{
             .operation = DemuxerBackendOperation::Read,
@@ -334,13 +285,175 @@ void DefaultDemuxer::worker_main() noexcept {
             .message = "demuxer worker failed",
         });
         std::lock_guard lock(mutex_);
-        state_ = stop_requested_ ? State::Stopping : State::Idle;
+        complete_worker_locked(WorkerExit::Failed);
+    }
+}
+
+DefaultDemuxer::WorkAction DefaultDemuxer::wait_for_work(bool has_pending_item) {
+    std::unique_lock lock(mutex_);
+    cv_.wait(lock, [this, has_pending_item] {
+        return state_ == State::Stopping ||
+               (state_ == State::Reading &&
+                (!has_pending_item || queue_not_full_hint_.load(std::memory_order_acquire)));
+    });
+
+    if (state_ == State::Stopping) {
+        return WorkAction::Stop;
+    }
+    if (has_pending_item) {
+        queue_not_full_hint_.store(false, std::memory_order_release);
+        return WorkAction::RetryPending;
+    }
+    return WorkAction::ReadBackend;
+}
+
+std::optional<DefaultDemuxer::WorkerExit>
+DefaultDemuxer::retry_pending_item(WorkerSession& session) {
+    auto item = std::move(*session.pending_item);
+    session.pending_item.reset();
+
+    const bool is_end_of_input = std::holds_alternative<AudioPacketEndOfInput>(item);
+    if (submit_or_defer(session, std::move(item)) == DeliveryResult::Accepted && is_end_of_input) {
+        return WorkerExit::Exhausted;
+    }
+    return std::nullopt;
+}
+
+std::optional<DefaultDemuxer::WorkerExit>
+DefaultDemuxer::read_and_route_packet(WorkerSession& session) {
+    auto read_result = backend_->read_packet();
+    {
+        std::lock_guard lock(mutex_);
+        if (state_ == State::Stopping) {
+            return WorkerExit::Stopped;
+        }
     }
 
-    std::lock_guard lock(mutex_);
+    if (!read_result) {
+        notify_read_error(std::move(read_result.error()));
+        return WorkerExit::Failed;
+    }
+
+    return std::visit(
+        Overloaded{
+            [this, &session](BackendEndOfStream) -> std::optional<WorkerExit> {
+                if (!session.audio_stream_id) {
+                    return WorkerExit::Exhausted;
+                }
+
+                AudioPacketQueueItem end_of_input = AudioPacketEndOfInput{
+                    .generation = session.generation,
+                };
+                if (submit_or_defer(session, std::move(end_of_input)) == DeliveryResult::Accepted) {
+                    return WorkerExit::Exhausted;
+                }
+                return std::nullopt;
+            },
+            [this, &session](BackendPacket&& backend_packet) -> std::optional<WorkerExit> {
+                if (!session.audio_stream_id ||
+                    backend_packet.stream_id.value != session.audio_stream_id->value) {
+                    return std::nullopt;
+                }
+
+                AudioPacketQueueItem audio_item{
+                    std::in_place_type<AudioPacket>,
+                    std::move(backend_packet.packet),
+                    session.generation,
+                };
+                (void)submit_or_defer(session, std::move(audio_item));
+                return std::nullopt;
+            },
+        },
+        std::move(*read_result));
+}
+
+DefaultDemuxer::DeliveryResult DefaultDemuxer::submit_or_defer(
+    WorkerSession& session, AudioPacketQueueItem&& item) {
+    if (audio_packet_sink_->try_push(std::move(item)) == AudioPacketPushResult::Accepted) {
+        return DeliveryResult::Accepted;
+    }
+
+    session.pending_item.emplace(std::move(item));
+    return DeliveryResult::Full;
+}
+
+bool DefaultDemuxer::transition_locked(Event event) noexcept {
+    switch (event) {
+    case Event::OpenSucceeded:
+        if (state_ == State::Closed) {
+            state_ = State::Ready;
+            return true;
+        }
+        return false;
+    case Event::StartRequested:
+        if (state_ == State::Ready) {
+            state_ = State::Reading;
+            return true;
+        }
+        return false;
+    case Event::WorkerStartFailed:
+        if (state_ == State::Reading) {
+            state_ = State::Ready;
+            return true;
+        }
+        return false;
+    case Event::StopRequested:
+        if (state_ == State::Reading) {
+            state_ = State::Stopping;
+            return true;
+        }
+        return false;
+    case Event::WorkerStopped:
+        if (state_ == State::Stopping) {
+            state_ = State::Ready;
+            return true;
+        }
+        return false;
+    case Event::InputExhausted:
+        if (state_ == State::Reading) {
+            state_ = State::Exhausted;
+            return true;
+        }
+        return false;
+    case Event::ReadFailed:
+        if (state_ == State::Reading) {
+            state_ = State::Failed;
+            return true;
+        }
+        return false;
+    case Event::CloseRequested:
+        if (state_ != State::Closed) {
+            state_ = State::Closed;
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+void DefaultDemuxer::complete_worker_locked(WorkerExit exit) noexcept {
     worker_running_ = false;
-    if (!stop_requested_ && state_ == State::Reading) {
-        state_ = State::Idle;
+    if (state_ == State::Stopping) {
+        const bool stopped = transition_locked(Event::WorkerStopped);
+        assert(stopped);
+        return;
+    }
+
+    switch (exit) {
+    case WorkerExit::Stopped:
+        return;
+    case WorkerExit::Exhausted:
+        {
+            const bool exhausted = transition_locked(Event::InputExhausted);
+            assert(exhausted);
+        }
+        return;
+    case WorkerExit::Failed:
+        {
+            const bool failed = transition_locked(Event::ReadFailed);
+            assert(failed);
+        }
+        return;
     }
 }
 

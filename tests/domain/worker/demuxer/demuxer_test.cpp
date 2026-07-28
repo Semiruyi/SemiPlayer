@@ -262,6 +262,68 @@ TEST(DefaultDemuxerTest, QueuesEndOfInputWhenAudioHasNoPackets) {
     demuxer.stop();
 }
 
+TEST(DefaultDemuxerTest, RetriesEndOfInputAfterAudioQueueBackpressure) {
+    auto backend = std::make_shared<FakeBackend>();
+    BackendProbeResult probe;
+    probe.streams = {
+        StreamDescriptor{.id = {7}, .timing = {},
+                         .config = AudioCodecConfig{.common = {}, .sample_rate = 48000, .channels = 2}},
+    };
+    backend->result = probe;
+    backend->packets.push_back(packet(7, 4));
+
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto audio_queue = std::make_shared<AudioPacketQueue>(notifier, 1);
+    auto generation = std::make_shared<Generation>();
+    DefaultDemuxer demuxer(backend, audio_queue, notifier, generation);
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&backend, &audio_queue] {
+        return backend->read_calls.load() >= 2 && audio_queue->full();
+    }));
+
+    auto audio_item = audio_queue->try_pop();
+    ASSERT_TRUE(audio_item.has_value());
+    ASSERT_NE(packet_value(*audio_item), nullptr);
+    ASSERT_TRUE(wait_until([&audio_queue] {
+        return !audio_queue->empty();
+    }));
+
+    auto end_item = audio_queue->try_pop();
+    ASSERT_TRUE(end_item.has_value());
+    const auto* end = std::get_if<AudioPacketEndOfInput>(&*end_item);
+    ASSERT_NE(end, nullptr);
+    EXPECT_EQ(end->generation, 1U);
+    demuxer.stop();
+}
+
+TEST(DefaultDemuxerTest, DoesNotRestartAfterEndOfInputUntilTheMediaIsReopened) {
+    auto backend = std::make_shared<FakeBackend>();
+    BackendProbeResult probe;
+    probe.streams = {
+        StreamDescriptor{.id = {7}, .timing = {},
+                         .config = AudioCodecConfig{.common = {}, .sample_rate = 48000, .channels = 2}},
+    };
+    backend->result = probe;
+    DemuxerDependencies dependencies;
+    DefaultDemuxer demuxer(backend, dependencies.audio_queue, dependencies.notifier,
+                            dependencies.generation);
+    ASSERT_TRUE(demuxer.open("empty-audio.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&dependencies] {
+        return !dependencies.audio_queue->empty();
+    }));
+
+    ASSERT_TRUE(wait_until([&demuxer] {
+        return !demuxer.start().has_value();
+    }));
+    demuxer.stop();
+
+    const auto restarted_after_stop = demuxer.start();
+    ASSERT_FALSE(restarted_after_stop.has_value());
+    EXPECT_EQ(restarted_after_stop.error().code, DemuxerErrorCode::InvalidState);
+}
+
 TEST(DefaultDemuxerTest, StartsNewSessionWithNextGeneration) {
     auto backend = std::make_shared<FakeBackend>();
     BackendProbeResult probe;
