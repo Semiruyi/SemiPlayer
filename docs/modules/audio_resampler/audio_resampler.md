@@ -143,6 +143,6 @@ AudioResampler 的 seek 涉及两层正确性，与 decoder seek 一致：
 ## 边界（本文档不涉及）
 
 - ❌ `swr_convert` 的具体调用参数（缓冲管理、延迟补偿）→ 实现阶段
-- ❌ AudioResampledStore 的内部实现（与 AudioFrameStore 同模式）→ packet_queue.md / store 文档（待设计）
+- ❌ AudioResampledStore 的内部实现（预期复用 AudioFrameStore 的有界 FIFO + `mutex` 模式）→ store 文档（待设计）
 - ❌ open 时 miniaudio 能力探测的细节 → audio_sink.md（待设计）
 - ❌ 变速不变调（SoundTouch）的具体接入 → 未来阶段
