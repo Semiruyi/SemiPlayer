@@ -85,7 +85,8 @@ Constructed ─configure()─▶ Idle ─start()─▶ Running ⇄ Paused
 | **Stopping** | 收到 stop/close，线程准备退出 | 即将退出 |
 | **Stopped** | 线程已退出 | 已退出 |
 
-> 线程生命周期同 Demuxer 方案 Y：**首次 start 时 spawn，常驻到 close/shutdown**。pause / 输入空 / 输出满 → 线程 wait 在 cv（不退出）。close 后线程没了，下次 start 检查并重新 spawn。
+> 线程生命周期由 AudioResampler 自身契约决定；不要套用 Demuxer 的生命周期。当前 Demuxer
+> 的 `stop()` 会终止当前媒体会话，之后必须重新 `close/open`，不能直接 `start()`。
 
 ---
 

@@ -69,11 +69,13 @@ public:
     // idempotent while the demuxer is already started.
     [[nodiscard]] virtual std::expected<void, DemuxerError> start() = 0;
 
-    // Stops packet production without releasing the opened media resource.
+    // Stops packet production and ends the current media session. Any packet
+    // already read but not accepted by the sink may be discarded. Reopen the
+    // media before starting another session.
     virtual void stop() noexcept = 0;
 
-    // Requests a seek on the opened media. Before start, the target is
-    // remembered for the next start.
+    // Records a seek target on the opened media. Actual backend repositioning
+    // is not implemented by the current demuxer backend.
     [[nodiscard]] virtual std::expected<void, DemuxerError>
     seek(std::int64_t position_us) = 0;
 

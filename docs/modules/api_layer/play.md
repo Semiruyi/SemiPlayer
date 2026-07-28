@@ -25,7 +25,7 @@ void handle_play():
         // 视同冷启动流程 (见下)
 
     // ② 启动管道 (从上游到下游)
-    demuxer.start_reading()                    // 开始解封装, 填 PacketQueue
+    demuxer.start()                             // 开始解封装, 填 PacketQueue
     video_decoder.start()                      // 开始解码
     audio_decoder.start()
 
@@ -44,13 +44,10 @@ void handle_play():
     handle.resolve(Ok(()))
 ```
 
-### target_start_pts 的消费（首次启动时定位）
+### 起始位置
 
-`demuxer.start_reading()` 内部检查 `target_start_pts`：
-- 若 `target_start_pts != 0`：先 `av_seek_frame(target_start_pts)` + `generation+1`，再开始读新位置数据。（对应 open.md 里"Ready 态 seek 调起点"的真正落地）
-- 若 `== 0`：从头读。
-
-这样 Ready 态 seek 设的起点，在 play 启动 demuxer 时真正生效。
+当前 `DefaultDemuxer::start()` 只启动读包，不消费 `target_start_pts`，也不执行
+FFmpeg 定位。真实 seek 和起始位置定位待 `DemuxerBackend` 增加 seek 契约后实现。
 
 ### "等水位"的实现要点
 
@@ -91,7 +88,7 @@ void handle_pause():
 
 | 步骤 | 模块方法 | 高层职责 | 内部细节归属 |
 |------|---------|---------|------------|
-| ② | `demuxer.start_reading` | 启动解封装线程；按 target_start_pts 定位（含 generation+1）；填 PacketQueue | demuxer.md |
+| ② | `demuxer.start` | 启动解封装线程并填 PacketQueue；当前不执行定位 | demuxer.md |
 | ② | `video_decoder.start` | 启动视频解码线程，填 VideoFrameStore | video_decoder.md |
 | ② | `audio_decoder.start` | 启动音频解码线程，填 AudioFrameStore | audio_decoder.md |
 | ③ | 水位等待 | 等 AudioFrameStore/VideoFrameStore 达水位（仅冷启动）| ApiLoop 内部 |
@@ -125,7 +122,8 @@ pause 不主动停 demuxer/decoder 线程。下游停消费→队列满→上游
 pause 时记录暂停时刻，freeze 时钟（PTS 不再推进）。resume 时把暂停时长累加进时钟偏移基准，保证 PTS 连续不跳。详见 audio_clock.md（待设计）。
 
 ### Ended 态再 play 从头
-播放到结尾（Ended）后再 play，重置 `target_start_pts=0`，走冷启动流程从开头播。
+当前 Demuxer 在 `Exhausted` 后不能直接 `start()`；播放到结尾后重新播放需要由 ApiLayer
+先完成当前媒体的 close，再重新 open，之后才能启动新的读包会话。
 
 ---
 

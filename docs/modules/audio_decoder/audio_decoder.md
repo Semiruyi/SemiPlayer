@@ -127,8 +127,9 @@ Constructed --configure()--> Idle --start()--> Running
 - `Stopped`：worker 已 join，保留配置，可再次 `start`；`unconfigure` 后回到
   `Constructed`。
 
-worker 生命周期与 Demuxer 一致：首次 `start` 时创建，直到 `stop/close/shutdown` 才
-退出。输入为空、输出满和暂停都只是 wait 条件，不是独立状态。
+AudioDecoder 的 worker 生命周期是独立契约：首次 `start` 时创建，`stop` 后保留配置并可再次
+`start`；输入为空、输出满和暂停都只是 wait 条件，不是独立状态。不要直接套用 Demuxer
+的“stop 终止当前媒体会话、必须重新 open”语义。
 
 ## 背压与通知
 

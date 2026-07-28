@@ -183,7 +183,7 @@ TEST(DefaultDemuxerTest, RequiresAnOpenMediaBeforeStartingOrSeeking) {
     EXPECT_EQ(seek.error().code, DemuxerErrorCode::InvalidState);
 }
 
-TEST(DefaultDemuxerTest, SupportsStartStopAndSeekAfterOpen) {
+TEST(DefaultDemuxerTest, RequiresReopenAfterStop) {
     auto backend = std::make_shared<FakeBackend>();
     backend->result = BackendProbeResult{};
     DemuxerDependencies dependencies;
@@ -191,11 +191,12 @@ TEST(DefaultDemuxerTest, SupportsStartStopAndSeekAfterOpen) {
                             dependencies.generation);
 
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
-    EXPECT_TRUE(demuxer.start().has_value());
     EXPECT_TRUE(demuxer.seek(1'000'000).has_value());
     demuxer.stop();
     demuxer.stop();
-    EXPECT_TRUE(demuxer.start().has_value());
+    const auto restarted = demuxer.start();
+    ASSERT_FALSE(restarted.has_value());
+    EXPECT_EQ(restarted.error().code, DemuxerErrorCode::InvalidState);
 }
 
 TEST(DefaultDemuxerTest, ReadsSelectedAudioPacketsAndSkipsOtherStreams) {
@@ -410,6 +411,55 @@ TEST(DefaultDemuxerTest, StopWakesWorkerWaitingForAFullAudioQueue) {
     const auto* first_packet = packet_value(*first_item);
     ASSERT_NE(first_packet, nullptr);
     EXPECT_EQ(packet_marker(*first_packet), 1U);
+}
+
+TEST(DefaultDemuxerTest, DiscardsPendingPacketWhenStoppedAndRequiresReopen) {
+    auto backend = std::make_shared<FakeBackend>();
+    BackendProbeResult probe;
+    probe.streams = {
+        StreamDescriptor{.id = {2}, .timing = {},
+                         .config = AudioCodecConfig{.common = {}, .sample_rate = 48000, .channels = 2}},
+    };
+    backend->result = probe;
+    backend->packets.push_back(packet(2, 1));
+    backend->packets.push_back(packet(2, 2));
+
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto audio_queue = std::make_shared<AudioPacketQueue>(notifier, 1);
+    auto generation = std::make_shared<Generation>();
+    DefaultDemuxer demuxer(backend, audio_queue, notifier, generation);
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&backend, &audio_queue] {
+        return backend->read_calls.load() >= 2 && audio_queue->full();
+    }));
+
+    demuxer.stop();
+
+    auto queued_item = audio_queue->try_pop();
+    ASSERT_TRUE(queued_item.has_value());
+    const auto* queued_packet = packet_value(*queued_item);
+    ASSERT_NE(queued_packet, nullptr);
+    EXPECT_EQ(packet_marker(*queued_packet), 1U);
+
+    const auto restarted = demuxer.start();
+    ASSERT_FALSE(restarted.has_value());
+    EXPECT_EQ(restarted.error().code, DemuxerErrorCode::InvalidState);
+
+    demuxer.close();
+    backend->packets.push_back(packet(2, 3));
+    ASSERT_TRUE(demuxer.open("movie-again.mp4").has_value());
+    ASSERT_TRUE(demuxer.start().has_value());
+    ASSERT_TRUE(wait_until([&audio_queue] {
+        return audio_queue->size() >= 1;
+    }));
+
+    auto new_item = audio_queue->try_pop();
+    ASSERT_TRUE(new_item.has_value());
+    const auto* new_packet = packet_value(*new_item);
+    ASSERT_NE(new_packet, nullptr);
+    EXPECT_EQ(packet_marker(*new_packet), 3U);
+    EXPECT_EQ(new_packet->generation(), 2U);
 }
 
 } // namespace

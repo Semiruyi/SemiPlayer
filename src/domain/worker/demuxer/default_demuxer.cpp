@@ -162,6 +162,13 @@ std::expected<void, DemuxerError> DefaultDemuxer::start() {
             .backend_error = std::nullopt,
         });
     }
+    if (state_ == State::Stopped) {
+        return std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "demuxer was stopped; reopen before starting again",
+            .backend_error = std::nullopt,
+        });
+    }
 
     const bool started = transition_locked(Event::StartRequested);
     assert(started);
@@ -203,15 +210,21 @@ void DefaultDemuxer::stop() noexcept {
     std::thread worker;
     {
         std::lock_guard lock(mutex_);
-        if (state_ == State::Closed || !worker_.joinable()) {
+        if (state_ == State::Closed) {
             return;
         }
 
         if (state_ == State::Reading) {
             const bool stopping = transition_locked(Event::StopRequested);
             assert(stopping);
+        } else if (state_ == State::Ready) {
+            const bool stopped = transition_locked(Event::StopRequested);
+            assert(stopped);
         }
-        worker = std::move(worker_);
+
+        if (worker_.joinable()) {
+            worker = std::move(worker_);
+        }
     }
 
     cv_.notify_one();
@@ -402,10 +415,14 @@ bool DefaultDemuxer::transition_locked(Event event) noexcept {
             state_ = State::Stopping;
             return true;
         }
+        if (state_ == State::Ready) {
+            state_ = State::Stopped;
+            return true;
+        }
         return false;
     case Event::WorkerStopped:
         if (state_ == State::Stopping) {
-            state_ = State::Ready;
+            state_ = State::Stopped;
             return true;
         }
         return false;

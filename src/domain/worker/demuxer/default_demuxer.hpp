@@ -43,6 +43,7 @@ private:
         Ready,
         Reading,
         Stopping,
+        Stopped,
         Exhausted,
         Failed,
     };

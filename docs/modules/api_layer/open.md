@@ -105,9 +105,8 @@ Ready 态 seek(pos):
     handle.resolve(Ok(()))
 ```
 
-真正的 FFmpeg 定位（`av_seek_frame`）推迟到 **play 启动 demuxer 时**——demuxer.start_reading 根据 `target_start_pts` 决定从头读还是从 target 定位读。
-
-这样 demuxer 的活动严格收敛在 play 之后，符合"open/play 才动管道"的整体设计。
+当前 `demuxer.seek()` 只记录目标，尚未执行真正的 FFmpeg 定位（`av_seek_frame`）。
+待 `DemuxerBackend` 增加 seek 契约后，再由 ApiLayer 编排定位、generation 推进和下游 flush。
 
 ---
 
@@ -116,7 +115,7 @@ Ready 态 seek(pos):
 | 操作 | 做什么 | 不做什么 |
 |------|--------|---------|
 | **open** | 打开文件、探测拿 MediaInfo、建各模块上下文、状态=Ready、target_start_pts=0 | 不填水位、不启动管道、不动 demuxer 读 |
-| **play** | 启动 demuxer/decoder（按 target_start_pts 定位）、填到水位、解冻时钟+出声 | 不管打开/探测（open 已做） |
+| **play** | 启动 demuxer/decoder、填到水位、解冻时钟+出声 | 当前不执行 target_start_pts 的 backend 定位；也不管打开/探测（open 已做） |
 
 详见 `play.md`。
 
@@ -139,4 +138,4 @@ Idle ──open()──▶ Ready
 - ❌ 各模块 configure/setup 内部实现 → 各模块文档
 - ❌ play 的冷启动填水位 → play.md
 - ❌ close 的资源清理编排 → close.md
-- ❌ Ready 态 seek 的详细语义（target_start_pts 如何被 play 消费）→ play.md
+- ❌ Ready 态 seek 的详细语义（target_start_pts 如何被未来的 seek 契约消费）→ play.md
