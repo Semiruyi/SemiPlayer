@@ -37,14 +37,35 @@ TEST(AudioFrameStore, PreservesFifoOrderAndGeneration) {
 
     auto first = store.try_pop();
     ASSERT_TRUE(first.has_value());
-    EXPECT_EQ(frame_marker(*first), 1U);
-    EXPECT_EQ(first->generation(), 10U);
+    const auto* first_frame = std::get_if<AudioFrame>(&*first);
+    ASSERT_NE(first_frame, nullptr);
+    EXPECT_EQ(frame_marker(*first_frame), 1U);
+    EXPECT_EQ(first_frame->generation(), 10U);
 
     auto second = store.try_pop();
     ASSERT_TRUE(second.has_value());
-    EXPECT_EQ(frame_marker(*second), 2U);
-    EXPECT_EQ(second->generation(), 11U);
+    const auto* second_frame = std::get_if<AudioFrame>(&*second);
+    ASSERT_NE(second_frame, nullptr);
+    EXPECT_EQ(frame_marker(*second_frame), 2U);
+    EXPECT_EQ(second_frame->generation(), 11U);
     EXPECT_TRUE(store.empty());
+}
+
+TEST(AudioFrameStore, PreservesEndOfInputAfterPcm) {
+    AudioFrameStore store(std::make_shared<infra::DefaultNotifier>(), 2);
+    ASSERT_EQ(store.try_push(make_frame(1, 10)), AudioFramePushResult::Accepted);
+    ASSERT_EQ(store.try_push(AudioFrameEndOfInput{.generation = 10}),
+              AudioFramePushResult::Accepted);
+
+    auto frame = store.try_pop();
+    ASSERT_TRUE(frame.has_value());
+    EXPECT_NE(std::get_if<AudioFrame>(&*frame), nullptr);
+
+    auto end_of_input = store.try_pop();
+    ASSERT_TRUE(end_of_input.has_value());
+    const auto* marker = std::get_if<AudioFrameEndOfInput>(&*end_of_input);
+    ASSERT_NE(marker, nullptr);
+    EXPECT_EQ(marker->generation, 10U);
 }
 
 TEST(AudioFrame, ChecksGeneration) {
@@ -58,18 +79,22 @@ TEST(AudioFrameStore, FullPushDoesNotConsumeFrame) {
     AudioFrameStore store(std::make_shared<infra::DefaultNotifier>(), 1);
     ASSERT_EQ(store.try_push(make_frame(1, 10)), AudioFramePushResult::Accepted);
 
-    AudioFrame rejected = make_frame(2, 11);
+    AudioFrameStoreItem rejected = make_frame(2, 11);
     EXPECT_EQ(store.try_push(std::move(rejected)), AudioFramePushResult::Full);
-    EXPECT_EQ(frame_marker(rejected), 2U);
-    EXPECT_EQ(rejected.generation(), 11U);
+    const auto* rejected_frame = std::get_if<AudioFrame>(&rejected);
+    ASSERT_NE(rejected_frame, nullptr);
+    EXPECT_EQ(frame_marker(*rejected_frame), 2U);
+    EXPECT_EQ(rejected_frame->generation(), 11U);
 }
 
 TEST(AudioFrameStore, ZeroCapacityStoreAlwaysReportsFull) {
     AudioFrameStore store(std::make_shared<infra::DefaultNotifier>(), 0);
-    AudioFrame frame = make_frame(1, 10);
+    AudioFrameStoreItem frame = make_frame(1, 10);
 
     EXPECT_EQ(store.try_push(std::move(frame)), AudioFramePushResult::Full);
-    EXPECT_EQ(frame_marker(frame), 1U);
+    const auto* rejected_frame = std::get_if<AudioFrame>(&frame);
+    ASSERT_NE(rejected_frame, nullptr);
+    EXPECT_EQ(frame_marker(*rejected_frame), 1U);
     EXPECT_TRUE(store.full());
 }
 
@@ -115,7 +140,9 @@ TEST(AudioFrameStore, ExposesIndependentProducerAndConsumerPorts) {
     EXPECT_EQ(sink.try_push(make_frame(1, 10)), AudioFramePushResult::Accepted);
     auto frame = source.try_pop();
     ASSERT_TRUE(frame.has_value());
-    EXPECT_EQ(frame_marker(*frame), 1U);
+    const auto* audio_frame = std::get_if<AudioFrame>(&*frame);
+    ASSERT_NE(audio_frame, nullptr);
+    EXPECT_EQ(frame_marker(*audio_frame), 1U);
 }
 
 } // namespace

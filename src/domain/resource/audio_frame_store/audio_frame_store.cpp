@@ -9,16 +9,16 @@ AudioFrameStore::AudioFrameStore(std::shared_ptr<infra::Notifier> notifier,
                                  std::size_t capacity)
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
-AudioFramePushResult AudioFrameStore::try_push(AudioFrame&& frame) {
+AudioFramePushResult AudioFrameStore::try_push(AudioFrameStoreItem&& item) {
     bool should_notify_not_empty = false;
     {
         std::lock_guard lock(mutex_);
-        if (frames_.size() >= capacity_) {
+        if (items_.size() >= capacity_) {
             return AudioFramePushResult::Full;
         }
 
-        should_notify_not_empty = frames_.empty();
-        frames_.push_back(std::move(frame));
+        should_notify_not_empty = items_.empty();
+        items_.push_back(std::move(item));
     }
 
     if (should_notify_not_empty) {
@@ -27,39 +27,39 @@ AudioFramePushResult AudioFrameStore::try_push(AudioFrame&& frame) {
     return AudioFramePushResult::Accepted;
 }
 
-std::optional<AudioFrame> AudioFrameStore::try_pop() {
-    std::optional<AudioFrame> frame;
+std::optional<AudioFrameStoreItem> AudioFrameStore::try_pop() {
+    std::optional<AudioFrameStoreItem> item;
     bool should_notify_not_full = false;
     {
         std::lock_guard lock(mutex_);
-        if (frames_.empty()) {
+        if (items_.empty()) {
             return std::nullopt;
         }
 
-        should_notify_not_full = frames_.size() >= capacity_;
-        frame.emplace(std::move(frames_.front()));
-        frames_.pop_front();
+        should_notify_not_full = items_.size() >= capacity_;
+        item.emplace(std::move(items_.front()));
+        items_.pop_front();
     }
 
     if (should_notify_not_full) {
         notify_not_full();
     }
-    return frame;
+    return item;
 }
 
 bool AudioFrameStore::empty() const noexcept {
     std::lock_guard lock(mutex_);
-    return frames_.empty();
+    return items_.empty();
 }
 
 bool AudioFrameStore::full() const noexcept {
     std::lock_guard lock(mutex_);
-    return frames_.size() >= capacity_;
+    return items_.size() >= capacity_;
 }
 
 std::size_t AudioFrameStore::size() const noexcept {
     std::lock_guard lock(mutex_);
-    return frames_.size();
+    return items_.size();
 }
 
 void AudioFrameStore::notify_not_empty() noexcept {

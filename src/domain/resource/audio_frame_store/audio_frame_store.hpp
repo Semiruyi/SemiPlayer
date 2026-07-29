@@ -26,8 +26,8 @@ public:
     AudioFrameStore(AudioFrameStore&&) = delete;
     AudioFrameStore& operator=(AudioFrameStore&&) = delete;
 
-    [[nodiscard]] AudioFramePushResult try_push(AudioFrame&& frame) override;
-    [[nodiscard]] std::optional<AudioFrame> try_pop() override;
+    [[nodiscard]] AudioFramePushResult try_push(AudioFrameStoreItem&& item) override;
+    [[nodiscard]] std::optional<AudioFrameStoreItem> try_pop() override;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] bool full() const noexcept;
@@ -40,7 +40,7 @@ private:
     std::shared_ptr<infra::Notifier> notifier_;
     const std::size_t capacity_;
     mutable std::mutex mutex_;
-    std::deque<AudioFrame> frames_;
+    std::deque<AudioFrameStoreItem> items_;
 };
 
 } // namespace semi::domain

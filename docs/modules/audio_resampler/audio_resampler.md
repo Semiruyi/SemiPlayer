@@ -14,7 +14,7 @@ AudioResampler 填这个 gap：把解码原始 PCM 转成 miniaudio 能吃的格
 ## 定位
 
 ```
-AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen, 解码原始PCM)
+AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen, 解码原始PCM / EndOfInput)
                                         →[AudioResampler]→ AudioResampledStore(gen, miniaudio目标格式PCM) →[AudioSink]→ 声卡
 ```
 
@@ -44,7 +44,7 @@ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen, 解码原始PCM)
 
 **为什么不在 miniaudio 实时线程**：重采样是**有状态的计算**（滤波器历史），`swr_convert` 内部会分配缓冲。miniaudio 实时线程要求零阻塞、零 malloc，放进去是反模式。符合现有架构哲学：**每个工作模块一线程、靠 Store 解耦、miniaudio 实时线程只做 try 取 + 喂声卡（零计算）**。
 
-**节奏**：AudioFrameStore 非空 → Notifier 唤醒 → 取 raw PCM → swr_convert → 推 AudioResampledStore（满则背压 wait）。
+**节奏**：AudioFrameStore 非空 → Notifier 唤醒 → 取 raw PCM → swr_convert → 推 AudioResampledStore（满则背压 wait）。消费到当前 generation 的 `AudioFrameEndOfInput` 后，再 drain `SwrContext`。
 
 ---
 

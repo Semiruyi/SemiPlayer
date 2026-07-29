@@ -10,7 +10,7 @@
 PCM，而不让 FFmpeg 的 `AVCodecContext`、`AVPacket` 或 `AVFrame` 泄漏到领域层。
 
 ```
-AudioPacketQueue(gen) -> [AudioDecoder] -> AudioFrameStore(gen, raw PCM)
+AudioPacketQueue(gen) -> [AudioDecoder] -> AudioFrameStore(gen, raw PCM / EndOfInput)
                                                     |
                                              [AudioResampler]
 ```
@@ -25,7 +25,7 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 | 依赖 | 用途 |
 |---|---|
 | `AudioPacketQueue` | 输入：消费带 generation 的压缩音频包 |
-| `AudioFrameStore` | 输出：生产带 generation 的原始 PCM 帧 |
+| `AudioFrameStore` | 输出：生产带 generation 的原始 PCM 帧和有序结束项 |
 | `Generation` | 与 Demuxer 共享；丢弃旧媒体会话和旧 seek 世代的包，识别当前解码上下文 |
 | `Notifier` | 接收队列/Store 状态变化；发送 Decoder 自身事件 |
 | `AudioDecoderBackend` | 纯解码后端抽象；当前由 FFmpeg 实现 |
@@ -172,21 +172,20 @@ AudioDecoder 从 `AudioPacketQueue` 取到队列项后，worker 必须先检查�
 取到当前世代的 `AudioPacketEndOfInput` 后，不能立即宣告结束：AAC 等 codec 可能仍有内部延迟帧。
 worker 必须先确认结束项之前的普通包已经处理完，再向 Backend
 执行一次 drain（等价于向 FFmpeg 送空 packet 并持续 receive frame），将当前 generation 的
-剩余 PCM 全部写入 `AudioFrameStore`，然后发送：
+剩余 PCM 全部写入 `AudioFrameStore`，然后将结束项写入同一个 FIFO：
 
 ```cpp
-struct AudioDecoderEndOfStream {
+struct AudioFrameEndOfInput {
     Generation::Value generation;
-};
-
-struct AudioDecoderError {
-    AudioDecoderBackendError error;
 };
 ```
 
-`AudioDecoderEndOfStream` 由 AudioResampler 接收，以便它继续 drain 自己的 `SwrContext`。
-它表示 Decoder 的输出已经结束，不等同于 Demuxer 的输入结束；最终播放结束由输出链路确认。
-错误也经 Notifier 上报；worker 回到可停止的等待状态，不在通知回调中执行恢复策略。
+`AudioFrameEndOfInput` 受与 PCM 相同的 FIFO 顺序和容量背压约束。AudioResampler 只在消费到
+当前 generation 的结束项后 drain 自己的 `SwrContext`。它表示 Decoder 的输出已经结束，不等同于
+Demuxer 的输入结束；最终播放结束由输出链路确认。
+
+后端失败仍经 Notifier 发送 `AudioDecoderBackendFailure`；worker 回到可停止的等待状态，不在通知
+回调中执行恢复策略。
 
 ## FFmpeg 后端封装
 
@@ -210,11 +209,11 @@ DefaultAudioDecoder (domain worker)
 接口接收 `AudioCodecConfig` 和 `EncodedPacket`，返回纯 `DecodedAudio`；最小能力为：
 
 ```cpp
-configure(config)
-decode(encoded_packet) -> zero or more DecodedAudio
-drain() -> zero or more DecodedAudio
-reset()
-unconfigure()
+configure(config) -> expected<void, AudioDecoderBackendError>
+decode(encoded_packet) -> expected<vector<DecodedAudio>, AudioDecoderBackendError>
+drain() -> expected<vector<DecodedAudio>, AudioDecoderBackendError>
+reset() noexcept
+unconfigure() noexcept
 ```
 
 Backend 不知道队列、generation、线程、Notifier、播放状态或输出设备。

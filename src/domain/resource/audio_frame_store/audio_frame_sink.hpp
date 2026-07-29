@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/resource/audio_frame_store/audio_frame.hpp"
+#include "domain/resource/audio_frame_store/audio_frame_store_item.hpp"
 
 #include <cstdint>
 
@@ -11,8 +11,8 @@ enum class AudioFramePushResult : std::uint8_t {
     Full,
 };
 
-// Producer-side port for delivering decoded audio frames. The sink must not
-// consume the frame when it reports Full.
+// Producer-side port for delivering ordered PCM and end-of-input items. The
+// sink must not consume the item when it reports Full.
 class AudioFrameSink {
 public:
     virtual ~AudioFrameSink() = default;
@@ -22,7 +22,7 @@ public:
     AudioFrameSink(AudioFrameSink&&) = delete;
     AudioFrameSink& operator=(AudioFrameSink&&) = delete;
 
-    [[nodiscard]] virtual AudioFramePushResult try_push(AudioFrame&& frame) = 0;
+    [[nodiscard]] virtual AudioFramePushResult try_push(AudioFrameStoreItem&& item) = 0;
 
 protected:
     AudioFrameSink() = default;
