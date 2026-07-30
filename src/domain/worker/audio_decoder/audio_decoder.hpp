@@ -40,7 +40,6 @@ public:
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
     [[nodiscard]] virtual std::expected<void, AudioDecoderError> start() = 0;
-    virtual void seek(std::int64_t target_us) noexcept = 0;
     virtual void stop() noexcept = 0;
     virtual void unconfigure() noexcept = 0;
 

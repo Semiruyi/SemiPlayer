@@ -24,15 +24,15 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 
 | 依赖 | 用途 |
 |---|---|
-| `AudioPacketQueue` | 输入：消费带 generation 的压缩音频包 |
-| `AudioFrameStore` | 输出：生产带 generation 的原始 PCM 帧和有序结束项 |
+| `AudioPacketSource` | 输入端口：消费带 generation 的压缩音频包和有序结束项 |
+| `AudioFrameSink` | 输出端口：生产带 generation 的原始 PCM 帧和有序结束项 |
 | `Generation` | 与 Demuxer 共享；丢弃旧媒体会话和旧 seek 世代的包，识别当前解码上下文 |
 | `Notifier` | 接收队列/Store 状态变化；发送 Decoder 自身事件 |
 | `AudioDecoderBackend` | 纯解码后端抽象；当前由 FFmpeg 实现 |
 
 ### 谁依赖 AudioDecoder
 
-- **ApiLayer**：在 `open/play/seek/close` 编排中调用其控制接口。
+- **ApiLayer**：在 `open/play/close` 编排中调用其控制接口。
 - **IoCContainer**：装配 `AudioDecoder` 与其后端。
 - **测试**：以假 Backend 验证线程、背压、generation 与命令语义。
 
@@ -95,7 +95,6 @@ public:
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
     virtual std::expected<void, AudioDecoderError> start() = 0;
-    virtual void seek(std::int64_t target_us) noexcept = 0;
     virtual void stop() noexcept = 0;
     virtual void unconfigure() noexcept = 0;
 };
@@ -103,9 +102,8 @@ public:
 
 | 方法 | 调用时机 | 语义 |
 |---|---|---|
-| `configure` | `open` | 建立解码上下文，状态进入 Idle；不启动线程、不读包 |
+| `configure` | `open` | 建立解码上下文，状态进入 Configured；不启动线程、不读包 |
 | `start` | `play` | 按需创建 worker，开始消费队列；重复调用幂等 |
-| `seek` | Demuxer 成功定位并推进 generation 后 | 提交目标 PTS，唤醒 worker 执行 flush 与 PTS 过滤 |
 | `stop` | `close/shutdown` | 停止并 join worker；不释放解码器上下文 |
 | `unconfigure` | `close` 的资源释放阶段 | 仅在停止后释放解码器上下文，回到 Constructed |
 
@@ -116,20 +114,22 @@ AudioDecoder；恢复播放后，`AudioFrameStore` 变为非满并唤醒 Decoder
 ## 状态机与线程
 
 ```
-Constructed --configure()--> Idle --start()--> Running
-     ^                         ^                 |
-     |                         |                 +-- 输入空 / 输出满：wait
-     +--unconfigure()-- Stopped <--stop()--------+
+Constructed --configure()--> Configured --start()--> Running
+     ^                              ^                 |
+     |                              |                 +-- 输入空 / 输出满：wait
+     +--unconfigure()-- Configured <-- Stopping <--stop()
+                                      Running --backend failure--> Failed
+                                      Failed --unconfigure()--> Constructed
 ```
 
 - `Constructed`：没有媒体相关解码器上下文，未起线程。
-- `Idle`：已配置解码器，尚未启动 worker。
+- `Configured`：已配置解码器，尚未启动 worker，或 worker 已停止。
 - `Running`：worker 存在；它可能正在解码、等待输入或等待输出空间。
-- `Stopped`：worker 已 join，保留配置，可再次 `start`；`unconfigure` 后回到
-  `Constructed`。
+- `Stopping`：收到停止请求，等待 worker 完成当前 backend 调用并 join。
+- `Failed`：worker 遇到 backend 或运行时错误；必须 `unconfigure` 后才能重新配置。
 
-AudioDecoder 的 worker 生命周期是独立契约：首次 `start` 时创建，`stop` 后保留配置并可再次
-`start`；输入为空、输出满和暂停都只是 wait 条件，不是独立状态。不要直接套用 Demuxer
+AudioDecoder 的 worker 生命周期是独立契约：首次 `start` 时创建，`stop` 后回到 Configured
+并保留配置，可再次 `start`；输入为空、输出满和暂停都只是 wait 条件，不是独立状态。不要直接套用 Demuxer
 的“stop 终止当前媒体会话、必须重新 open”语义。
 
 ## 背压与通知
@@ -145,7 +145,7 @@ AudioDecoder 订阅：
 - `AudioQueueNotEmpty`，输入可读时唤醒；普通 `AudioPacket` 和
   `AudioPacketEndOfInput` 共用这条有序输入通道；
 - `AudioFrameStoreNotFull`，输出可写时唤醒；
-- 自身 `stop/seek` 控制信号。
+- 自身 `stop` 控制信号。
 
 Notifier 回调只设置原子标志并 `cv.notify_one()`，不解码、不持有重锁、不等待其他线程。
 
@@ -153,18 +153,17 @@ Notifier 回调只设置原子标志并 `cv.notify_one()`，不解码、不持�
 
 IoC 创建一个共享的 `Generation` 实例并注入 Demuxer、AudioDecoder 及后续管道模块。
 每次成功打开新的媒体会话时，Demuxer 先推进 Generation；成功完成定位后也才推进
-Generation。随后 ApiLayer 调用 `audio_decoder.seek(target_us)`；
-Decoder 将 `{generation, target_us}` 作为不可撕裂的整体快照提交给 worker。
+Generation。AudioDecoder 不提供 `seek()`；worker 在处理后续输入时自动发现 generation
+变化并重置解码上下文。
 
-worker 处理该快照时：
+worker 观察到 generation 变化时：
 
 1. 丢弃队列中的旧世代包；下游消费者也会丢弃旧世代 `AudioFrame`。
 2. 清除 FFmpeg 解码器内部残留，且**不输出** flush 前的旧 PCM。
 3. 只对新世代包解码。
-4. 丢弃 `pts_us < target_us` 的同次 seek 目标前 PCM，直到到达目标位置。
-
-`seek` 不得在 ApiLayer 线程直接调用 Backend 的 FFmpeg flush，因为 worker 可能正在访问
-同一个解码器上下文。控制面只提交快照并唤醒 worker；FFmpeg 上下文始终由 worker 独占。
+因此 ApiLayer 不需要向 AudioDecoder 转发 seek 命令，FFmpeg 上下文的 reset 始终由
+worker 独占执行。generation 负责隔离旧数据；目标 PTS 过滤若以后需要，应另行设计数据
+契约，不通过 AudioDecoder 的公开 `seek()` 方法完成。
 
 ## EOF 与错误
 
@@ -201,7 +200,7 @@ DefaultAudioDecoder (domain worker)
 ### `DefaultAudioDecoder` 的职责
 
 - 管理 worker、cv、状态机、背压和 Notifier 订阅。
-- 检查 generation，执行 seek 控制快照与 PTS 过滤。
+- 检查 generation，在世代变化时重置 backend 并丢弃旧数据。
 - 将 Backend 返回的 `DecodedAudio` 包装成 `AudioFrame` 并推入 Store。
 - 绝不包含 `AV*` 类型或调用 FFmpeg API。
 
@@ -240,7 +239,7 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 ## 测试范围
 
 - `DefaultAudioDecoder`：configure/start/stop 幂等、输入空等待、输出满背压、stop 唤醒、
-  generation 丢弃、seek PTS 过滤、EOF drain 与错误事件。
+  generation 丢弃与 backend reset、EOF drain 与错误事件。
 - `FfmpegAudioDecoderBackend`：真实媒体 fixture 的配置、解码 PCM 格式与 PTS、drain、
   无效 codec/extradata 的错误映射。
 - 端到端：Demuxer -> AudioPacketQueue -> AudioDecoder -> AudioFrameStore，验证包与帧的
@@ -251,4 +250,4 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 - `AudioFrameStore` 当前采用有界 FIFO + `mutex`；其具体资源实现独立于 AudioDecoder。
 - 不实现 `swr_convert`、输出格式协商或 miniaudio；归 AudioResampler / AudioSink。
 - 不实现设备音量、音频时钟或 Flutter 回调。
-- 不在本阶段扩展真实 seek 的 DemuxerBackend 契约；Decoder 已定义其在定位成功后的响应。
+- 不在本阶段扩展真实 seek 的 DemuxerBackend 契约；Decoder 通过 generation 变化自动响应。

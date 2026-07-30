@@ -1,2 +1,3 @@
-# AudioDecoder currently defines header-only contracts. Its implementation is
-# added here when the domain worker is introduced.
+target_sources(semi_player_core PRIVATE
+    default_audio_decoder.cpp
+)
