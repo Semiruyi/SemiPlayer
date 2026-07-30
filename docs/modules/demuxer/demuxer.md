@@ -4,7 +4,8 @@
 
 `Demuxer` 是 ApiLayer 使用的解封装模块。`DefaultDemuxer` 通过
 `DemuxerBackend` 打开、探测和读取媒体，并把当前选中音频流的包按顺序写入
-`AudioPacketSink`。上层不接触 FFmpeg 的 `AV*` 类型。
+`AudioPacketSink`。上层不接触 FFmpeg 的 `AV*` 类型；压缩包 payload 在 demuxer
+边界复制为纯值数据后才进入队列，不延长 `AVPacket` 的生命周期。
 
 当前实现：
 

@@ -3,17 +3,14 @@
 #include "contracts/demuxer/packet/encoded_packet.hpp"
 #include "domain/resource/generation/generation.hpp"
 
-#include <memory>
-
 namespace semi::domain {
 
 // One encoded audio packet in the playback pipeline. Technical media data is
-// owned by the backend-neutral contract; generation is its sole domain datum.
+// represented by a backend-neutral value; generation is its sole domain datum.
 class AudioPacket final {
 public:
-    AudioPacket(
-        std::unique_ptr<contracts::demuxer::packet::EncodedPacket> encoded_packet,
-        Generation::Value generation) noexcept;
+    AudioPacket(contracts::demuxer::packet::EncodedPacket encoded_packet,
+                Generation::Value generation) noexcept;
 
     ~AudioPacket() = default;
 
@@ -26,7 +23,7 @@ public:
     [[nodiscard]] const contracts::demuxer::packet::EncodedPacket& encoded() const noexcept;
 
 private:
-    std::unique_ptr<contracts::demuxer::packet::EncodedPacket> encoded_packet_;
+    contracts::demuxer::packet::EncodedPacket encoded_packet_;
     Generation::Value generation_;
 };
 

@@ -5,16 +5,13 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
-#include <memory>
 #include <optional>
-#include <span>
 #include <thread>
 #include <utility>
 
@@ -50,37 +47,15 @@ public:
     std::atomic_int read_calls{0};
 };
 
-class TestEncodedPacket final : public contracts::demuxer::packet::EncodedPacket {
-public:
-    explicit TestEncodedPacket(std::uint8_t marker) : marker_(marker) {
-        payload_[0] = std::byte{marker};
-    }
-
-    [[nodiscard]] std::span<const std::byte> payload() const noexcept override {
-        return payload_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> pts_us() const noexcept override {
-        return marker_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> dts_us() const noexcept override {
-        return marker_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> duration_us() const noexcept override {
-        return 1'000;
-    }
-
-private:
-    std::uint8_t marker_;
-    std::array<std::byte, 1> payload_{std::byte{0}};
-};
-
 contracts::demuxer::BackendReadResult packet(std::uint32_t stream_id, std::uint8_t marker) {
     return contracts::demuxer::BackendPacket{
         .stream_id = {stream_id},
-        .packet = std::make_unique<TestEncodedPacket>(marker),
+        .packet = {
+            .payload = {std::byte{marker}},
+            .pts_us = marker,
+            .dts_us = marker,
+            .duration_us = 1'000,
+        },
     };
 }
 
@@ -96,7 +71,7 @@ bool wait_until(const std::function<bool()>& predicate) {
 }
 
 std::uint8_t packet_marker(const AudioPacket& packet_value) {
-    return std::to_integer<std::uint8_t>(packet_value.encoded().payload().front());
+    return std::to_integer<std::uint8_t>(packet_value.encoded().payload.front());
 }
 
 const AudioPacket* packet_value(const AudioPacketQueueItem& item) noexcept {

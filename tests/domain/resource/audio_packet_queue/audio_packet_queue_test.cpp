@@ -1,12 +1,10 @@
 #include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <span>
 #include <utility>
 
 #include <gtest/gtest.h>
@@ -14,48 +12,18 @@
 namespace semi::domain {
 namespace {
 
-class TestEncodedPacket final : public contracts::demuxer::packet::EncodedPacket {
-public:
-    explicit TestEncodedPacket(std::uint8_t marker, bool* destroyed = nullptr)
-        : marker_(marker), destroyed_(destroyed) {
-        payload_[0] = std::byte{marker};
-    }
-
-    ~TestEncodedPacket() override {
-        if (destroyed_ != nullptr) {
-            *destroyed_ = true;
-        }
-    }
-
-    [[nodiscard]] std::span<const std::byte> payload() const noexcept override {
-        return payload_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> pts_us() const noexcept override {
-        return marker_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> dts_us() const noexcept override {
-        return marker_;
-    }
-
-    [[nodiscard]] std::optional<std::int64_t> duration_us() const noexcept override {
-        return 1'000;
-    }
-
-private:
-    std::uint8_t marker_;
-    bool* destroyed_;
-    std::array<std::byte, 1> payload_{std::byte{0x01}};
-};
-
-AudioPacket make_packet(std::uint8_t marker, Generation::Value generation,
-                        bool* destroyed = nullptr) {
-    return AudioPacket(std::make_unique<TestEncodedPacket>(marker, destroyed), generation);
+AudioPacket make_packet(std::uint8_t marker, Generation::Value generation) {
+    return AudioPacket({
+                           .payload = {std::byte{marker}},
+                           .pts_us = marker,
+                           .dts_us = marker,
+                           .duration_us = 1'000,
+                       },
+                       generation);
 }
 
 std::uint8_t packet_marker(const AudioPacket& packet) {
-    return std::to_integer<std::uint8_t>(packet.encoded().payload().front());
+    return std::to_integer<std::uint8_t>(packet.encoded().payload.front());
 }
 
 const AudioPacket* packet_value(const AudioPacketQueueItem& item) noexcept {
@@ -148,16 +116,13 @@ TEST(AudioPacketQueue, FullPushDoesNotConsumePacket) {
     EXPECT_EQ(rejected_packet->generation(), 11U);
 }
 
-TEST(AudioPacketQueue, ClearReleasesQueuedPackets) {
-    bool destroyed = false;
+TEST(AudioPacketQueue, ClearDiscardsQueuedPackets) {
     AudioPacketQueue queue(std::make_shared<infra::DefaultNotifier>(), 1);
-    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10, &destroyed)}),
+    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
               AudioPacketPushResult::Accepted);
-    ASSERT_FALSE(destroyed);
 
     queue.clear();
 
-    EXPECT_TRUE(destroyed);
     EXPECT_TRUE(queue.empty());
 }
 

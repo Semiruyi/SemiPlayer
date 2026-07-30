@@ -103,11 +103,10 @@ TEST(FfmpegDemuxerBackendTest, ReadsPacketsAndReportsEndOfStream) {
         const auto* packet =
             std::get_if<semi::contracts::demuxer::BackendPacket>(&*result);
         ASSERT_NE(packet, nullptr);
-        ASSERT_NE(packet->packet, nullptr);
         EXPECT_EQ(packet->stream_id.value, 0U);
         if (packet_count == 0) {
-            EXPECT_EQ(packet->packet->payload().size(), 4U);
-            EXPECT_TRUE(packet->packet->pts_us().has_value());
+            EXPECT_EQ(packet->packet.payload.size(), 4U);
+            EXPECT_TRUE(packet->packet.pts_us.has_value());
         }
         ++packet_count;
     }

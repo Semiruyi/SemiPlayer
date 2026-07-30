@@ -1,5 +1,4 @@
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
-#include "infrastructure/ffmpeg/demuxer/packet/ffmpeg_encoded_packet.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -10,6 +9,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <new>
 #include <utility>
 
 namespace semi::infra::ffmpeg::demuxer {
@@ -19,6 +19,7 @@ using contracts::demuxer::BackendProbeResult;
 using contracts::demuxer::BackendReadResult;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
+using contracts::demuxer::packet::EncodedPacket;
 using contracts::media::AudioCodecConfig;
 using contracts::media::CodecCommon;
 using contracts::media::OtherStreamConfig;
@@ -72,6 +73,61 @@ CodecCommon make_common(const AVCodecParameters& parameters) {
 
 std::optional<std::int64_t> optional_timestamp(std::int64_t value) {
     return value == AV_NOPTS_VALUE ? std::nullopt : std::optional{value};
+}
+
+bool valid_time_base(AVRational time_base) noexcept {
+    return time_base.num > 0 && time_base.den > 0;
+}
+
+std::optional<std::int64_t> rescale_timestamp(std::int64_t value, AVRational time_base) {
+    if (value == AV_NOPTS_VALUE) {
+        return std::nullopt;
+    }
+    return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
+}
+
+std::optional<std::int64_t> rescale_duration(std::int64_t value, AVRational time_base) {
+    if (value == AV_NOPTS_VALUE || value == 0) {
+        return std::nullopt;
+    }
+    return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
+}
+
+std::expected<EncodedPacket, DemuxerBackendError>
+copy_packet(const AVPacket& packet, AVRational time_base) {
+    if (!valid_time_base(time_base)) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = AVERROR(EINVAL),
+            .message = "FFmpeg packet stream has an invalid time base",
+        });
+    }
+    if (packet.size < 0 || (packet.size > 0 && packet.data == nullptr)) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = AVERROR_INVALIDDATA,
+            .message = "FFmpeg packet has invalid payload data",
+        });
+    }
+
+    try {
+        EncodedPacket result{
+            .pts_us = rescale_timestamp(packet.pts, time_base),
+            .dts_us = rescale_timestamp(packet.dts, time_base),
+            .duration_us = rescale_duration(packet.duration, time_base),
+        };
+        if (packet.size > 0) {
+            const auto* begin = reinterpret_cast<const std::byte*>(packet.data);
+            result.payload.assign(begin, begin + packet.size);
+        }
+        return result;
+    } catch (const std::bad_alloc&) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Read,
+            .native_code = AVERROR(ENOMEM),
+            .message = "failed to copy FFmpeg packet payload",
+        });
+    }
 }
 
 OtherStreamKind other_kind(AVMediaType type) {
@@ -214,16 +270,9 @@ FfmpegDemuxerBackend::read_packet() {
     const auto stream_id = contracts::media::DemuxerStreamId{
         static_cast<std::uint32_t>(packet->stream_index)};
     const AVStream& stream = *impl_->format_context->streams[packet->stream_index];
-    auto encoded = packet::FfmpegEncodedPacket::create(
-        *packet,
-        stream.time_base);
+    auto encoded = copy_packet(*packet, stream.time_base);
     if (!encoded) {
-        const auto error = encoded.error();
-        return std::unexpected(DemuxerBackendError{
-            .operation = DemuxerBackendOperation::Read,
-            .native_code = error.native_code,
-            .message = error.message,
-        });
+        return std::unexpected(std::move(encoded.error()));
     }
 
     contracts::demuxer::BackendPacket result{
