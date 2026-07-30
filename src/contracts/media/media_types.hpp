@@ -51,6 +51,7 @@ enum class AudioSampleFormat : std::uint8_t {
     U8,
     S16,
     S32,
+    S64,
     F32,
     F64,
 };

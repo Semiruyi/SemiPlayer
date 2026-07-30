@@ -57,6 +57,7 @@ enum class AudioSampleFormat {
     U8,
     S16,
     S32,
+    S64,
     F32,
     F64,
 };
@@ -227,6 +228,8 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
   `pkt_timebase` 固定为微秒，避免向领域层泄漏 FFmpeg time base。
 - 通过 `avcodec_send_packet/avcodec_receive_frame` 解码，并复制 AVFrame 数据为
   `DecodedAudio`，包括样本格式、planar 标记、采样率、声道数、每声道样本数与 PTS。
+  复制长度按有效样本数和每样本字节数计算，不包含 FFmpeg 为对齐加入的行尾填充；复制完成后
+  立即复用 AVFrame。
 - `drain()` 送空 packet；`reset()` 调 `avcodec_flush_buffers()`；`unconfigure()` 释放所有
   FFmpeg 资源。
 

@@ -1,4 +1,5 @@
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/ffmpeg_raii.hpp"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -29,14 +30,6 @@ using contracts::media::StreamTiming;
 using contracts::media::SubtitleCodecConfig;
 using contracts::media::TimeBase;
 using contracts::media::VideoCodecConfig;
-
-struct AvPacketDeleter {
-    void operator()(AVPacket* packet) const noexcept {
-        av_packet_free(&packet);
-    }
-};
-
-using AvPacketPtr = std::unique_ptr<AVPacket, AvPacketDeleter>;
 
 std::string ffmpeg_message(int error_code) {
     std::array<char, AV_ERROR_MAX_STRING_SIZE> buffer{};
@@ -112,6 +105,7 @@ copy_packet(const AVPacket& packet, AVRational time_base) {
 
     try {
         EncodedPacket result{
+            .payload = {},
             .pts_us = rescale_timestamp(packet.pts, time_base),
             .dts_us = rescale_timestamp(packet.dts, time_base),
             .duration_us = rescale_duration(packet.duration, time_base),
@@ -188,7 +182,7 @@ StreamDescriptor make_stream_descriptor(const AVStream& stream) {
 } // namespace
 
 struct FfmpegDemuxerBackend::Impl {
-    AVFormatContext* format_context = nullptr;
+    AvFormatInputContextPtr format_context;
 };
 
 FfmpegDemuxerBackend::FfmpegDemuxerBackend() : impl_(std::make_unique<Impl>()) {}
@@ -207,15 +201,15 @@ FfmpegDemuxerBackend::open(std::string_view source) {
     }
 
     const std::string source_copy(source);
-    AVFormatContext* context = nullptr;
-    int status = avformat_open_input(&context, source_copy.c_str(), nullptr, nullptr);
+    AVFormatContext* raw_context = nullptr;
+    int status = avformat_open_input(&raw_context, source_copy.c_str(), nullptr, nullptr);
     if (status < 0) {
         return std::unexpected(make_error(DemuxerBackendOperation::Open, status));
     }
+    AvFormatInputContextPtr context(raw_context);
 
-    status = avformat_find_stream_info(context, nullptr);
+    status = avformat_find_stream_info(context.get(), nullptr);
     if (status < 0) {
-        avformat_close_input(&context);
         return std::unexpected(make_error(DemuxerBackendOperation::Probe, status));
     }
 
@@ -228,7 +222,7 @@ FfmpegDemuxerBackend::open(std::string_view source) {
         result.streams.push_back(make_stream_descriptor(*context->streams[index]));
     }
 
-    impl_->format_context = context;
+    impl_->format_context = std::move(context);
     return result;
 }
 
@@ -250,7 +244,7 @@ FfmpegDemuxerBackend::read_packet() {
         });
     }
 
-    const int status = av_read_frame(impl_->format_context, packet.get());
+    const int status = av_read_frame(impl_->format_context.get(), packet.get());
     if (status == AVERROR_EOF) {
         return contracts::demuxer::BackendEndOfStream{};
     }
@@ -283,8 +277,8 @@ FfmpegDemuxerBackend::read_packet() {
 }
 
 void FfmpegDemuxerBackend::close() noexcept {
-    if (impl_ && impl_->format_context != nullptr) {
-        avformat_close_input(&impl_->format_context);
+    if (impl_) {
+        impl_->format_context.reset();
     }
 }
 
