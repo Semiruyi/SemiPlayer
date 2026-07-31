@@ -171,7 +171,7 @@ ApiLayer 命令线程串行取 Command:
 | 模块 | 构造注入的依赖（`std::shared_ptr`） | 控制来源 / 唤醒 |
 |------|--------------|---------|
 | Notifier | 无（被所有人依赖）| — |
-| Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程调 open()/start()/stop()/seek()/close()；stop 终止当前媒体会话，未入队 pending item 可丢弃，之后必须 close/open；阻塞时在自己的 cv 上等，Notifier 回调唤醒 QueueNotFull |
+| Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程同步调 open()/seek()/close()；open 成功后自动生产，close 终止当前媒体会话，未入队 pending item 可丢弃，Failed 必须 close/open 恢复；阻塞时在自己的 cv 上等，Notifier 回调唤醒 QueueNotFull |
 | VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；查 generation 自 flush；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
 | AudioDecoder | AudioPacketSource, AudioFrameSink, Generation, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/unconfigure()；generation 变化时自 flush；Notifier 唤醒（QueueNotEmpty/StoreNotFull）|
 | AudioResampler | AudioFrameStore, AudioResampledStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；取 AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 AudioResampledStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|

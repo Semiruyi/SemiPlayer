@@ -1,1 +1,1 @@
-target_sources(semi_player_tests PRIVATE demuxer_test.cpp)
+target_sources(semi_player_tests PRIVATE default_demuxer_test.cpp)

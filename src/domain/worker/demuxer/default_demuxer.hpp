@@ -1,22 +1,25 @@
 #pragma once
 
 #include "domain/resource/audio_packet_queue/audio_packet_sink.hpp"
-#include "domain/resource/audio_packet_queue/audio_packet_queue_events.hpp"
 #include "domain/resource/generation/generation.hpp"
-#include "domain/worker/demuxer/demuxer_events.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
-#include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
+#include <variant>
 
 namespace semi::domain {
 
+// The command plane and data plane are added incrementally. This first slice
+// establishes that the worker belongs to the module lifetime, not a media session.
 class DefaultDemuxer final : public Demuxer {
 public:
     DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
@@ -28,85 +31,82 @@ public:
     [[nodiscard]] std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) override;
 
-    [[nodiscard]] std::expected<void, DemuxerError> start() override;
-
-    void stop() noexcept override;
-
     [[nodiscard]] std::expected<void, DemuxerError>
     seek(std::int64_t position_us) override;
 
     void close() noexcept override;
 
 private:
-    enum class State : std::uint8_t {
+    enum class WorkerState : std::uint8_t {
+        Starting,
+        Alive,
+        ShuttingDown,
+        Stopped,
+    };
+
+    enum class SessionState : std::uint8_t {
         Closed,
-        Ready,
-        Reading,
-        Stopping,
-        Stopped,
+        Opening,
+        Running,
         Exhausted,
         Failed,
+        Closing,
     };
 
-    enum class Event : std::uint8_t {
+    enum class WorkerEvent : std::uint8_t {
+        Started,
+        ShutdownRequested,
+        Stopped,
+    };
+
+    enum class SessionEvent : std::uint8_t {
+        OpenRequested,
         OpenSucceeded,
-        StartRequested,
-        WorkerStartFailed,
-        StopRequested,
-        WorkerStopped,
-        InputExhausted,
-        ReadFailed,
+        OpenFailed,
+        SeekSucceeded,
+        SeekFailed,
         CloseRequested,
+        Closed,
+        InputExhausted,
+        BackendFailed,
     };
 
-    enum class WorkAction : std::uint8_t {
-        Stop,
-        RetryPending,
-        ReadBackend,
+    struct OpenCommand {
+        std::string source;
+        std::promise<std::expected<DemuxerOpenResult, DemuxerError>> completion;
     };
 
-    enum class DeliveryResult : std::uint8_t {
-        Accepted,
-        Full,
+    struct SeekCommand {
+        std::int64_t position_us = 0;
+        std::promise<std::expected<void, DemuxerError>> completion;
     };
 
-    enum class WorkerExit : std::uint8_t {
-        Stopped,
-        Exhausted,
-        Failed,
+    struct CloseCommand {
+        std::promise<void> completion;
     };
 
-    struct WorkerSession {
-        Generation::Value generation = 0;
-        std::optional<contracts::media::DemuxerStreamId> audio_stream_id;
-        std::optional<AudioPacketQueueItem> pending_item;
-    };
+    using ControlCommand = std::variant<OpenCommand, SeekCommand, CloseCommand>;
 
     void worker_main() noexcept;
-    [[nodiscard]] WorkAction wait_for_work(bool has_pending_item);
-    [[nodiscard]] std::optional<WorkerExit> retry_pending_item(WorkerSession& session);
-    [[nodiscard]] std::optional<WorkerExit> read_and_route_packet(WorkerSession& session);
-    [[nodiscard]] DeliveryResult submit_or_defer(WorkerSession& session,
-                                                  AudioPacketQueueItem&& item);
-    [[nodiscard]] bool transition_locked(Event event) noexcept;
-    void complete_worker_locked(WorkerExit exit) noexcept;
-    void notify_read_error(DemuxerBackendError error) noexcept;
+    void shutdown_worker() noexcept;
+    void process_command(OpenCommand& command) noexcept;
+    void process_command(SeekCommand& command) noexcept;
+    void process_command(CloseCommand& command) noexcept;
+    [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
+    [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
 
     std::shared_ptr<DemuxerBackend> backend_;
     std::shared_ptr<AudioPacketSink> audio_packet_sink_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<Generation> generation_;
-    std::shared_ptr<infra::Notifier::Subscription> audio_queue_not_full_subscription_;
 
-    mutable std::mutex mutex_;
+    std::mutex mutex_;
     std::condition_variable cv_;
+    std::deque<ControlCommand> commands_;
     std::thread worker_;
-    State state_ = State::Closed;
-    bool worker_running_ = false;
-    std::atomic_bool queue_not_full_hint_{false};
-
+    WorkerState worker_state_ = WorkerState::Starting;
+    SessionState session_state_ = SessionState::Closed;
     std::optional<contracts::media::DemuxerStreamId> audio_stream_id_;
-    std::optional<std::int64_t> pending_seek_position_us_;
 };
 
 } // namespace semi::domain

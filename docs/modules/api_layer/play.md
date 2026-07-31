@@ -5,8 +5,8 @@
 
 ## Context
 
-- **open** 准备好播放前提（除数据）：探测 + 配置解码器、状态=Ready，管道是"冷的"。
-- **play** 让数据流动起来：冷启动管道、（首次）填到水位、解冻时钟 + 出声出画。
+- **open** 准备好播放前提：探测 + 配置解码器、状态=Ready；Demuxer 已开始生产，队列按背压填充。
+- **play** 启动下游消费：首次填到水位、解冻时钟 + 出声出画。
 - **pause** 冻结播放：切静音、冻结时钟、停显示，但**不拆管道**——下游停消费后靠背压自然停上游，使 resume 是热的。
 
 首次 play 有冷启动延迟（队列从空开始填）；pause 后再 play 是热启动（管道还在、队列有数据）。
@@ -25,7 +25,6 @@ void handle_play():
         // 视同冷启动流程 (见下)
 
     // ② 启动管道 (从上游到下游)
-    demuxer.start()                             // 开始解封装, 填 PacketQueue
     video_decoder.start()                      // 开始解码
     audio_decoder.start()
 
@@ -46,8 +45,8 @@ void handle_play():
 
 ### 起始位置
 
-当前 `DefaultDemuxer::start()` 只启动读包，不消费 `target_start_pts`，也不执行
-FFmpeg 定位。真实 seek 和起始位置定位待 `DemuxerBackend` 增加 seek 契约后实现。
+Demuxer 在 `open()` 成功后自动启动读包，不由 play 单独启动。起始位置定位由
+`seek()` 命令完成，具体 backend 定位能力待 `DemuxerBackend` 契约完善后实现。
 
 ### "等水位"的实现要点
 
@@ -88,7 +87,6 @@ void handle_pause():
 
 | 步骤 | 模块方法 | 高层职责 | 内部细节归属 |
 |------|---------|---------|------------|
-| ② | `demuxer.start` | 启动解封装线程并填 PacketQueue；当前不执行定位 | demuxer.md |
 | ② | `video_decoder.start` | 启动视频解码线程，填 VideoFrameStore | video_decoder.md |
 | ② | `audio_decoder.start` | 启动音频解码线程，填 AudioFrameStore | audio_decoder.md |
 | ③ | 水位等待 | 等 AudioFrameStore/VideoFrameStore 达水位（仅冷启动）| ApiLoop 内部 |
@@ -122,8 +120,8 @@ pause 不主动停 demuxer/decoder 线程。下游停消费→队列满→上游
 pause 时记录暂停时刻，freeze 时钟（PTS 不再推进）。resume 时把暂停时长累加进时钟偏移基准，保证 PTS 连续不跳。详见 audio_clock.md（待设计）。
 
 ### Ended 态再 play 从头
-当前 Demuxer 在 `Exhausted` 后不能直接 `start()`；播放到结尾后重新播放需要由 ApiLayer
-先完成当前媒体的 close，再重新 open，之后才能启动新的读包会话。
+当前 Demuxer 在 `Exhausted` 或 `Failed` 后不能继续生产；播放到结尾或发生错误后，
+需要由 ApiLayer 先完成当前媒体的 close，再重新 open，之后 Demuxer 会自动开始新的读包会话。
 
 ---
 

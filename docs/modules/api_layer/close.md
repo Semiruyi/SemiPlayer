@@ -33,13 +33,10 @@ void handle_close():
     audio_decoder.stop()
     audio_resampler.stop()               // 停重采样线程 (在 audio_decoder 之后, audio_sink 之前)
 
-    // ③ 停 demux 线程 (并等退出)
-    demuxer.stop()
-
-    // ④ 释放媒体相关资源 (模块对象留着, 只释放媒体上下文)
+    // ③ 关闭 demux 会话并释放媒体相关资源 (模块对象留着)
     // 共享队列不主动 clear；stop 可能丢弃 demuxer 尚未入队的 pending item。
     // 下一次 open 推进 generation，消费者丢弃旧项
-    demuxer.close()                      // 关文件, 释放 AVFormatContext
+    demuxer.close()                      // 停止会话、关文件, 释放 AVFormatContext
     video_decoder.unconfigure()          // 释放解码器实例 (configure 的逆)
     audio_decoder.unconfigure()
     audio_resampler.unconfigure()        // 释放 SwrContext (configure 的逆)
@@ -109,12 +106,11 @@ close 不调用队列的 `clear()`。队列项携带 generation，消费者在�
 | ① | `video_sync.stop` | 停止贴帧 | video_sync.md |
 | ② | `video_decoder.stop` | 停视频解码线程，等退出 | video_decoder.md |
 | ② | `audio_decoder.stop` | 停音频解码线程，等退出 | audio_decoder.md |
-| ③ | `demuxer.stop` | 终止当前解封装会话，丢弃未入队 pending item，等 worker 退出 | demuxer.md |
-| ④ | `demuxer.close` | 关文件，释放 AVFormatContext（open 的逆）| demuxer.md |
-| ④ | `video_decoder.unconfigure` | 释放解码器实例（configure 的逆）| video_decoder.md |
-| ④ | `audio_decoder.unconfigure` | 同上 | audio_decoder.md |
-| ④ | `audio_sink.teardown` | 释放 miniaudio 流（setup 的逆）| audio_sink.md |
-| ④ | `audio_clock.reset(0)` | 时钟归零冻结 | audio_clock.md |
+| ③ | `demuxer.close` | 停止当前会话，关文件，释放 AVFormatContext（open 的逆）| demuxer.md |
+| ③ | `video_decoder.unconfigure` | 释放解码器实例（configure 的逆）| video_decoder.md |
+| ③ | `audio_decoder.unconfigure` | 同上 | audio_decoder.md |
+| ③ | `audio_sink.teardown` | 释放 miniaudio 流（setup 的逆）| audio_sink.md |
+| ③ | `audio_clock.reset(0)` | 时钟归零冻结 | audio_clock.md |
 
 ---
 

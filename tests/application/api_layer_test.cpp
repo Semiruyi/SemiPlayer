@@ -53,12 +53,6 @@ public:
         return result;
     }
 
-    std::expected<void, domain::DemuxerError> start() override {
-        return {};
-    }
-
-    void stop() noexcept override {}
-
     std::expected<void, domain::DemuxerError> seek(std::int64_t) override {
         return {};
     }

@@ -65,15 +65,6 @@ public:
     [[nodiscard]] virtual std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) = 0;
 
-    // Starts packet production after a successful open. The operation is
-    // idempotent while the demuxer is already started.
-    [[nodiscard]] virtual std::expected<void, DemuxerError> start() = 0;
-
-    // Stops packet production and ends the current media session. Any packet
-    // already read but not accepted by the sink may be discarded. Reopen the
-    // media before starting another session.
-    virtual void stop() noexcept = 0;
-
     // Records a seek target on the opened media. Actual backend repositioning
     // is not implemented by the current demuxer backend.
     [[nodiscard]] virtual std::expected<void, DemuxerError>
