@@ -1,5 +1,8 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 
+#include "domain/resource/audio_packet_queue/audio_packet_queue_events.hpp"
+#include "domain/worker/demuxer/demuxer_events.hpp"
+
 #include <cassert>
 #include <concepts>
 #include <variant>
@@ -7,6 +10,14 @@
 
 namespace semi::domain {
 namespace {
+
+template <typename... Functions>
+struct Overloaded : Functions... {
+    using Functions::operator()...;
+};
+
+template <typename... Functions>
+Overloaded(Functions...) -> Overloaded<Functions...>;
 
 DemuxerError command_handling_not_implemented() {
     return DemuxerError{
@@ -66,10 +77,21 @@ DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
       generation_(std::move(generation)),
       worker_([this] {
           worker_main();
-      }) {}
+      }) {
+    if (!notifier_) {
+        return;
+    }
+
+    audio_queue_not_full_subscription_ = notifier_->subscribe<AudioQueueNotFull>(
+        [this](const AudioQueueNotFull&) {
+            audio_queue_not_full_hint_.store(true, std::memory_order_release);
+            cv_.notify_one();
+        });
+}
 
 DefaultDemuxer::~DefaultDemuxer() {
     shutdown_worker();
+    audio_queue_not_full_subscription_.reset();
 }
 
 std::expected<DemuxerOpenResult, DemuxerError>
@@ -117,16 +139,27 @@ void DefaultDemuxer::worker_main() noexcept {
     cv_.notify_all();
     for (;;) {
         cv_.wait(lock, [this] {
-            return worker_state_ == WorkerState::ShuttingDown || !commands_.empty();
+            return worker_state_ == WorkerState::ShuttingDown || !commands_.empty() ||
+                   should_process_data_locked();
         });
         if (worker_state_ == WorkerState::ShuttingDown) {
             break;
         }
-        ControlCommand command = std::move(commands_.front());
-        commands_.pop_front();
-        lock.unlock();
-        std::visit([this](auto& value) { process_command(value); }, command);
-        lock.lock();
+        if (!commands_.empty()) {
+            ControlCommand command = std::move(commands_.front());
+            commands_.pop_front();
+            lock.unlock();
+            std::visit([this](auto& value) { process_command(value); }, command);
+            lock.lock();
+            continue;
+        }
+        if (should_process_data_locked()) {
+            lock.unlock();
+            if (try_push_pending_audio_output() == PendingAudioOutputPushResult::NoPending) {
+                read_next_audio_output_to_pending();
+            }
+            lock.lock();
+        }
     }
     const bool stopped = transition_worker_locked(WorkerEvent::Stopped);
     assert(stopped);
@@ -187,10 +220,27 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
     }
 
     auto result = select_default_streams(std::move(*probe));
+    if (result.audio && !audio_packet_sink_) {
+        backend->close();
+        std::lock_guard lock(mutex_);
+        const bool failed = transition_session_locked(SessionEvent::OpenFailed);
+        assert(failed);
+        command.completion.set_value(std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = "audio packet sink is unavailable",
+            .backend_error = std::nullopt,
+        }));
+        return;
+    }
+
     generation_->bump();
+    const auto session_generation = generation_->current();
     {
         std::lock_guard lock(mutex_);
         audio_stream_id_ = result.audio ? std::optional{result.audio->id} : std::nullopt;
+        pending_audio_output_.reset();
+        session_generation_ = session_generation;
+        audio_queue_not_full_hint_.store(false, std::memory_order_release);
         const bool opened = transition_session_locked(SessionEvent::OpenSucceeded);
         assert(opened);
     }
@@ -223,12 +273,160 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
     {
         std::lock_guard lock(mutex_);
         audio_stream_id_.reset();
+        pending_audio_output_.reset();
+        session_generation_ = 0;
+        audio_queue_not_full_hint_.store(false, std::memory_order_release);
         if (session_state_ == SessionState::Closing) {
             const bool closed = transition_session_locked(SessionEvent::Closed);
             assert(closed);
         }
     }
     command.completion.set_value();
+}
+
+bool DefaultDemuxer::should_process_data_locked() const noexcept {
+    if (session_state_ != SessionState::Running || !audio_stream_id_) {
+        return false;
+    }
+
+    if (!pending_audio_output_) {
+        return true;
+    }
+
+    return audio_queue_not_full_hint_.load(std::memory_order_acquire);
+}
+
+DefaultDemuxer::PendingAudioOutputPushResult
+DefaultDemuxer::try_push_pending_audio_output() noexcept {
+    std::shared_ptr<AudioPacketSink> audio_packet_sink;
+    std::optional<AudioPacketQueueItem> pending_audio_output;
+    bool pending_is_end_of_input = false;
+
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Running || !audio_stream_id_) {
+            return PendingAudioOutputPushResult::Handled;
+        }
+        if (!pending_audio_output_) {
+            return PendingAudioOutputPushResult::NoPending;
+        }
+        if (!audio_queue_not_full_hint_.exchange(false, std::memory_order_acq_rel)) {
+            return PendingAudioOutputPushResult::Handled;
+        }
+        pending_is_end_of_input =
+            std::holds_alternative<AudioPacketEndOfInput>(*pending_audio_output_);
+        pending_audio_output.emplace(std::move(*pending_audio_output_));
+        pending_audio_output_.reset();
+        audio_packet_sink = audio_packet_sink_;
+    }
+
+    assert(audio_packet_sink);
+    const auto pushed = audio_packet_sink->try_push(std::move(*pending_audio_output));
+    std::lock_guard lock(mutex_);
+    if (worker_state_ == WorkerState::ShuttingDown ||
+        session_state_ != SessionState::Running) {
+        return PendingAudioOutputPushResult::Handled;
+    }
+    if (pushed == AudioPacketPushResult::Full) {
+        pending_audio_output_.emplace(std::move(*pending_audio_output));
+        return PendingAudioOutputPushResult::Handled;
+    }
+    if (pending_is_end_of_input) {
+        const bool exhausted = transition_session_locked(SessionEvent::InputExhausted);
+        assert(exhausted);
+    }
+    return PendingAudioOutputPushResult::Handled;
+}
+
+void DefaultDemuxer::read_next_audio_output_to_pending() noexcept {
+    std::shared_ptr<DemuxerBackend> backend;
+    contracts::media::DemuxerStreamId audio_stream_id;
+    Generation::Value session_generation = 0;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Running || !audio_stream_id_) {
+            return;
+        }
+        backend = backend_;
+        audio_stream_id = *audio_stream_id_;
+        session_generation = session_generation_;
+    }
+
+    assert(backend);
+    auto read = backend->read_packet();
+    if (!read) {
+        handle_read_error(std::move(read.error()));
+        return;
+    }
+
+    handle_backend_read_result(*read, audio_stream_id, session_generation);
+}
+
+void DefaultDemuxer::handle_backend_read_result(
+    contracts::demuxer::BackendReadResult& result,
+    contracts::media::DemuxerStreamId audio_stream_id,
+    Generation::Value session_generation) noexcept {
+    std::visit(
+        Overloaded{
+            [this, audio_stream_id, session_generation](BackendPacket& packet) {
+                if (packet.stream_id.value != audio_stream_id.value) {
+                    return;
+                }
+
+                store_pending_audio_output(AudioPacketQueueItem{
+                    std::in_place_type<AudioPacket>,
+                    std::move(packet.packet),
+                    session_generation,
+                });
+            },
+            [this, session_generation](BackendEndOfStream) {
+                store_pending_audio_output(AudioPacketEndOfInput{
+                    .generation = session_generation,
+                });
+            },
+        },
+        result);
+}
+
+void DefaultDemuxer::store_pending_audio_output(AudioPacketQueueItem output) noexcept {
+    std::lock_guard lock(mutex_);
+    if (worker_state_ == WorkerState::ShuttingDown ||
+        session_state_ != SessionState::Running) {
+        return;
+    }
+    pending_audio_output_.emplace(std::move(output));
+    audio_queue_not_full_hint_.store(true, std::memory_order_release);
+}
+
+void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
+    bool should_notify = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (worker_state_ != WorkerState::ShuttingDown &&
+            session_state_ == SessionState::Running) {
+            pending_audio_output_.reset();
+            const bool failed = transition_session_locked(SessionEvent::BackendFailed);
+            assert(failed);
+            should_notify = true;
+        }
+    }
+
+    if (should_notify) {
+        notify_read_error(std::move(error));
+    }
+}
+
+void DefaultDemuxer::notify_read_error(DemuxerBackendError error) noexcept {
+    if (!notifier_) {
+        return;
+    }
+
+    try {
+        DemuxerReadError event{.error = std::move(error)};
+        (void)notifier_->send(event);
+    } catch (...) {
+        // Read failure is already reflected in the session state.
+    }
 }
 
 bool DefaultDemuxer::transition_worker_locked(WorkerEvent event) noexcept {

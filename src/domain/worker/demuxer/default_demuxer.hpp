@@ -5,6 +5,7 @@
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -71,6 +72,11 @@ private:
         BackendFailed,
     };
 
+    enum class PendingAudioOutputPushResult : std::uint8_t {
+        NoPending,
+        Handled,
+    };
+
     struct OpenCommand {
         std::string source;
         std::promise<std::expected<DemuxerOpenResult, DemuxerError>> completion;
@@ -92,6 +98,15 @@ private:
     void process_command(OpenCommand& command) noexcept;
     void process_command(SeekCommand& command) noexcept;
     void process_command(CloseCommand& command) noexcept;
+    [[nodiscard]] bool should_process_data_locked() const noexcept;
+    [[nodiscard]] PendingAudioOutputPushResult try_push_pending_audio_output() noexcept;
+    void read_next_audio_output_to_pending() noexcept;
+    void handle_backend_read_result(contracts::demuxer::BackendReadResult& result,
+                                    contracts::media::DemuxerStreamId audio_stream_id,
+                                    Generation::Value session_generation) noexcept;
+    void store_pending_audio_output(AudioPacketQueueItem output) noexcept;
+    void handle_read_error(DemuxerBackendError error) noexcept;
+    void notify_read_error(DemuxerBackendError error) noexcept;
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
 
@@ -99,6 +114,7 @@ private:
     std::shared_ptr<AudioPacketSink> audio_packet_sink_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<Generation> generation_;
+    std::shared_ptr<infra::Notifier::Subscription> audio_queue_not_full_subscription_;
 
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -107,6 +123,9 @@ private:
     WorkerState worker_state_ = WorkerState::Starting;
     SessionState session_state_ = SessionState::Closed;
     std::optional<contracts::media::DemuxerStreamId> audio_stream_id_;
+    std::optional<AudioPacketQueueItem> pending_audio_output_;
+    Generation::Value session_generation_ = 0;
+    std::atomic_bool audio_queue_not_full_hint_{false};
 };
 
 } // namespace semi::domain

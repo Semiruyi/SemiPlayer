@@ -101,10 +101,13 @@ Shutdown(promise<void>)
 ```
 
 每个同步接口创建一个命令并等待对应 promise。命令执行期间，backend 不被其他线程
-调用。worker 在没有控制命令且会话为 `Running` 时执行数据面循环：
+调用。worker 在没有控制命令且会话为 `Running` 时执行数据面循环。这里的 pending
+不是 backend 读包缓存，而是“已经从 backend 结果转换出来、等待提交给
+`AudioPacketQueue` 的音频输出项”，当前只可能是 `AudioPacket` 或
+`AudioPacketEndOfInput`：
 
 ```text
-pending item 优先
+pending audio output 优先
   ├─队列可写 -> try_push
   └─队列已满 -> 等待 AudioQueueNotFull
 
@@ -117,12 +120,14 @@ pending item 优先
 ```
 
 `AudioPacketEndOfInput` 与普通包共用队列容量，必须成功入队后才能进入 `Exhausted`。
+`close()` 和未来 `seek()` 可以丢弃尚未提交给下游的 pending audio output；已经入队的
+旧数据继续由 generation-only 机制处理。
 
 ## Seek 与 Generation
 
 `seek()` 的实际 backend 定位和 generation 更新在 worker 中完成：
 
-1. worker 停止当前读取并清理尚未入队的 pending item；
+1. worker 停止当前读取并清理尚未入队的 pending audio output；
 2. 调用 backend 的 reset/seek 操作；
 3. 推进共享 `Generation`；
 4. 创建新的 `WorkerSession`，继续向队列生产新世代数据。
