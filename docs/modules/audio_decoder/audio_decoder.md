@@ -186,7 +186,77 @@ AudioDecoder 订阅：
 - 控制命令（`configure`/`unconfigure`）由 worker 的命令队列处理（见「命令通道」），
   不经过 Notifier。
 
-Notifier 回调只设置原子标志并 `cv.notify_one()`，不解码、不持有重锁、不等待其他线程。
+Notifier 回调只在 `DefaultAudioDecoder` 自身的 `mutex_` 下设置轻量 hint 并
+`cv.notify_one()`，不解码、不等待其他线程，也不直接访问队列内部锁。
+
+### 睡眠与 hint 正确性
+
+AudioDecoder 不同时持有命令队列、输入队列和输出 Store 的内部锁来检查全局状态。
+队列和 Store 仍通过非阻塞端口访问：
+
+```cpp
+AudioPacketSource::try_pop()
+AudioFrameSink::try_push()
+```
+
+worker 只持有自己的 `mutex_` 来检查：
+
+- `worker_state_`
+- `session_state_`
+- `commands_`
+- `pending_outputs_`
+- `input_not_empty_hint_`
+- `output_not_full_hint_`
+
+这些状态共同决定 worker 是否应该睡眠。进入 `cv.wait(lock, predicate)` 前，worker
+持有 `mutex_` 检查 predicate；Notifier 回调若要修改 hint，也必须先取得同一把
+`mutex_`。因此在“检查 predicate”与“进入条件变量等待协议”之间，不存在其他线程偷偷把
+hint 从 `false` 改成 `true` 却丢失唤醒的窗口。
+
+hint 不表示队列的精确状态，而表示“worker 有理由进行一次非阻塞尝试”：
+
+- `true` 可以不精确：最多导致 worker 多尝试一次 `try_pop()` 或 `try_push()`。
+- `false` 必须可靠：表示对应方向没有未消费的可重试信号，worker 才能安心等待未来通知。
+
+为保证 `false` 不覆盖未来通知，worker 必须采用“先消费 hint，再尝试”的协议：
+
+```text
+有 pending 输出时：
+  持有 decoder mutex，将 output_not_full_hint_ 置为 false
+  释放 decoder mutex
+  调用 AudioFrameSink::try_push()
+
+  Accepted:
+    弹出已提交的 pending 输出；
+    如果 pending_outputs_ 仍非空，可在 decoder mutex 下把 output_not_full_hint_ 置为 true，
+    表示自己还有理由继续尝试。
+
+  Full:
+    不再根据这次失败无条件写 false；
+    重新取得 decoder mutex 后检查是否已有新的 AudioFrameStoreNotFull 通知把 hint 置回 true。
+    如果没有新的通知，false 才表示当前没有未消费的可重试信号。
+```
+
+输入侧同理：
+
+```text
+没有 pending 输出、准备读取输入时：
+  持有 decoder mutex，将 input_not_empty_hint_ 置为 false
+  释放 decoder mutex
+  调用 AudioPacketSource::try_pop()
+
+  取到 item:
+    处理 item；如希望继续主动探测输入，可把 input_not_empty_hint_ 置为 true。
+
+  空:
+    不再根据这次失败无条件写 false；
+    等待未来 AudioQueueNotEmpty 通知重新置 true。
+```
+
+这个协议的关键不是让 `hint == false` 与队列真实的 empty/full 状态永久一致，而是保证：
+如果 worker 消费 hint 后尝试失败，并且之后没有新的边界通知到达，那么 worker 睡眠是安全的；
+如果边界通知已经到达，回调会在同一把 `mutex_` 下留下 `hint == true`，使 predicate 重新成立或
+唤醒已经等待的 worker。
 
 ## Generation 与媒体会话/seek
 

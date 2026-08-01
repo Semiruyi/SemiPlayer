@@ -9,7 +9,6 @@
 #include "domain/worker/audio_decoder/audio_decoder.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
-#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -86,10 +85,27 @@ private:
 
     using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
 
+    enum class PendingOutputPushResult : std::uint8_t {
+        NoPending,
+        Handled,
+    };
+
     void worker_main() noexcept;
     void process_command(ConfigureCommand& command) noexcept;
     void process_command(UnconfigureCommand& command) noexcept;
     void shutdown_worker() noexcept;
+
+    [[nodiscard]] bool should_process_data_locked() const noexcept;
+    [[nodiscard]] PendingOutputPushResult try_push_pending_output() noexcept;
+    void read_next_input_to_pending() noexcept;
+    void handle_input_item(AudioPacketQueueItem item) noexcept;
+    void handle_audio_packet(AudioPacket packet, Generation::Value current_generation) noexcept;
+    void handle_end_of_input(Generation::Value generation) noexcept;
+    void store_decoded_outputs(contracts::audio_decoder::DecodedAudioBatch decoded,
+                               Generation::Value generation,
+                               bool append_end_of_input) noexcept;
+    void handle_backend_failure(AudioDecoderBackendError error) noexcept;
+    void notify_backend_failure(AudioDecoderBackendError error) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
@@ -114,6 +130,8 @@ private:
     std::deque<AudioFrameStoreItem> pending_outputs_;
     Generation::Value active_generation_ = 0;
     bool input_exhausted_ = false;
+    bool input_not_empty_hint_ = false;
+    bool output_not_full_hint_ = false;
 };
 
 } // namespace semi::domain
