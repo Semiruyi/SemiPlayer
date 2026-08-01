@@ -1,0 +1,14 @@
+src/domain/worker/audio_decoder/default_audio_decoder.hpp
+  h_71186a0a6bfb09 16-17,21,25-29,50-54,56-59,61-62,64,66,69-70,72,74-75,78-80,83-84,87-88,90-95,109-111,113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "2.5.918",
+  "base_commit_sha": "906c9cc07b0d6be6765805dd8fc97f967cfd1806",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
