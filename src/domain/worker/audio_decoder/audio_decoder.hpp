@@ -25,8 +25,10 @@ struct AudioDecoderError {
     std::optional<AudioDecoderBackendError> backend_error;
 };
 
-// Control-plane interface for the audio decoding worker. Playback pause is
-// represented by downstream backpressure, so it intentionally has no pause().
+// Control-plane interface for the audio decoding worker. The worker belongs to
+// the module lifecycle (constructed with the module, joined on destruction), so
+// there is no start()/stop(). Playback pause is represented by downstream
+// backpressure, so there is no pause() either.
 class AudioDecoder {
 public:
     virtual ~AudioDecoder() = default;
@@ -39,8 +41,6 @@ public:
     [[nodiscard]] virtual std::expected<void, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
-    [[nodiscard]] virtual std::expected<void, AudioDecoderError> start() = 0;
-    virtual void stop() noexcept = 0;
     virtual void unconfigure() noexcept = 0;
 
 protected:

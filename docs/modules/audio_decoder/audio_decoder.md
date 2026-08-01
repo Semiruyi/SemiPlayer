@@ -3,6 +3,11 @@
 > 音频解码模块。位于 Demuxer 与 AudioResampler 之间，将压缩音频包解码为原始 PCM。
 > 对外控制由 ApiLayer 调用；本模块不负责重采样、声卡输出或播放时钟。
 
+`AudioDecoder` 与 `Demuxer` 共享同一 worker 模型：它是一个自持有 worker 线程的
+工作模块，worker 属于模块生命周期（构造时启动、析构时停止并等待退出），不属于
+媒体会话。`configure()` 成功后自动开始消费输入；会话结束由 `unconfigure()` 表达，
+不销毁线程。输入为空、输出满和暂停都只是背压等待，不涉及线程重建。
+
 ## Context
 
 当前 Demuxer 已能从媒体中选择默认音频流，将其压缩包以 `AudioPacket` 写入
@@ -48,8 +53,8 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 
 ## PCM 数据契约
 
-跨层传递的 PCM 是纯数据，定义在 `contracts/media`，不得包含 FFmpeg 类型。
-建议新增以下概念：
+跨层传递的 PCM 是纯数据，定义在 `contracts/media`（`media_types.hpp`），不得包含
+FFmpeg 类型。已有概念如下：
 
 ```cpp
 enum class AudioSampleFormat {
@@ -81,8 +86,9 @@ struct DecodedAudio {
 `AudioFrameStore` 保存。`planes` 必须保留 planar/packed 表示：AudioDecoder 不在此处
 为了设备格式而做混音、重采样或样本格式转换；这些转换属于 AudioResampler。
 
-当前 `AudioCodecConfig` 只有声道数。后续若需要保留源声道布局，应扩展为不泄漏
-FFmpeg 的布局数据契约；不能让 `AVChannelLayout` 穿过 contracts。
+当前 `AudioCodecConfig` 只有 codec 名/extradata + 采样率 + 声道数，不保留源声道
+布局。后续若需要保留源声道布局，应扩展为不泄漏 FFmpeg 的布局数据契约；不能让
+`AVChannelLayout` 穿过 contracts。
 
 ## 对外接口
 
@@ -94,43 +100,75 @@ public:
     virtual std::expected<void, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
-    virtual std::expected<void, AudioDecoderError> start() = 0;
-    virtual void stop() noexcept = 0;
     virtual void unconfigure() noexcept = 0;
 };
 ```
 
 | 方法 | 调用时机 | 语义 |
 |---|---|---|
-| `configure` | `open` | 建立解码上下文，状态进入 Configured；不启动线程、不读包 |
-| `start` | `play` | 按需创建 worker，开始消费队列；重复调用幂等 |
-| `stop` | `close/shutdown` | 停止并 join worker；不释放解码器上下文 |
-| `unconfigure` | `close` 的资源释放阶段 | 仅在停止后释放解码器上下文，回到 Constructed |
+| `configure` | `open` | 投递 ConfigureCommand 由 worker 执行，调用方同步等待完成（见「命令通道」）；建立解码上下文，状态进入 Configured；成功后自动开始消费输入，不额外创建线程 |
+| `unconfigure` | `close` 的资源释放阶段 | 投递 UnconfigureCommand 同步等待完成；结束当前媒体会话，释放解码器上下文，回到 Constructed；`noexcept`，重复调用幂等 |
 
-没有 `pause()`。暂停由 AudioSink 停止消费触发下游 Store 满，再自然背压至
+没有 `start()`/`stop()`，也没有 `pause()`。worker 空闲时在条件变量上等待，
+成本可忽略；暂停由 AudioSink 停止消费触发下游 Store 满，再自然背压至
 AudioDecoder；恢复播放后，`AudioFrameStore` 变为非满并唤醒 Decoder。Decoder 的线程
-无需因 pause 销毁或重建。
+不因 pause、会话切换而销毁或重建。
+
+## 命令通道（控制面）
+
+`configure`/`unconfigure` 由 worker 执行而非调用方：调用方（ApiLayer 命令线程）把
+命令投递进 worker 的命令队列并阻塞等待完成，与 Demuxer 的 ControlCommand 模式一致
+（`commands_` 队列 + `std::promise` completion，投递后 `cv_.notify_one()`，调用方
+`completion.get()/wait()`）。命令在 worker 循环里串行取出、在锁外执行：
+
+```cpp
+struct ConfigureCommand {
+    contracts::media::AudioCodecConfig config;
+    std::promise<std::expected<void, AudioDecoderError>> completion;
+};
+
+struct UnconfigureCommand {
+    std::promise<void> completion;
+};
+
+using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
+```
+
+- 命令只由 worker 线程处理，不经过 Notifier。backend 的全部调用（configure/
+  decode/drain/reset/unconfigure）因此始终由 worker 独占，无并发前提。
+- worker 循环：等待 cv 唤醒后**先处理命令队列**，再按 SessionState 决定是否消费
+  输入；数据面唤醒（QueueNotEmpty/StoreNotFull）与命令面共用同一个 cv。
+- `configure` 失败时经 completion 把 `AudioDecoderError` 交还调用方；`unconfigure`
+  无错误值，`completion.wait()` 即可。
 
 ## 状态机与线程
 
+与 Demuxer 相同，状态拆为两个正交的状态机：
+
 ```
-Constructed --configure()--> Configured --start()--> Running
-     ^                              ^                 |
-     |                              |                 +-- 输入空 / 输出满：wait
-     +--unconfigure()-- Configured <-- Stopping <--stop()
-                                      Running --backend failure--> Failed
-                                      Failed --unconfigure()--> Constructed
+WorkerState（模块生命周期，只随构造/析构变化）
+Starting --Started--> Alive --ShutdownRequested--> ShuttingDown --Stopped--> Stopped
+
+SessionState（媒体会话）
+                 backend 失败
+Constructed --configure()--> Configuring --> Configured ──────────────▶ Failed
+     ▲                          │              │                         │
+     │                          │              ├─ 输入空 / 输出满：wait    │
+     │                          │              │                         │
+     └─────────────────unconfigure()───────────┴─────────────────────────┘
 ```
 
-- `Constructed`：没有媒体相关解码器上下文，未起线程。
-- `Configured`：已配置解码器，尚未启动 worker，或 worker 已停止。
-- `Running`：worker 存在；它可能正在解码、等待输入或等待输出空间。
-- `Stopping`：收到停止请求，等待 worker 完成当前 backend 调用并 join。
-- `Failed`：worker 遇到 backend 或运行时错误；必须 `unconfigure` 后才能重新配置。
+- `WorkerState`：worker 只在构造时启动、析构时 join 退出，`unconfigure()` 不销毁线程。
+- `Constructed`：没有媒体相关解码器上下文；worker 空闲等待命令。
+- `Configuring`：`configure` 命令执行中（backend 建立解码上下文），同步等待完成。
+- `Configured`：解码器就绪，worker 消费输入并输出 PCM；输入空、输出满、暂停都只是
+  背压等待，不是独立状态。
+- `Unconfiguring`：`unconfigure` 命令执行中（backend 释放解码上下文），同步等待完成。
+- `Failed`：worker 遇到 backend 或运行时错误；必须 `unconfigure` 后才能重新 `configure`。
+  `Failed` 不销毁 worker，也不会自动重试。
 
-AudioDecoder 的 worker 生命周期是独立契约：首次 `start` 时创建，`stop` 后回到 Configured
-并保留配置，可再次 `start`；输入为空、输出满和暂停都只是 wait 条件，不是独立状态。不要直接套用 Demuxer
-的“stop 终止当前媒体会话、必须重新 open”语义。
+worker 空闲时在条件变量上等待，不占用 CPU；线程销毁只发生在模块析构。不要为
+`configure/unconfigure` 之外的会话切换创建或销毁线程。
 
 ## 背压与通知
 
@@ -145,7 +183,8 @@ AudioDecoder 订阅：
 - `AudioQueueNotEmpty`，输入可读时唤醒；普通 `AudioPacket` 和
   `AudioPacketEndOfInput` 共用这条有序输入通道；
 - `AudioFrameStoreNotFull`，输出可写时唤醒；
-- 自身 `stop` 控制信号。
+- 控制命令（`configure`/`unconfigure`）由 worker 的命令队列处理（见「命令通道」），
+  不经过 Notifier。
 
 Notifier 回调只设置原子标志并 `cv.notify_one()`，不解码、不持有重锁、不等待其他线程。
 
@@ -238,8 +277,8 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 
 ## 测试范围
 
-- `DefaultAudioDecoder`：configure/start/stop 幂等、输入空等待、输出满背压、stop 唤醒、
-  generation 丢弃与 backend reset、EOF drain 与错误事件。
+- `DefaultAudioDecoder`：configure/unconfigure 幂等、输入空等待、输出满背压、空闲等待时
+  unconfigure 立即返回、generation 丢弃与 backend reset、EOF drain 与错误事件。
 - `FfmpegAudioDecoderBackend`：真实媒体 fixture 的配置、解码 PCM 格式与 PTS、drain、
   无效 codec/extradata 的错误映射。
 - 端到端：Demuxer -> AudioPacketQueue -> AudioDecoder -> AudioFrameStore，验证包与帧的

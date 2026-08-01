@@ -7,20 +7,26 @@
 #include "domain/resource/audio_packet_queue/audio_packet_source.hpp"
 #include "domain/resource/generation/generation.hpp"
 #include "domain/worker/audio_decoder/audio_decoder.hpp"
-#include "domain/worker/audio_decoder/audio_decoder_events.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <expected>
+#include <future>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <thread>
+#include <variant>
 
 namespace semi::domain {
 
+// 命令通道模型（docs/modules/audio_decoder/audio_decoder.md「命令通道」）：
+// worker 归属模块生命周期（构造时启动、析构时 join），configure/unconfigure 经
+// ControlCommand 队列由 worker 执行，调用方同步等待完成。backend 的全部调用
+// 始终由 worker 独占。Step 1 实现控制面；数据面（Configured 后自动消费输入）
+// 由后续步骤接入。
 class DefaultAudioDecoder final : public AudioDecoder {
 public:
     DefaultAudioDecoder(std::shared_ptr<AudioPacketSource> audio_packet_source,
@@ -38,57 +44,55 @@ public:
     [[nodiscard]] std::expected<void, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) override;
 
-    [[nodiscard]] std::expected<void, AudioDecoderError> start() override;
-
-    void stop() noexcept override;
     void unconfigure() noexcept override;
 
 private:
-    enum class State : std::uint8_t {
-        Constructed,
-        Configured,
-        Running,
-        Stopping,
-        Failed,
-    };
-
-    enum class Event : std::uint8_t {
-        ConfigureSucceeded,
-        StartRequested,
-        WorkerStartFailed,
-        StopRequested,
-        WorkerStopped,
-        BackendFailed,
-        UnconfigureRequested,
-    };
-
-    enum class WorkAction : std::uint8_t {
-        Stop,
-        RetryPendingOutputs,
-        ReadInput,
-    };
-
-    enum class WorkerExit : std::uint8_t {
+    enum class WorkerState : std::uint8_t {
+        Starting,
+        Alive,
+        ShuttingDown,
         Stopped,
+    };
+    enum class WorkerEvent : std::uint8_t {
+        Started,
+        ShutdownRequested,
+        Stopped,
+    };
+
+    enum class SessionState : std::uint8_t {
+        Constructed,
+        Configuring,
+        Configured,
+        Unconfiguring,
         Failed,
     };
+    enum class SessionEvent : std::uint8_t {
+        ConfigureRequested,
+        ConfigureSucceeded,
+        ConfigureFailed,
+        UnconfigureRequested,
+        UnconfigureSucceeded,
+        BackendFailed,
+    };
+
+    struct ConfigureCommand {
+        contracts::media::AudioCodecConfig config;
+        std::promise<std::expected<void, AudioDecoderError>> completion;
+    };
+
+    struct UnconfigureCommand {
+        std::promise<void> completion;
+    };
+
+    using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
 
     void worker_main() noexcept;
-    [[nodiscard]] WorkAction wait_for_work(bool has_pending_outputs);
-    [[nodiscard]] std::optional<WorkerExit> read_and_process_input(bool& input_was_read);
-    [[nodiscard]] std::optional<WorkerExit> process_input_item(AudioPacketQueueItem&& item);
-    [[nodiscard]] std::optional<WorkerExit> process_audio_packet(AudioPacket&& packet);
-    [[nodiscard]] std::optional<WorkerExit>
-    process_end_of_input(AudioPacketEndOfInput end_of_input);
+    void process_command(ConfigureCommand& command) noexcept;
+    void process_command(UnconfigureCommand& command) noexcept;
+    void shutdown_worker() noexcept;
 
-    void append_decoded_audio(contracts::audio_decoder::DecodedAudioBatch&& decoded,
-                              Generation::Value generation);
-    [[nodiscard]] bool flush_pending_outputs();
-    void synchronize_generation() noexcept;
-
-    [[nodiscard]] bool transition_locked(Event event) noexcept;
-    void complete_worker_locked(WorkerExit exit) noexcept;
-    void notify_backend_failure(AudioDecoderBackendError error) noexcept;
+    [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
+    [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
 
     std::shared_ptr<AudioPacketSource> audio_packet_source_;
     std::shared_ptr<AudioFrameSink> audio_frame_sink_;
@@ -102,12 +106,11 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::thread worker_;
-    State state_ = State::Constructed;
-    bool worker_running_ = false;
+    WorkerState worker_state_ = WorkerState::Starting;
+    SessionState session_state_ = SessionState::Constructed;
+    std::deque<ControlCommand> commands_;
 
-    std::atomic_bool input_not_empty_hint_{false};
-    std::atomic_bool output_not_full_hint_{false};
-
+    // 数据面成员（后续步骤使用）：configure/unconfigure 时复位，worker 独占。
     std::deque<AudioFrameStoreItem> pending_outputs_;
     Generation::Value active_generation_ = 0;
     bool input_exhausted_ = false;
