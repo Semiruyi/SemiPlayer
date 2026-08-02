@@ -473,16 +473,16 @@ AudioOutputConfigureResult.playback_format
 
 EOF 继续作为 `AudioFrameEndOfInput` 在 Store 中有序传播。AudioOutput 只在设备 drain 完后发业务事件。这样上游不需要知道“播放结束”语义，也不会把“读完/解码完/重采样完”和“听完”混在一起。
 
-### 第一版不做 pause/resume
+### pause/resume 只控制消费阀门
 
-pause/resume 涉及：
+当前阶段的 pause/resume 不直接暂停设备回调，也不清空 backend 缓冲。它只控制
+`DefaultAudioOutput` 是否继续从 playback store 消费：
 
-- 是否暂停设备回调。
-- 是否继续从 playback store 消费。
-- AudioClock freeze/unfreeze 时机。
-- pause 时 backend 内已有缓冲是否继续播放。
+- `start_playback()`：打开消费阀门。
+- `pause_playback()`：关闭消费阀门。
 
-这些属于播放控制整体设计。第一版先完成自然播放链路，避免把尚未稳定的控制语义塞进输出契约。
+这样 pause 后下游停止拉取，playback store 会逐渐填满并通过背压让上游自然停住。AudioClock 的
+freeze/unfreeze 和更精确的设备暂停策略属于后续播放质量层。
 
 ## 当前实现范围
 
@@ -491,7 +491,13 @@ pause/resume 涉及：
 - `AudioOutput` 契约。
 - `AudioOutputBackend` 契约。
 - `DefaultAudioOutput` worker。
-- Fake backend 测试：
+- `MiniaudioAudioOutputBackend` infrastructure 后端：
+  - 固定输出 `48000Hz / stereo / F32 / packed`。
+  - 使用 miniaudio playback device callback 从内部 ring buffer 取样本，不足时补静音。
+  - `try_submit()` 非阻塞写入 ring buffer，满时返回 `WouldBlock`。
+  - `try_drain()` 在 ring buffer 清空后返回 `Drained`。
+  - 第一版暂不实现 `device_id` 选择。
+- Fake / Null backend 测试：
   - configure/unconfigure。
   - configure 返回 playback PCM format。
   - 输入为空等待。
@@ -504,9 +510,7 @@ pause/resume 涉及：
 
 暂不实现：
 
-- 真实 miniaudio/WASAPI/SDL backend。
 - 设备枚举和设备选择。
-- pause/resume。
 - 音量控制。
 - latency 统计。
 - AudioClock 校准。
@@ -525,6 +529,11 @@ pause/resume 涉及：
   - backend configure/submit/drain 失败进入 Failed。
 - `AudioOutputBackend` contract：
   - submit/drain 状态枚举和错误结构可表达设备背压与失败。
+- `MiniaudioAudioOutputBackend`：
+  - 未配置时拒绝 submit/drain。
+  - 默认设备可用时 configure/submit/reset/drain/unconfigure。
+  - 默认设备不可用时跳过真实设备 smoke。
+  - 暂不支持 `device_id` 选择。
 - 端到端：
   - AudioResampler -> playback frame store -> AudioOutput，验证 generation、EOF 顺序和自然结束事件。
 
@@ -533,5 +542,4 @@ pause/resume 涉及：
 - 不规定真实音频 API。miniaudio、WASAPI、SDL 等只属于 infrastructure backend。
 - 不规定完整设备能力探测策略。第一版可以由 backend 选择一个稳定默认 playback PCM format，例如默认设备支持的 preferred format。
 - 不实现 AudioClock 写入细节，只保留配合边界。
-- 不实现 pause/resume；后续应和 AudioClock、ApiLayer 播放状态一起设计。
 - 不把 Demuxer/Decoder/Resampler 的 EOF 事件暴露给宿主；宿主只观察最终播放完成。
