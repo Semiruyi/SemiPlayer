@@ -2,3 +2,4 @@
 add_subdirectory(log)
 add_subdirectory(notifier)
 add_subdirectory(ffmpeg)
+add_subdirectory(audio_output)
