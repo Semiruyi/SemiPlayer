@@ -172,6 +172,16 @@ public:
         }
     }
 
+    std::size_t submitted_marker_count() const {
+        std::lock_guard lock(mutex_);
+        return submitted_markers.size();
+    }
+
+    std::byte submitted_marker_at(std::size_t index) const {
+        std::lock_guard lock(mutex_);
+        return submitted_markers.at(index);
+    }
+
     std::atomic_int configure_calls = 0;
     std::atomic_int submit_calls = 0;
     std::atomic_int drain_calls = 0;
@@ -183,7 +193,7 @@ public:
     contracts::audio_output::AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
 
 private:
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::optional<AudioOutputBackendError> configure_error_;
     std::optional<AudioOutputBackendError> submit_error_;
     std::optional<AudioOutputBackendError> drain_error_;
@@ -326,12 +336,51 @@ TEST(DefaultAudioOutputTest, SubmitsPlaybackFramesToBackend) {
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.source->push(make_frame_item(1, dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
 
-    ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 1; }));
-    ASSERT_EQ(backend->submitted_markers.size(), 1U);
-    EXPECT_EQ(backend->submitted_markers.front(), std::byte{0x01});
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x01});
+}
+
+TEST(DefaultAudioOutputTest, WaitsForStartPlaybackBeforeConsumingFrames) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    dependencies.source->push(make_frame_item(6, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(backend->submit_calls, 0);
+
+    ASSERT_TRUE(output->start_playback().has_value());
+
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x06});
+}
+
+TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    output->pause_playback();
+
+    dependencies.source->push(make_frame_item(7, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(backend->submit_calls, 0);
+
+    ASSERT_TRUE(output->start_playback().has_value());
+
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x07});
 }
 
 TEST(DefaultAudioOutputTest, KeepsPendingFrameUntilBackendProgressAfterWouldBlock) {
@@ -342,17 +391,17 @@ TEST(DefaultAudioOutputTest, KeepsPendingFrameUntilBackendProgressAfterWouldBloc
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.source->push(make_frame_item(2, dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
 
     ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 1; }));
-    EXPECT_TRUE(backend->submitted_markers.empty());
+    EXPECT_EQ(backend->submitted_marker_count(), 0U);
 
     backend->notify_progress();
 
-    ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 2; }));
-    ASSERT_EQ(backend->submitted_markers.size(), 1U);
-    EXPECT_EQ(backend->submitted_markers.front(), std::byte{0x02});
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x02});
 }
 
 TEST(DefaultAudioOutputTest, DrainsAfterEndOfInputBeforeSendingPlaybackFinished) {
@@ -368,6 +417,7 @@ TEST(DefaultAudioOutputTest, DrainsAfterEndOfInputBeforeSendingPlaybackFinished)
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.source->push(make_end_item(dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
 
@@ -391,6 +441,7 @@ TEST(DefaultAudioOutputTest, DropsStaleEndOfInputWithoutFinishingPlayback) {
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.generation->bump();
     dependencies.source->push(make_end_item(0));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
@@ -408,18 +459,20 @@ TEST(DefaultAudioOutputTest, ResetsBackendAndDropsPendingFrameWhenGenerationChan
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.source->push(make_frame_item(3, dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
     ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 1; }));
 
     dependencies.generation->bump();
     dependencies.source->push(make_frame_item(4, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
     backend->notify_progress();
 
     ASSERT_TRUE(eventually([&] { return backend->reset_calls.load() == 1; }));
     ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 2; }));
-    ASSERT_EQ(backend->submitted_markers.size(), 1U);
-    EXPECT_EQ(backend->submitted_markers.front(), std::byte{0x04});
+    ASSERT_EQ(backend->submitted_marker_count(), 1U);
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x04});
 }
 
 TEST(DefaultAudioOutputTest, ReportsSubmitFailureAndRequiresUnconfigureForRecovery) {
@@ -438,6 +491,7 @@ TEST(DefaultAudioOutputTest, ReportsSubmitFailureAndRequiresUnconfigureForRecove
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
     dependencies.source->push(make_frame_item(5, dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
 

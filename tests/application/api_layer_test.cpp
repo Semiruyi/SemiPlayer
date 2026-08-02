@@ -116,7 +116,10 @@ public:
 
 class FakeAudioOutput final : public domain::AudioOutput {
 public:
+    bool fail_start_playback = false;
     int configure_calls = 0;
+    int start_playback_calls = 0;
+    int pause_playback_calls = 0;
     int unconfigure_calls = 0;
 
     std::expected<domain::AudioOutputConfigureResult, domain::AudioOutputError>
@@ -131,6 +134,20 @@ public:
             },
         };
     }
+
+    std::expected<void, domain::AudioOutputError> start_playback() override {
+        ++start_playback_calls;
+        if (fail_start_playback) {
+            return std::unexpected(domain::AudioOutputError{
+                .code = domain::AudioOutputErrorCode::BackendFailure,
+                .message = "audio output start failed",
+                .backend_error = std::nullopt,
+            });
+        }
+        return {};
+    }
+
+    void pause_playback() noexcept override { ++pause_playback_calls; }
 
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
@@ -241,12 +258,14 @@ TEST(ApiLayerTest, ChecksStateWhenQueuedCommandActuallyExecutes) {
 
     CommandResult result;
     EXPECT_EQ(layer.await(open, result), SEMI_OK);
-    EXPECT_EQ(layer.await(play, result), SEMI_ERR_INTERNAL);
+    EXPECT_EQ(layer.await(play, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
     EXPECT_TRUE(layer.stop());
 }
 
 TEST(ApiLayerTest, FailedCommandDoesNotCommitItsTargetState) {
     FakePipeline pipeline;
+    pipeline.output->fail_start_playback = true;
     ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
@@ -258,10 +277,45 @@ TEST(ApiLayerTest, FailedCommandDoesNotCommitItsTargetState) {
     const CommandHandle play = layer.play();
     ASSERT_NE(play, 0U);
     EXPECT_EQ(layer.await(play, result), SEMI_ERR_INTERNAL);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
 
     const CommandHandle pause = layer.pause();
     ASSERT_NE(pause, 0U);
     EXPECT_EQ(layer.await(pause, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 0);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PlayAndPauseControlAudioOutput) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+
+    const CommandHandle duplicate_play = layer.play();
+    ASSERT_NE(duplicate_play, 0U);
+    EXPECT_EQ(layer.await(duplicate_play, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+
+    const CommandHandle pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+
+    const CommandHandle duplicate_pause = layer.pause();
+    ASSERT_NE(duplicate_pause, 0U);
+    EXPECT_EQ(layer.await(duplicate_pause, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+
     EXPECT_TRUE(layer.stop());
 }
 

@@ -91,6 +91,28 @@ void DefaultAudioOutput::unconfigure() noexcept {
     completion.wait();
 }
 
+std::expected<void, AudioOutputError> DefaultAudioOutput::start_playback() {
+    StartPlaybackCommand command;
+    auto completion = command.completion.get_future();
+    {
+        std::lock_guard lock(mutex_);
+        commands_.emplace_back(std::move(command));
+    }
+    cv_.notify_one();
+    return completion.get();
+}
+
+void DefaultAudioOutput::pause_playback() noexcept {
+    PausePlaybackCommand command;
+    auto completion = command.completion.get_future();
+    {
+        std::lock_guard lock(mutex_);
+        commands_.emplace_back(std::move(command));
+    }
+    cv_.notify_one();
+    completion.wait();
+}
+
 void DefaultAudioOutput::notify_audio_output_progress_available() noexcept {
     {
         std::lock_guard lock(mutex_);
@@ -200,6 +222,7 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
     active_generation_ = generation_->current();
     pending_frame_.reset();
     phase_ = PlaybackPhase::Running;
+    playback_enabled_ = false;
     input_not_empty_hint_ = true;
     backend_progress_hint_ = true;
     const bool succeeded = transition_session_locked(SessionEvent::ConfigureSucceeded);
@@ -226,10 +249,34 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
     pending_frame_.reset();
     active_generation_ = 0;
     phase_ = PlaybackPhase::Running;
+    playback_enabled_ = false;
     input_not_empty_hint_ = false;
     backend_progress_hint_ = false;
     const bool succeeded = transition_session_locked(SessionEvent::UnconfigureSucceeded);
     assert(succeeded);
+    command.completion.set_value();
+}
+
+void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept {
+    std::lock_guard lock(mutex_);
+    if (session_state_ != SessionState::Configured) {
+        command.completion.set_value(
+            std::unexpected(invalid_state("audio output is not configured")));
+        return;
+    }
+
+    playback_enabled_ = true;
+    input_not_empty_hint_ = true;
+    backend_progress_hint_ = true;
+    command.completion.set_value({});
+    cv_.notify_one();
+}
+
+void DefaultAudioOutput::process_command(PausePlaybackCommand& command) noexcept {
+    std::lock_guard lock(mutex_);
+    if (session_state_ == SessionState::Configured) {
+        playback_enabled_ = false;
+    }
     command.completion.set_value();
 }
 
@@ -240,6 +287,10 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
 
     if (generation_ && generation_->current() != active_generation_) {
         return true;
+    }
+
+    if (!playback_enabled_) {
+        return false;
     }
 
     if (pending_frame_.has_value()) {

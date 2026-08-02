@@ -5,7 +5,8 @@
 
 `AudioOutput` 延续 Demuxer、AudioDecoder、AudioResampler 的 worker 模型：worker 线程属于模块生命周期，由
 IoC 装配时创建、释放时停止并 join；媒体会话通过 `configure()` / `unconfigure()` 表达。它不暴露
-`start()` / `stop()` / `seek()`。播放控制、seek 数据隔离和背压分别由上层编排、共享 `Generation` 与下游/后端状态表达。
+模块生命周期意义上的 `start()` / `stop()` / `seek()`。播放/暂停只控制 AudioOutput 是否从 playback store
+消费数据；seek 数据隔离由共享 `Generation` 表达。
 
 ## Context
 
@@ -77,7 +78,7 @@ AudioOutput 不负责：
 
 ## 对外接口
 
-AudioOutput 的公开接口只表达媒体会话配置，不表达 worker 启停：
+AudioOutput 的公开接口分两类：媒体会话配置，以及播放消费阀门控制。worker 生命周期仍不对外暴露：
 
 ```cpp
 struct AudioOutputOptions {
@@ -95,21 +96,27 @@ public:
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputError>
     configure(const AudioOutputOptions& options) = 0;
 
+    [[nodiscard]] virtual std::expected<void, AudioOutputError> start_playback() = 0;
+
+    virtual void pause_playback() noexcept = 0;
+
     virtual void unconfigure() noexcept = 0;
 };
 ```
 
 | 方法 | 调用时机 | 语义 |
 |---|---|---|
-| `configure(options)` | open | 投递 ConfigureCommand 并同步等待完成；打开/选择输出设备，产出 playback PCM format；进入 Configured；成功后 worker 自动消费 playback frame store |
+| `configure(options)` | open | 投递 ConfigureCommand 并同步等待完成；打开/选择输出设备，产出 playback PCM format；进入 Configured；成功后默认暂停，不消费 playback frame store |
+| `start_playback()` | play | 允许 worker 从 playback frame store 消费并提交给 backend；幂等 |
+| `pause_playback()` | pause | 暂停 worker 消费；不清队列、不 reset backend、不推进 generation |
 | `unconfigure()` | close | 投递 UnconfigureCommand 并同步等待完成；结束当前媒体会话，释放设备输出上下文，回到 Constructed；幂等且 `noexcept` |
 
 没有 `start()` / `stop()`：
 
 - worker 线程生命周期与模块对象一致。
-- `configure()` 成功后自动工作。
+- `configure()` 只建立媒体会话上下文；`start_playback()` 才打开消费阀门。
 - `unconfigure()` 只结束当前媒体会话，不销毁 worker。
-- 后续 pause 可以通过 AudioOutput 停止消费或 backend pause 造成背压表达，但第一版不实现公开 pause/resume。
+- `pause_playback()` 表达播放暂停；下游停止消费后，上游通过有界队列背压自然停住。
 
 没有 `seek()`：
 

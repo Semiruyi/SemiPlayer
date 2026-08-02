@@ -98,6 +98,7 @@ struct ApiLayer::Impl {
     std::shared_ptr<domain::AudioOutput> audio_output;
     PlayerState player_state = PlayerState::Idle;
     CommandHandle next_handle = 1;
+    bool audio_pipeline_configured = false;
     bool accepting = false;
     bool stopping = false;
 };
@@ -220,6 +221,7 @@ void close_pipeline(ApiLayer::Impl& impl) noexcept {
     if (impl.audio_output) {
         impl.audio_output->unconfigure();
     }
+    impl.audio_pipeline_configured = false;
 }
 
 std::expected<domain::DemuxerOpenResult, CommandExecution>
@@ -275,6 +277,7 @@ configure_audio_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& 
         return std::unexpected(make_failure(resampler_status(resampled.error()), PlayerState::Idle));
     }
 
+    impl.audio_pipeline_configured = true;
     return {};
 }
 
@@ -319,6 +322,40 @@ CommandExecution execute_open(const OpenCommand& command,
     return make_open_success(*opened);
 }
 
+CommandExecution execute_play(PlayerState current_state, ApiLayer::Impl& impl) {
+    if (current_state == PlayerState::Playing) {
+        return make_failure(SEMI_OK);
+    }
+
+    if (impl.audio_pipeline_configured && impl.audio_output) {
+        auto started = impl.audio_output->start_playback();
+        if (!started) {
+            SEMI_LOG_ERROR("audio output start playback failed: {}", started.error().message);
+            return make_failure(output_status(started.error()));
+        }
+    }
+
+    CommandExecution execution;
+    execution.status = SEMI_OK;
+    execution.next_state = PlayerState::Playing;
+    return execution;
+}
+
+CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) noexcept {
+    if (current_state != PlayerState::Playing) {
+        return make_failure(SEMI_OK);
+    }
+
+    if (impl.audio_pipeline_configured && impl.audio_output) {
+        impl.audio_output->pause_playback();
+    }
+
+    CommandExecution execution;
+    execution.status = SEMI_OK;
+    execution.next_state = PlayerState::Paused;
+    return execution;
+}
+
 CommandExecution execute_close(PlayerState current_state, ApiLayer::Impl& impl) noexcept {
     CommandExecution execution;
     execution.status = SEMI_OK;
@@ -345,21 +382,11 @@ CommandExecution execute_command(PlayerState current_state,
                 [&impl, current_state](const OpenCommand& value) {
                     return execute_open(value, current_state, impl);
                 },
-                [current_state](const PlayCommand&) -> CommandExecution {
-                    if (current_state == PlayerState::Playing) {
-                        CommandExecution execution;
-                        execution.status = SEMI_OK;
-                        return execution;
-                    }
-                    return {};
+                [&impl, current_state](const PlayCommand&) {
+                    return execute_play(current_state, impl);
                 },
-                [current_state](const PauseCommand&) -> CommandExecution {
-                    if (current_state != PlayerState::Playing) {
-                        CommandExecution execution;
-                        execution.status = SEMI_OK;
-                        return execution;
-                    }
-                    return {};
+                [&impl, current_state](const PauseCommand&) {
+                    return execute_pause(current_state, impl);
                 },
                 [](const SeekCommand&) -> CommandExecution { return {}; },
                 [&impl, current_state](const CloseCommand&) {

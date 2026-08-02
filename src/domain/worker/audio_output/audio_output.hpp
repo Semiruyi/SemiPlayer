@@ -43,6 +43,10 @@ public:
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputError>
     configure(const AudioOutputOptions& options) = 0;
 
+    [[nodiscard]] virtual std::expected<void, AudioOutputError> start_playback() = 0;
+
+    virtual void pause_playback() noexcept = 0;
+
     virtual void unconfigure() noexcept = 0;
 
 protected:

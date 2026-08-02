@@ -37,6 +37,10 @@ public:
     [[nodiscard]] std::expected<AudioOutputConfigureResult, AudioOutputError>
     configure(const AudioOutputOptions& options) override;
 
+    [[nodiscard]] std::expected<void, AudioOutputError> start_playback() override;
+
+    void pause_playback() noexcept override;
+
     void unconfigure() noexcept override;
 
     void notify_audio_output_progress_available() noexcept override;
@@ -85,7 +89,16 @@ private:
         std::promise<void> completion;
     };
 
-    using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
+    struct StartPlaybackCommand {
+        std::promise<std::expected<void, AudioOutputError>> completion;
+    };
+
+    struct PausePlaybackCommand {
+        std::promise<void> completion;
+    };
+
+    using ControlCommand =
+        std::variant<ConfigureCommand, UnconfigureCommand, StartPlaybackCommand, PausePlaybackCommand>;
 
     enum class DataStepResult : std::uint8_t {
         Handled,
@@ -95,6 +108,8 @@ private:
     void worker_main() noexcept;
     void process_command(ConfigureCommand& command) noexcept;
     void process_command(UnconfigureCommand& command) noexcept;
+    void process_command(StartPlaybackCommand& command) noexcept;
+    void process_command(PausePlaybackCommand& command) noexcept;
     void shutdown_worker() noexcept;
 
     [[nodiscard]] bool should_process_data_locked() const noexcept;
@@ -129,6 +144,7 @@ private:
 
     std::optional<AudioFrame> pending_frame_;
     Generation::Value active_generation_ = 0;
+    bool playback_enabled_ = false;
     bool input_not_empty_hint_ = false;
     bool backend_progress_hint_ = false;
 };
