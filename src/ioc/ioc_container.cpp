@@ -58,7 +58,7 @@ bool IoCContainer::assemble() noexcept {
             playback_audio_frame_store, audio_output_backend, notifier, generation);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
-            demuxer, audio_decoder, audio_resampler, audio_output);
+            demuxer, audio_decoder, audio_resampler, audio_output, notifier, generation);
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");
             return false;

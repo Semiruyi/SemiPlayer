@@ -11,6 +11,11 @@ class AudioDecoder;
 class AudioOutput;
 class AudioResampler;
 class Demuxer;
+class Generation;
+}
+
+namespace semi::infra {
+class Notifier;
 }
 
 namespace semi::application {
@@ -42,6 +47,15 @@ struct CommandResult {
     MediaInfo media_info;
 };
 
+enum class PlayerEventType : std::uint8_t {
+    None,
+    PlaybackFinished,
+};
+
+struct PlayerEvent {
+    PlayerEventType type = PlayerEventType::None;
+};
+
 // 应用层命令中枢。它拥有命令队列、任务句柄表和唯一的命令执行线程。C ABI 仅通过
 // 此类投递命令，不接触内部队列或业务模块。
 class ApiLayer final {
@@ -49,7 +63,9 @@ public:
     explicit ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                       std::shared_ptr<domain::AudioDecoder> audio_decoder = nullptr,
                       std::shared_ptr<domain::AudioResampler> audio_resampler = nullptr,
-                      std::shared_ptr<domain::AudioOutput> audio_output = nullptr);
+                      std::shared_ptr<domain::AudioOutput> audio_output = nullptr,
+                      std::shared_ptr<infra::Notifier> notifier = nullptr,
+                      std::shared_ptr<domain::Generation> generation = nullptr);
     ~ApiLayer();
 
     ApiLayer(const ApiLayer&) = delete;
@@ -72,6 +88,7 @@ public:
     // 等待命令进入终态，将结果复制到 out_result 并消费 handle。返回命令的最终状态；
     // 无效、已消费或已淘汰的 handle 返回 SEMI_ERR_INVALID_HANDLE。
     [[nodiscard]] semi_status_t await(CommandHandle handle, CommandResult& out_result);
+    [[nodiscard]] semi_status_t poll_event(PlayerEvent& out_event) noexcept;
 
     // 仅接受尚未开始的任务的取消请求。任务不会移出队列，而是由命令线程完成为
     // SEMI_ERR_CANCELLED 并通知 await。true 表示请求已被接受。

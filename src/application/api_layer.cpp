@@ -1,10 +1,13 @@
 #include "application/api_layer.hpp"
 
+#include "domain/resource/generation/generation.hpp"
 #include "domain/worker/audio_decoder/audio_decoder.hpp"
 #include "domain/worker/audio_output/audio_output.hpp"
+#include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "infrastructure/log/log.hpp"
+#include "infrastructure/notifier/notifier.hpp"
 
 #include <condition_variable>
 #include <cstddef>
@@ -59,6 +62,7 @@ bool is_terminal(TaskState state) noexcept {
 }
 
 constexpr std::size_t kMaxLiveTasks = 1024;
+constexpr std::size_t kMaxPendingEvents = 1024;
 
 } // namespace
 
@@ -66,11 +70,15 @@ struct ApiLayer::Impl {
     Impl(std::shared_ptr<domain::Demuxer> injected_demuxer,
          std::shared_ptr<domain::AudioDecoder> injected_audio_decoder,
          std::shared_ptr<domain::AudioResampler> injected_audio_resampler,
-         std::shared_ptr<domain::AudioOutput> injected_audio_output)
+         std::shared_ptr<domain::AudioOutput> injected_audio_output,
+         std::shared_ptr<infra::Notifier> injected_notifier,
+         std::shared_ptr<domain::Generation> injected_generation)
         : demuxer(std::move(injected_demuxer)),
           audio_decoder(std::move(injected_audio_decoder)),
           audio_resampler(std::move(injected_audio_resampler)),
-          audio_output(std::move(injected_audio_output)) {}
+          audio_output(std::move(injected_audio_output)),
+          notifier(std::move(injected_notifier)),
+          generation(std::move(injected_generation)) {}
 
     struct Task {
         Task(CommandHandle task_handle, Command task_command)
@@ -91,12 +99,17 @@ struct ApiLayer::Impl {
     std::unordered_map<CommandHandle, std::shared_ptr<Task>> tasks;
     std::deque<std::shared_ptr<Task>> queue;
     std::deque<CommandHandle> completed_order;
+    std::deque<PlayerEvent> pending_events;
     std::thread worker;
     std::shared_ptr<domain::Demuxer> demuxer;
     std::shared_ptr<domain::AudioDecoder> audio_decoder;
     std::shared_ptr<domain::AudioResampler> audio_resampler;
     std::shared_ptr<domain::AudioOutput> audio_output;
+    std::shared_ptr<infra::Notifier> notifier;
+    std::shared_ptr<domain::Generation> generation;
+    std::shared_ptr<infra::Notifier::Subscription> playback_finished_subscription;
     PlayerState player_state = PlayerState::Idle;
+    domain::Generation::Value active_generation = 0;
     CommandHandle next_handle = 1;
     bool audio_pipeline_configured = false;
     bool accepting = false;
@@ -136,12 +149,22 @@ std::optional<PlayerState> idle_state_if_replaced(bool replaced_media) noexcept 
     return std::nullopt;
 }
 
+void push_event_locked(ApiLayer::Impl& impl, PlayerEvent event) {
+    if (impl.pending_events.size() >= kMaxPendingEvents) {
+        impl.pending_events.pop_front();
+        SEMI_LOG_WARN("discarded oldest player event to keep event queue capacity {}",
+                      kMaxPendingEvents);
+    }
+    impl.pending_events.push_back(event);
+}
+
 bool can_execute(PlayerState state, const Command& command) noexcept {
     return std::visit(
         Overloaded{
             [](const OpenCommand&) { return true; },
             [state](const PlayCommand&) {
-                return state != PlayerState::Idle && state != PlayerState::Error;
+                return state != PlayerState::Idle && state != PlayerState::Ended &&
+                       state != PlayerState::Error;
             },
             [state](const PauseCommand&) {
                 return state != PlayerState::Idle && state != PlayerState::Error;
@@ -222,6 +245,24 @@ void close_pipeline(ApiLayer::Impl& impl) noexcept {
         impl.audio_output->unconfigure();
     }
     impl.audio_pipeline_configured = false;
+    {
+        std::lock_guard lock(impl.mutex);
+        impl.active_generation = 0;
+    }
+}
+
+void handle_playback_finished(ApiLayer::Impl& impl,
+                              const domain::AudioPlaybackFinished& event) noexcept {
+    std::lock_guard lock(impl.mutex);
+    if (event.generation != impl.active_generation) {
+        return;
+    }
+    if (impl.player_state == PlayerState::Ready ||
+        impl.player_state == PlayerState::Playing ||
+        impl.player_state == PlayerState::Paused) {
+        impl.player_state = PlayerState::Ended;
+        push_event_locked(impl, PlayerEvent{.type = PlayerEventType::PlaybackFinished});
+    }
 }
 
 std::expected<domain::DemuxerOpenResult, CommandExecution>
@@ -319,6 +360,10 @@ CommandExecution execute_open(const OpenCommand& command,
         return audio_configured.error();
     }
 
+    if (impl.generation) {
+        std::lock_guard lock(impl.mutex);
+        impl.active_generation = impl.generation->current();
+    }
     return make_open_success(*opened);
 }
 
@@ -459,8 +504,15 @@ void worker_main(ApiLayer::Impl& impl) {
             complete_task(impl, task, SEMI_ERR_INTERNAL, {});
             continue;
         }
-        CommandExecution execution = execute_command(impl.player_state, task->command, impl);
+        PlayerState current_state = PlayerState::Idle;
+        {
+            std::lock_guard lock(impl.mutex);
+            current_state = impl.player_state;
+        }
+
+        CommandExecution execution = execute_command(current_state, task->command, impl);
         if (execution.next_state.has_value()) {
+            std::lock_guard lock(impl.mutex);
             impl.player_state = *execution.next_state;
         }
         complete_task(impl, task, execution.status, std::move(execution.result));
@@ -472,11 +524,23 @@ void worker_main(ApiLayer::Impl& impl) {
 ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                    std::shared_ptr<domain::AudioDecoder> audio_decoder,
                    std::shared_ptr<domain::AudioResampler> audio_resampler,
-                   std::shared_ptr<domain::AudioOutput> audio_output)
+                   std::shared_ptr<domain::AudioOutput> audio_output,
+                   std::shared_ptr<infra::Notifier> notifier,
+                   std::shared_ptr<domain::Generation> generation)
     : impl_(std::make_unique<Impl>(std::move(demuxer),
                                    std::move(audio_decoder),
                                    std::move(audio_resampler),
-                                   std::move(audio_output))) {}
+                                   std::move(audio_output),
+                                   std::move(notifier),
+                                   std::move(generation))) {
+    if (impl_->notifier) {
+        impl_->playback_finished_subscription =
+            impl_->notifier->subscribe<domain::AudioPlaybackFinished>(
+                [impl = impl_.get()](const domain::AudioPlaybackFinished& event) {
+                    handle_playback_finished(*impl, event);
+                });
+    }
+}
 
 ApiLayer::~ApiLayer() {
     (void)stop();
@@ -645,6 +709,18 @@ semi_status_t ApiLayer::await(CommandHandle handle, CommandResult& out_result) {
         }
     }
     return status;
+}
+
+semi_status_t ApiLayer::poll_event(PlayerEvent& out_event) noexcept {
+    std::lock_guard lock(impl_->mutex);
+    if (impl_->pending_events.empty()) {
+        out_event = PlayerEvent{};
+        return SEMI_OK;
+    }
+
+    out_event = impl_->pending_events.front();
+    impl_->pending_events.pop_front();
+    return SEMI_OK;
 }
 
 bool ApiLayer::cancel(CommandHandle handle) noexcept {

@@ -52,6 +52,59 @@ bool expect_status(const char* step, int actual, int expected) {
     return true;
 }
 
+const char* event_name(semi_player_event_type_t type) {
+    switch (type) {
+    case SEMI_PLAYER_EVENT_NONE:
+        return "SEMI_PLAYER_EVENT_NONE";
+    case SEMI_PLAYER_EVENT_PLAYBACK_FINISHED:
+        return "SEMI_PLAYER_EVENT_PLAYBACK_FINISHED";
+    default:
+        return "SEMI_PLAYER_EVENT_UNKNOWN";
+    }
+}
+
+bool expect_event(const char* step,
+                  semi_player_event_type_t actual,
+                  semi_player_event_type_t expected) {
+    std::printf("[host] %-14s -> %s (%d)\n", step, event_name(actual), actual);
+    if (actual != expected) {
+        std::fprintf(stderr, "[host] FAIL: %s expected %s\n", step, event_name(expected));
+        return false;
+    }
+    return true;
+}
+
+bool wait_for_playback_finished(std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    semi_player_event_t event{};
+    while (std::chrono::steady_clock::now() < deadline) {
+        const int status = semi_player_poll_event(&event);
+        if (status != SEMI_OK) {
+            std::printf("[host] %-14s -> %s (%d)\n",
+                        "poll finish",
+                        status_name(status),
+                        status);
+            std::fprintf(stderr, "[host] FAIL: poll finish expected SEMI_OK\n");
+            return false;
+        }
+        if (event.type == SEMI_PLAYER_EVENT_PLAYBACK_FINISHED) {
+            return expect_event("event finish",
+                                event.type,
+                                SEMI_PLAYER_EVENT_PLAYBACK_FINISHED);
+        }
+        if (event.type != SEMI_PLAYER_EVENT_NONE) {
+            std::fprintf(stderr,
+                         "[host] FAIL: unexpected event while waiting for finish: %s\n",
+                         event_name(event.type));
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    std::fprintf(stderr, "[host] FAIL: timed out waiting for playback finished\n");
+    return false;
+}
+
 } // namespace
 
 int main() {
@@ -62,6 +115,10 @@ int main() {
 
     // 1) 首次 init → assemble
     ok = expect_ok("init#1", semi_player_init()) && ok;
+
+    semi_player_event_t event{};
+    ok = expect_ok("poll event", semi_player_poll_event(&event)) && ok;
+    ok = expect_event("event empty", event.type, SEMI_PLAYER_EVENT_NONE) && ok;
 
     const semi_handle_t invalid_play_handle = semi_player_play();
     if (invalid_play_handle == 0) {
@@ -97,16 +154,7 @@ int main() {
     } else {
         semi_command_result_t result{};
         ok = expect_ok("play await", semi_player_handle_await(play_handle, &result)) && ok;
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-
-    const semi_handle_t pause_handle = semi_player_pause();
-    if (pause_handle == 0) {
-        std::fprintf(stderr, "[host] FAIL: pause returned invalid handle after play\n");
-        ok = false;
-    } else {
-        semi_command_result_t result{};
-        ok = expect_ok("pause await", semi_player_handle_await(pause_handle, &result)) && ok;
+        ok = wait_for_playback_finished(std::chrono::seconds(10)) && ok;
     }
 
     const semi_handle_t close_handle = semi_player_close();

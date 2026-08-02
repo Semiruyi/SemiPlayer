@@ -21,8 +21,7 @@ void handle_play():
     if player_state == Playing:
         handle.resolve(Ok(())); return        // 已在播, 无操作
     if player_state == Ended:
-        target_start_pts = 0                   // 播完再 play 从头
-        // 视同冷启动流程 (见下)
+        handle.resolve(InvalidState); return   // 暂不支持无 seek 的直接重播
 
     // ② 打开音频输出消费阀门
     audio_output.start_playback()
@@ -99,7 +98,7 @@ pause 不主动停 demuxer/decoder 线程。下游停消费→队列满→上游
 当前阶段还没有接入 AudioClock；pause/play 只控制 AudioOutput 消费。后续接入 AudioClock 时，
 pause 需要冻结时钟，resume 需要修正暂停偏移，保证 PTS 连续不跳。
 
-### Ended 态再 play 从头
+### Ended 态暂不直接 play
 当前 Demuxer 在 `Exhausted` 或 `Failed` 后不能继续生产；播放到结尾或发生错误后，
 需要由 ApiLayer 先完成当前媒体的 close，再重新 open，之后 Demuxer 会自动开始新的读包会话。
 
@@ -114,12 +113,12 @@ Ready ──play(打开 AudioOutput 消费)──▶ Playing
                                   ⇅
                               Paused ──play(恢复 AudioOutput 消费)──▶ Playing
 
-Ended ──play(重置从头,冷启动)──▶ Playing
+Ended ──play(暂不支持)──▶ InvalidState
 ```
 
 - Ready→Playing：打开 AudioOutput 消费，音频链路开始流动
 - Paused↔Playing：关闭/恢复 AudioOutput 消费
-- Ended→Playing：重置 + 冷启动
+- Ended→Playing：暂不支持；后续需要先完成 seek-to-start / reopen 编排
 
 ---
 

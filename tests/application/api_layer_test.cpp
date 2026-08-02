@@ -1,8 +1,11 @@
 #include "application/api_layer.hpp"
+#include "domain/resource/generation/generation.hpp"
 #include "domain/worker/audio_decoder/audio_decoder.hpp"
 #include "domain/worker/audio_output/audio_output.hpp"
+#include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
 
@@ -157,10 +160,17 @@ struct FakePipeline {
     std::shared_ptr<FakeAudioDecoder> decoder = std::make_shared<FakeAudioDecoder>();
     std::shared_ptr<FakeAudioResampler> resampler = std::make_shared<FakeAudioResampler>();
     std::shared_ptr<FakeAudioOutput> output = std::make_shared<FakeAudioOutput>();
+    std::shared_ptr<infra::DefaultNotifier> notifier = std::make_shared<infra::DefaultNotifier>();
+    std::shared_ptr<domain::Generation> generation = std::make_shared<domain::Generation>();
 };
 
 ApiLayer make_layer(const FakePipeline& pipeline) {
-    return ApiLayer(pipeline.demuxer, pipeline.decoder, pipeline.resampler, pipeline.output);
+    return ApiLayer(pipeline.demuxer,
+                    pipeline.decoder,
+                    pipeline.resampler,
+                    pipeline.output,
+                    pipeline.notifier,
+                    pipeline.generation);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
@@ -314,6 +324,88 @@ TEST(ApiLayerTest, PlayAndPauseControlAudioOutput) {
     const CommandHandle duplicate_pause = layer.pause();
     ASSERT_NE(duplicate_pause, 0U);
     EXPECT_EQ(layer.await(duplicate_pause, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PollEventReturnsNoneWhenQueueIsEmpty) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    PlayerEvent event{.type = PlayerEventType::PlaybackFinished};
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PlaybackFinishedMovesCurrentSessionToEnded) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+
+    const domain::AudioPlaybackFinished finished{
+        .generation = pipeline.generation->current(),
+    };
+    EXPECT_TRUE(pipeline.notifier->send(finished));
+
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::PlaybackFinished);
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
+
+    const CommandHandle pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 0);
+
+    const CommandHandle replay = layer.play();
+    ASSERT_NE(replay, 0U);
+    EXPECT_EQ(layer.await(replay, result), SEMI_ERR_INVALID_STATE);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PlaybackFinishedIgnoresStaleGeneration) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_OK);
+
+    const domain::AudioPlaybackFinished stale_finished{
+        .generation = pipeline.generation->current() + 1,
+    };
+    EXPECT_TRUE(pipeline.notifier->send(stale_finished));
+
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
+
+    const CommandHandle pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
 
     EXPECT_TRUE(layer.stop());

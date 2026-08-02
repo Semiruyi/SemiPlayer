@@ -45,6 +45,15 @@ typedef struct semi_command_result {
     unsigned char has_media_info;
 } semi_command_result_t;
 
+typedef enum semi_player_event_type {
+    SEMI_PLAYER_EVENT_NONE = 0,
+    SEMI_PLAYER_EVENT_PLAYBACK_FINISHED = 1
+} semi_player_event_type_t;
+
+typedef struct semi_player_event {
+    semi_player_event_type_t type;
+} semi_player_event_t;
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -61,6 +70,11 @@ SEMI_API semi_handle_t semi_player_pause(void);
 SEMI_API semi_handle_t semi_player_seek(long long position_us);
 SEMI_API semi_handle_t semi_player_close(void);
 SEMI_API semi_handle_t semi_player_set_volume(unsigned int volume);
+
+/* ---- Events ---- */
+/* Non-blocking. Returns SEMI_OK when out_event is written; no pending event is
+ * represented as SEMI_PLAYER_EVENT_NONE rather than an error. */
+SEMI_API int semi_player_poll_event(semi_player_event_t *out_event);
 
 /* ---- Handle ---- */
 /* 阻塞到命令结束，写入结果并消费 handle；返回该命令的最终 semi_status。

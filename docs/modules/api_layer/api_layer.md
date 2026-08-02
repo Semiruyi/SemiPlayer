@@ -10,6 +10,7 @@
 
 - `await(handle, out_result)`：阻塞到终态，复制最终结果并消费 handle。返回命令的 `semi_status_t`；成功 open 的 `MediaInfo` 在 `out_result` 中。资源无法打开或探测时返回 `SEMI_ERR_INVALID_RESOURCE`，内部失败返回 `SEMI_ERR_INTERNAL`。
 - `cancel(handle)`：仅接受尚未开始任务的取消请求。任务不从队列移除，仍由命令线程取出并完成为 `SEMI_ERR_CANCELLED`。
+- `poll_event(out_event)`：非阻塞读取宿主可观察事件；没有待处理事件时仍返回 `SEMI_OK`，并写入 `SEMI_PLAYER_EVENT_NONE`。
 
 没有 `release`、独立 `get_media_info` 或会话查询接口。`await` 是唯一的结果读取与正常回收路径。
 
@@ -37,11 +38,12 @@ Queued -> Running -> Completed
 `ApiLayer` 在唯一命令线程内持有 `PlayerState`，初始状态为 `Idle`。状态校验发生在命令真正开始执行时，而不是入队时；因此连续提交的 `open -> play` 会让 `play` 看到前一个命令执行后的 `Ready`。
 
 命令执行结果可以携带下一状态，由命令线程在业务操作结束后统一提交。普通失败和非法命令不改变状态；替换媒体时若旧媒体已经关闭而新媒体打开失败，最终状态为 `Idle`。
+`ApiLayer` 同时订阅 `AudioPlaybackFinished`，只接受当前 generation 的完成事件；当前会话播放完成后进入 `Ended`，并向宿主事件队列追加 `PlaybackFinished`。旧 generation 的完成事件会被忽略，避免 seek/open 替换后的过期数据污染状态。
 
 | 命令 | 合法状态 | 成功后的状态 |
 |------|----------|--------------|
 | `open` | 任意状态 | `Ready`；已有媒体时先关闭旧媒体 |
-| `play` | `Ready/Playing/Paused/Ended` | `Playing`；`Playing` 下为幂等成功 |
+| `play` | `Ready/Playing/Paused` | `Playing`；`Playing` 下为幂等成功；`Ended` 下暂返回 `SEMI_ERR_INVALID_STATE` |
 | `pause` | `Ready/Playing/Paused/Ended` | `Playing` 时进入 `Paused`，其他合法状态为幂等成功 |
 | `seek` | `Ready/Playing/Paused/Ended` | 保持原播放意图；`Ended` 后续进入 `Paused` |
 | `close` | 任意状态 | `Idle`；`Idle` 下不访问媒体模块 |

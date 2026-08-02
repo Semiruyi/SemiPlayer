@@ -127,6 +127,32 @@ semi_handle_t semi_player_set_volume(unsigned int volume) {
     return layer ? layer->set_volume(volume) : 0;
 }
 
+int semi_player_poll_event(semi_player_event_t* out_event) {
+    if (out_event == nullptr) {
+        return SEMI_ERR_INVALID_ARGUMENT;
+    }
+    const auto layer = api_layer();
+    if (!layer) {
+        return api_layer_unavailable_status();
+    }
+
+    semi::application::PlayerEvent event;
+    const semi_status_t status = layer->poll_event(event);
+    if (status != SEMI_OK) {
+        return status;
+    }
+
+    switch (event.type) {
+    case semi::application::PlayerEventType::None:
+        out_event->type = SEMI_PLAYER_EVENT_NONE;
+        break;
+    case semi::application::PlayerEventType::PlaybackFinished:
+        out_event->type = SEMI_PLAYER_EVENT_PLAYBACK_FINISHED;
+        break;
+    }
+    return SEMI_OK;
+}
+
 // ---- Handle ----
 int semi_player_handle_await(semi_handle_t handle, semi_command_result_t* out_result) {
     if (handle == 0 || out_result == nullptr) {
