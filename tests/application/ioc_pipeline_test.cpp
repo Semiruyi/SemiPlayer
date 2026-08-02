@@ -7,7 +7,7 @@
 namespace semi::application {
 namespace {
 
-TEST(IoCPipelineTest, AssemblesAndOpensSampleThroughNullAudioOutput) {
+TEST(IoCPipelineTest, AssemblesAndOpensSampleThroughConfiguredAudioOutput) {
     auto& container = ioc::IoCContainer::instance();
     ASSERT_TRUE(container.dispose());
     ASSERT_TRUE(container.assemble());

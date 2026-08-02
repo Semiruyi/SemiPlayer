@@ -8,7 +8,7 @@
 #include "domain/worker/audio_output/default_audio_output.hpp"
 #include "domain/worker/audio_resampler/default_audio_resampler.hpp"
 #include "domain/worker/demuxer/default_demuxer.hpp"
-#include "infrastructure/audio_output/null_audio_output_backend.hpp"
+#include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
@@ -45,7 +45,7 @@ bool IoCContainer::assemble() noexcept {
         auto audio_resampler_backend =
             std::make_shared<infra::ffmpeg::audio_resampler::FfmpegAudioResamplerBackend>();
         auto audio_output_backend =
-            std::make_shared<infra::audio_output::NullAudioOutputBackend>();
+            std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>();
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
             demuxer_backend, audio_packet_queue, notifier, generation);

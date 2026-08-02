@@ -66,15 +66,13 @@ playback AudioFrameStore
 FfmpegDemuxerBackend        -> DefaultDemuxer
 FfmpegAudioDecoderBackend   -> DefaultAudioDecoder
 FfmpegAudioResamplerBackend -> DefaultAudioResampler
-NullAudioOutputBackend      -> DefaultAudioOutput
+MiniaudioAudioOutputBackend -> DefaultAudioOutput
 
 ApiLayer(demuxer, audio_decoder, audio_resampler, audio_output)
 ```
 
-`NullAudioOutputBackend` 是当前阶段的占位输出后端：它产出固定 playback PCM format，用于验证
-`open -> decoder configure -> output configure -> resampler configure` 的编排和队列链路接线。
-`MiniaudioAudioOutputBackend` 已作为 infrastructure 后端落地；当前 IoC 默认仍使用 Null 后端，
-切换真实出声时只需要在装配处替换具体 `AudioOutputBackend`。
+`MiniaudioAudioOutputBackend` 是当前 IoC 默认音频输出后端：它打开系统默认播放设备，产出固定 playback PCM format，并通过内部 ring buffer 把 `DefaultAudioOutput` 提交的 PCM 交给 miniaudio 设备回调。
+`NullAudioOutputBackend` 保留为测试/占位后端，用于不需要真实设备的单元测试。
 
 `dispose()` 先停止并释放 `ApiLayer`，再按依赖者到被依赖者的顺序释放工作模块、资源队列、
 Generation 和 Notifier。IoC 不参与运行时数据流，也不向业务模块提供服务定位。

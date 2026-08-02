@@ -3,7 +3,9 @@
 
 #include "semi_player/semi_player.h"
 
+#include <chrono>
 #include <cstdio>
+#include <thread>
 
 namespace {
 
@@ -86,6 +88,25 @@ int main() {
         }
         ok = expect_status("await consumed", semi_player_handle_await(open_handle, &result),
                            SEMI_ERR_INVALID_HANDLE) && ok;
+    }
+
+    const semi_handle_t play_handle = semi_player_play();
+    if (play_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: play returned invalid handle after open\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_ok("play await", semi_player_handle_await(play_handle, &result)) && ok;
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    const semi_handle_t pause_handle = semi_player_pause();
+    if (pause_handle == 0) {
+        std::fprintf(stderr, "[host] FAIL: pause returned invalid handle after play\n");
+        ok = false;
+    } else {
+        semi_command_result_t result{};
+        ok = expect_ok("pause await", semi_player_handle_await(pause_handle, &result)) && ok;
     }
 
     const semi_handle_t close_handle = semi_player_close();
