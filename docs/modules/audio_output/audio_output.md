@@ -161,15 +161,11 @@ enum class AudioOutputDrainStatus {
     WouldBlock,
 };
 
-struct AudioOutputBackendConfigureResult {
-    contracts::media::AudioPcmFormat playback_format;
-};
-
 class AudioOutputBackend {
 public:
     virtual ~AudioOutputBackend() = default;
 
-    [[nodiscard]] virtual std::expected<AudioOutputBackendConfigureResult, AudioOutputBackendError>
+    [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 
     [[nodiscard]] virtual std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
