@@ -1,1 +1,3 @@
-# AudioResampler is currently header-only at the domain interface layer.
+target_sources(semi_player_core PRIVATE
+    default_audio_resampler.cpp
+)
