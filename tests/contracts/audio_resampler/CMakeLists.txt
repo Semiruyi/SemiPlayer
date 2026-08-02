@@ -1,0 +1,1 @@
+target_sources(semi_player_tests PRIVATE audio_resampler_backend_test.cpp)

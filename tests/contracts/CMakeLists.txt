@@ -1,2 +1,3 @@
 add_subdirectory(media)
 add_subdirectory(audio_decoder)
+add_subdirectory(audio_resampler)
