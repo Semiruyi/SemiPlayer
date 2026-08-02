@@ -13,7 +13,9 @@ using contracts::audio_output::AudioOutputBackend;
 using contracts::audio_output::AudioOutputBackendError;
 using contracts::audio_output::AudioOutputBackendOperation;
 using contracts::audio_output::AudioOutputConfigureResult;
+using contracts::audio_output::AudioOutputDrainStatus;
 using contracts::audio_output::AudioOutputOptions;
+using contracts::audio_output::AudioOutputSubmitStatus;
 
 enum class AudioOutputErrorCode : std::uint8_t {
     InvalidState,

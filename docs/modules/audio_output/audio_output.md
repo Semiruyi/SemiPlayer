@@ -165,6 +165,8 @@ class AudioOutputBackend {
 public:
     virtual ~AudioOutputBackend() = default;
 
+    virtual void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept = 0;
+
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 
@@ -182,6 +184,7 @@ public:
 后端操作语义：
 
 - `configure()`：打开/选择设备，建立输出上下文，并返回最终 playback PCM 格式。
+- `set_progress_notifier()`：注入或清除 worker 唤醒端口；backend 可在设备缓冲可写或 drain 状态推进时通知。
 - `try_submit(audio)`：尝试提交一段 PCM；成功返回 `Accepted`，设备缓冲暂不可写返回 `WouldBlock`。
 - `try_drain()`：EOF 后尝试确认设备侧缓冲已经播放/排空；未完成返回 `WouldBlock`，完成返回 `Drained`。
 - `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态。

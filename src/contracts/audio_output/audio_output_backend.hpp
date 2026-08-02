@@ -67,6 +67,8 @@ public:
     AudioOutputBackend(AudioOutputBackend&&) = delete;
     AudioOutputBackend& operator=(AudioOutputBackend&&) = delete;
 
+    virtual void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept = 0;
+
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 

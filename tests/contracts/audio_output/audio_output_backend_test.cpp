@@ -18,6 +18,10 @@ media::AudioPcmFormat playback_format() {
 
 class FakeAudioOutputBackend final : public AudioOutputBackend {
 public:
+    void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept override {
+        progress_notifier = notifier;
+    }
+
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) override {
         last_options = options;
@@ -38,6 +42,7 @@ public:
 
     AudioOutputSubmitStatus submit_status = AudioOutputSubmitStatus::Accepted;
     AudioOutputDrainStatus drain_status = AudioOutputDrainStatus::Drained;
+    AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
     AudioOutputOptions last_options;
     std::atomic_int reset_calls = 0;
     std::atomic_int unconfigure_calls = 0;
