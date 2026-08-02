@@ -1,4 +1,7 @@
 #include "application/api_layer.hpp"
+#include "domain/worker/audio_decoder/audio_decoder.hpp"
+#include "domain/worker/audio_output/audio_output.hpp"
+#include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 
 #include <gtest/gtest.h>
@@ -63,12 +66,89 @@ public:
     }
 };
 
-std::shared_ptr<domain::Demuxer> make_fake_demuxer() {
-    return std::make_shared<FakeDemuxer>();
+class FakeAudioDecoder final : public domain::AudioDecoder {
+public:
+    bool fail_configure = false;
+    int configure_calls = 0;
+    int unconfigure_calls = 0;
+
+    std::expected<domain::AudioDecoderConfigureResult, domain::AudioDecoderError>
+    configure(const contracts::media::AudioCodecConfig&) override {
+        ++configure_calls;
+        if (fail_configure) {
+            return std::unexpected(domain::AudioDecoderError{
+                .code = domain::AudioDecoderErrorCode::BackendFailure,
+                .message = "decoder configure failed",
+                .backend_error = std::nullopt,
+            });
+        }
+        return domain::AudioDecoderConfigureResult{
+            .decoded_format = contracts::media::AudioPcmFormat{
+                .sample_rate = 48000,
+                .channels = 2,
+                .sample_format = contracts::media::AudioSampleFormat::F32,
+                .planar = false,
+            },
+        };
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
+class FakeAudioResampler final : public domain::AudioResampler {
+public:
+    int configure_calls = 0;
+    int unconfigure_calls = 0;
+    contracts::media::AudioPcmFormat last_input_format;
+    contracts::media::AudioPcmFormat last_output_format;
+
+    std::expected<void, domain::AudioResamplerError>
+    configure(const contracts::media::AudioPcmFormat& input_format,
+              const contracts::media::AudioPcmFormat& output_format) override {
+        ++configure_calls;
+        last_input_format = input_format;
+        last_output_format = output_format;
+        return {};
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
+class FakeAudioOutput final : public domain::AudioOutput {
+public:
+    int configure_calls = 0;
+    int unconfigure_calls = 0;
+
+    std::expected<domain::AudioOutputConfigureResult, domain::AudioOutputError>
+    configure(const domain::AudioOutputOptions&) override {
+        ++configure_calls;
+        return domain::AudioOutputConfigureResult{
+            .playback_format = contracts::media::AudioPcmFormat{
+                .sample_rate = 48000,
+                .channels = 2,
+                .sample_format = contracts::media::AudioSampleFormat::F32,
+                .planar = false,
+            },
+        };
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
+struct FakePipeline {
+    std::shared_ptr<FakeDemuxer> demuxer = std::make_shared<FakeDemuxer>();
+    std::shared_ptr<FakeAudioDecoder> decoder = std::make_shared<FakeAudioDecoder>();
+    std::shared_ptr<FakeAudioResampler> resampler = std::make_shared<FakeAudioResampler>();
+    std::shared_ptr<FakeAudioOutput> output = std::make_shared<FakeAudioOutput>();
+};
+
+ApiLayer make_layer(const FakePipeline& pipeline) {
+    return ApiLayer(pipeline.demuxer, pipeline.decoder, pipeline.resampler, pipeline.output);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
-    ApiLayer layer(make_fake_demuxer());
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     const CommandHandle handle = layer.open("movie.mp4");
@@ -83,11 +163,17 @@ TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
     EXPECT_FALSE(result.media_info.has_subtitle);
     EXPECT_EQ(result.media_info.video_width, 1920U);
     EXPECT_EQ(result.media_info.video_height, 1080U);
+    EXPECT_EQ(pipeline.decoder->configure_calls, 1);
+    EXPECT_EQ(pipeline.output->configure_calls, 1);
+    EXPECT_EQ(pipeline.resampler->configure_calls, 1);
+    EXPECT_EQ(pipeline.resampler->last_input_format.sample_rate, 48000U);
+    EXPECT_EQ(pipeline.resampler->last_output_format.sample_rate, 48000U);
     EXPECT_TRUE(layer.stop());
 }
 
 TEST(ApiLayerTest, AwaitConsumesHandle) {
-    ApiLayer layer(make_fake_demuxer());
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     const CommandHandle handle = layer.set_volume(50);
@@ -100,9 +186,10 @@ TEST(ApiLayerTest, AwaitConsumesHandle) {
 }
 
 TEST(ApiLayerTest, OpenReturnsInvalidResourceForBackendFailure) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
     demuxer->fail_open = true;
-    ApiLayer layer(demuxer);
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     const CommandHandle failed_handle = layer.open("missing.mp4");
@@ -121,8 +208,9 @@ TEST(ApiLayerTest, OpenReturnsInvalidResourceForBackendFailure) {
 }
 
 TEST(ApiLayerTest, RejectsMediaCommandsThatAreInvalidInIdle) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     const CommandHandle play = layer.play();
@@ -142,7 +230,8 @@ TEST(ApiLayerTest, RejectsMediaCommandsThatAreInvalidInIdle) {
 }
 
 TEST(ApiLayerTest, ChecksStateWhenQueuedCommandActuallyExecutes) {
-    ApiLayer layer(make_fake_demuxer());
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     const CommandHandle open = layer.open("movie.mp4");
@@ -157,7 +246,8 @@ TEST(ApiLayerTest, ChecksStateWhenQueuedCommandActuallyExecutes) {
 }
 
 TEST(ApiLayerTest, FailedCommandDoesNotCommitItsTargetState) {
-    ApiLayer layer(make_fake_demuxer());
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -176,8 +266,9 @@ TEST(ApiLayerTest, FailedCommandDoesNotCommitItsTargetState) {
 }
 
 TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -200,8 +291,9 @@ TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
 }
 
 TEST(ApiLayerTest, OpenReplacesTheCurrentMedia) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -219,8 +311,9 @@ TEST(ApiLayerTest, OpenReplacesTheCurrentMedia) {
 }
 
 TEST(ApiLayerTest, FailedReplacementLeavesThePlayerIdle) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -243,8 +336,9 @@ TEST(ApiLayerTest, FailedReplacementLeavesThePlayerIdle) {
 }
 
 TEST(ApiLayerTest, InvalidOpenDoesNotCloseTheCurrentMedia) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -262,8 +356,9 @@ TEST(ApiLayerTest, InvalidOpenDoesNotCloseTheCurrentMedia) {
 }
 
 TEST(ApiLayerTest, CloseIsIdempotent) {
-    auto demuxer = std::make_shared<FakeDemuxer>();
-    ApiLayer layer(demuxer);
+    FakePipeline pipeline;
+    auto demuxer = pipeline.demuxer;
+    ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
 
     CommandResult result;
@@ -279,7 +374,8 @@ TEST(ApiLayerTest, CloseIsIdempotent) {
 }
 
 TEST(ApiLayerTest, StartAndStopAreIdempotent) {
-    ApiLayer layer(make_fake_demuxer());
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
     EXPECT_TRUE(layer.start());
     EXPECT_TRUE(layer.start());
     EXPECT_TRUE(layer.stop());

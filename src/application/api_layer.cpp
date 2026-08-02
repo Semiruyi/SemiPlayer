@@ -1,5 +1,8 @@
 #include "application/api_layer.hpp"
 
+#include "domain/worker/audio_decoder/audio_decoder.hpp"
+#include "domain/worker/audio_output/audio_output.hpp"
+#include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "infrastructure/log/log.hpp"
 
@@ -60,8 +63,14 @@ constexpr std::size_t kMaxLiveTasks = 1024;
 } // namespace
 
 struct ApiLayer::Impl {
-    explicit Impl(std::shared_ptr<domain::Demuxer> injected_demuxer)
-        : demuxer(std::move(injected_demuxer)) {}
+    Impl(std::shared_ptr<domain::Demuxer> injected_demuxer,
+         std::shared_ptr<domain::AudioDecoder> injected_audio_decoder,
+         std::shared_ptr<domain::AudioResampler> injected_audio_resampler,
+         std::shared_ptr<domain::AudioOutput> injected_audio_output)
+        : demuxer(std::move(injected_demuxer)),
+          audio_decoder(std::move(injected_audio_decoder)),
+          audio_resampler(std::move(injected_audio_resampler)),
+          audio_output(std::move(injected_audio_output)) {}
 
     struct Task {
         Task(CommandHandle task_handle, Command task_command)
@@ -84,6 +93,9 @@ struct ApiLayer::Impl {
     std::deque<CommandHandle> completed_order;
     std::thread worker;
     std::shared_ptr<domain::Demuxer> demuxer;
+    std::shared_ptr<domain::AudioDecoder> audio_decoder;
+    std::shared_ptr<domain::AudioResampler> audio_resampler;
+    std::shared_ptr<domain::AudioOutput> audio_output;
     PlayerState player_state = PlayerState::Idle;
     CommandHandle next_handle = 1;
     bool accepting = false;
@@ -107,6 +119,21 @@ struct CommandExecution {
     CommandResult result;
     std::optional<PlayerState> next_state;
 };
+
+CommandExecution make_failure(semi_status_t status,
+                              std::optional<PlayerState> next_state = std::nullopt) {
+    CommandExecution execution;
+    execution.status = status;
+    execution.next_state = next_state;
+    return execution;
+}
+
+std::optional<PlayerState> idle_state_if_replaced(bool replaced_media) noexcept {
+    if (replaced_media) {
+        return PlayerState::Idle;
+    }
+    return std::nullopt;
+}
 
 bool can_execute(PlayerState state, const Command& command) noexcept {
     return std::visit(
@@ -140,65 +167,123 @@ MediaInfo to_media_info(const domain::DemuxerOpenResult& opened) {
     return info;
 }
 
-CommandExecution execute_open(const OpenCommand& command,
-                              PlayerState current_state,
-                              domain::Demuxer& demuxer) {
-    if (command.source.empty()) {
-        CommandExecution execution;
-        execution.status = SEMI_ERR_INVALID_ARGUMENT;
-        return execution;
+semi_status_t decoder_status(const domain::AudioDecoderError& error) noexcept {
+    switch (error.code) {
+    case domain::AudioDecoderErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::AudioDecoderErrorCode::BackendFailure:
+        return error.backend_error.has_value() ? SEMI_ERR_INVALID_RESOURCE : SEMI_ERR_INTERNAL;
     }
+    return SEMI_ERR_INTERNAL;
+}
 
-    const bool replaced_media = current_state != PlayerState::Idle;
-    if (replaced_media) {
-        demuxer.close();
+semi_status_t demuxer_status(const domain::DemuxerError& error) noexcept {
+    switch (error.code) {
+    case domain::DemuxerErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::DemuxerErrorCode::BackendFailure:
+        return error.backend_error.has_value() ? SEMI_ERR_INVALID_RESOURCE : SEMI_ERR_INTERNAL;
     }
+    return SEMI_ERR_INTERNAL;
+}
 
-    std::expected<domain::DemuxerOpenResult, domain::DemuxerError> opened;
+semi_status_t resampler_status(const domain::AudioResamplerError& error) noexcept {
+    switch (error.code) {
+    case domain::AudioResamplerErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::AudioResamplerErrorCode::BackendFailure:
+        return error.backend_error.has_value() ? SEMI_ERR_INVALID_RESOURCE : SEMI_ERR_INTERNAL;
+    }
+    return SEMI_ERR_INTERNAL;
+}
+
+semi_status_t output_status(const domain::AudioOutputError& error) noexcept {
+    switch (error.code) {
+    case domain::AudioOutputErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::AudioOutputErrorCode::BackendFailure:
+        return error.backend_error.has_value() ? SEMI_ERR_INVALID_RESOURCE : SEMI_ERR_INTERNAL;
+    }
+    return SEMI_ERR_INTERNAL;
+}
+
+void close_pipeline(ApiLayer::Impl& impl) noexcept {
+    if (impl.demuxer) {
+        impl.demuxer->close();
+    }
+    if (impl.audio_decoder) {
+        impl.audio_decoder->unconfigure();
+    }
+    if (impl.audio_resampler) {
+        impl.audio_resampler->unconfigure();
+    }
+    if (impl.audio_output) {
+        impl.audio_output->unconfigure();
+    }
+}
+
+std::expected<domain::DemuxerOpenResult, CommandExecution>
+open_demuxer(ApiLayer::Impl& impl, const std::string& source, bool replaced_media) {
     try {
-        opened = demuxer.open(command.source);
+        auto opened = impl.demuxer->open(source);
+        if (!opened) {
+            SEMI_LOG_ERROR("demuxer open failed: {}", opened.error().message);
+            return std::unexpected(make_failure(demuxer_status(opened.error()),
+                                                idle_state_if_replaced(replaced_media)));
+        }
+        return *std::move(opened);
     } catch (const std::exception& error) {
         SEMI_LOG_ERROR("demuxer open threw an exception: {}", error.what());
-        CommandExecution execution;
-        execution.status = SEMI_ERR_INTERNAL;
-        if (replaced_media) {
-            execution.next_state = PlayerState::Idle;
-        }
-        return execution;
     } catch (...) {
         SEMI_LOG_ERROR("demuxer open threw an unknown exception");
-        CommandExecution execution;
-        execution.status = SEMI_ERR_INTERNAL;
-        if (replaced_media) {
-            execution.next_state = PlayerState::Idle;
-        }
-        return execution;
+    }
+    return std::unexpected(make_failure(SEMI_ERR_INTERNAL,
+                                        idle_state_if_replaced(replaced_media)));
+}
+
+std::expected<void, CommandExecution>
+configure_audio_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& opened) {
+    if (!opened.audio.has_value()) {
+        return {};
     }
 
-    if (!opened) {
-        SEMI_LOG_ERROR("demuxer open failed: {}", opened.error().message);
-        CommandExecution execution;
-        switch (opened.error().code) {
-        case domain::DemuxerErrorCode::InvalidState:
-            execution.status = SEMI_ERR_INVALID_STATE;
-            break;
-        case domain::DemuxerErrorCode::BackendFailure:
-            execution.status = opened.error().backend_error.has_value()
-                ? SEMI_ERR_INVALID_RESOURCE
-                : SEMI_ERR_INTERNAL;
-            break;
-        }
-        if (replaced_media) {
-            execution.next_state = PlayerState::Idle;
-        }
-        return execution;
+    if (!impl.audio_decoder || !impl.audio_resampler || !impl.audio_output) {
+        SEMI_LOG_ERROR("audio stream is present but audio pipeline is not assembled");
+        close_pipeline(impl);
+        return std::unexpected(make_failure(SEMI_ERR_INTERNAL, PlayerState::Idle));
     }
 
+    auto decoded = impl.audio_decoder->configure(opened.audio->config);
+    if (!decoded) {
+        SEMI_LOG_ERROR("audio decoder configure failed: {}", decoded.error().message);
+        close_pipeline(impl);
+        return std::unexpected(make_failure(decoder_status(decoded.error()), PlayerState::Idle));
+    }
+
+    auto output = impl.audio_output->configure({});
+    if (!output) {
+        SEMI_LOG_ERROR("audio output configure failed: {}", output.error().message);
+        close_pipeline(impl);
+        return std::unexpected(make_failure(output_status(output.error()), PlayerState::Idle));
+    }
+
+    auto resampled = impl.audio_resampler->configure(decoded->decoded_format,
+                                                     output->playback_format);
+    if (!resampled) {
+        SEMI_LOG_ERROR("audio resampler configure failed: {}", resampled.error().message);
+        close_pipeline(impl);
+        return std::unexpected(make_failure(resampler_status(resampled.error()), PlayerState::Idle));
+    }
+
+    return {};
+}
+
+CommandExecution make_open_success(const domain::DemuxerOpenResult& opened) {
     CommandExecution execution;
     execution.status = SEMI_OK;
     execution.next_state = PlayerState::Ready;
     execution.result.has_media_info = true;
-    execution.result.media_info = to_media_info(*opened);
+    execution.result.media_info = to_media_info(opened);
     const MediaInfo& media_info = execution.result.media_info;
     SEMI_LOG_INFO("media opened: duration_us={}, video={}x{}, audio={}, subtitle={}",
                   media_info.duration_us,
@@ -209,12 +294,37 @@ CommandExecution execute_open(const OpenCommand& command,
     return execution;
 }
 
-CommandExecution execute_close(PlayerState current_state, domain::Demuxer& demuxer) noexcept {
+CommandExecution execute_open(const OpenCommand& command,
+                              PlayerState current_state,
+                              ApiLayer::Impl& impl) {
+    if (command.source.empty()) {
+        return make_failure(SEMI_ERR_INVALID_ARGUMENT);
+    }
+
+    const bool replaced_media = current_state != PlayerState::Idle;
+    if (replaced_media) {
+        close_pipeline(impl);
+    }
+
+    auto opened = open_demuxer(impl, command.source, replaced_media);
+    if (!opened) {
+        return opened.error();
+    }
+
+    auto audio_configured = configure_audio_pipeline(impl, *opened);
+    if (!audio_configured) {
+        return audio_configured.error();
+    }
+
+    return make_open_success(*opened);
+}
+
+CommandExecution execute_close(PlayerState current_state, ApiLayer::Impl& impl) noexcept {
     CommandExecution execution;
     execution.status = SEMI_OK;
     execution.next_state = PlayerState::Idle;
     if (current_state != PlayerState::Idle) {
-        demuxer.close();
+        close_pipeline(impl);
         SEMI_LOG_INFO("media closed");
     }
     return execution;
@@ -222,7 +332,7 @@ CommandExecution execute_close(PlayerState current_state, domain::Demuxer& demux
 
 CommandExecution execute_command(PlayerState current_state,
                                  const Command& command,
-                                 domain::Demuxer& demuxer) noexcept {
+                                 ApiLayer::Impl& impl) noexcept {
     try {
         if (!can_execute(current_state, command)) {
             CommandExecution execution;
@@ -232,8 +342,8 @@ CommandExecution execute_command(PlayerState current_state,
 
         return std::visit(
             Overloaded{
-                [&demuxer, current_state](const OpenCommand& value) {
-                    return execute_open(value, current_state, demuxer);
+                [&impl, current_state](const OpenCommand& value) {
+                    return execute_open(value, current_state, impl);
                 },
                 [current_state](const PlayCommand&) -> CommandExecution {
                     if (current_state == PlayerState::Playing) {
@@ -252,8 +362,8 @@ CommandExecution execute_command(PlayerState current_state,
                     return {};
                 },
                 [](const SeekCommand&) -> CommandExecution { return {}; },
-                [&demuxer, current_state](const CloseCommand&) {
-                    return execute_close(current_state, demuxer);
+                [&impl, current_state](const CloseCommand&) {
+                    return execute_close(current_state, impl);
                 },
                 [](const SetVolumeCommand&) -> CommandExecution { return {}; },
             },
@@ -322,7 +432,7 @@ void worker_main(ApiLayer::Impl& impl) {
             complete_task(impl, task, SEMI_ERR_INTERNAL, {});
             continue;
         }
-        CommandExecution execution = execute_command(impl.player_state, task->command, *impl.demuxer);
+        CommandExecution execution = execute_command(impl.player_state, task->command, impl);
         if (execution.next_state.has_value()) {
             impl.player_state = *execution.next_state;
         }
@@ -332,8 +442,14 @@ void worker_main(ApiLayer::Impl& impl) {
 
 } // namespace
 
-ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer)
-    : impl_(std::make_unique<Impl>(std::move(demuxer))) {}
+ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
+                   std::shared_ptr<domain::AudioDecoder> audio_decoder,
+                   std::shared_ptr<domain::AudioResampler> audio_resampler,
+                   std::shared_ptr<domain::AudioOutput> audio_output)
+    : impl_(std::make_unique<Impl>(std::move(demuxer),
+                                   std::move(audio_decoder),
+                                   std::move(audio_resampler),
+                                   std::move(audio_output))) {}
 
 ApiLayer::~ApiLayer() {
     (void)stop();

@@ -52,6 +52,34 @@ Player::shutdown() ──→ IoCContainer::dispose() ──→ 手动逆序释�
 
 ---
 
+## 当前实现落地
+
+当前 `IoCContainer::assemble()` 已经装配音频播放主链路：
+
+```
+DefaultNotifier
+Generation
+AudioPacketQueue
+decoded AudioFrameStore
+playback AudioFrameStore
+
+FfmpegDemuxerBackend        -> DefaultDemuxer
+FfmpegAudioDecoderBackend   -> DefaultAudioDecoder
+FfmpegAudioResamplerBackend -> DefaultAudioResampler
+NullAudioOutputBackend      -> DefaultAudioOutput
+
+ApiLayer(demuxer, audio_decoder, audio_resampler, audio_output)
+```
+
+`NullAudioOutputBackend` 是当前阶段的占位输出后端：它产出固定 playback PCM format，用于验证
+`open -> decoder configure -> output configure -> resampler configure` 的编排和队列链路接线。
+后续接入真实音频设备后，只需要在 IoC 装配处替换具体 `AudioOutputBackend`。
+
+`dispose()` 先停止并释放 `ApiLayer`，再按依赖者到被依赖者的顺序释放工作模块、资源队列、
+Generation 和 Notifier。IoC 不参与运行时数据流，也不向业务模块提供服务定位。
+
+---
+
 ## 对外接口
 
 ```cpp

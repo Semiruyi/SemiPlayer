@@ -7,6 +7,9 @@
 #include <string>
 
 namespace semi::domain {
+class AudioDecoder;
+class AudioOutput;
+class AudioResampler;
 class Demuxer;
 }
 
@@ -43,7 +46,10 @@ struct CommandResult {
 // 此类投递命令，不接触内部队列或业务模块。
 class ApiLayer final {
 public:
-    explicit ApiLayer(std::shared_ptr<domain::Demuxer> demuxer);
+    explicit ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
+                      std::shared_ptr<domain::AudioDecoder> audio_decoder = nullptr,
+                      std::shared_ptr<domain::AudioResampler> audio_resampler = nullptr,
+                      std::shared_ptr<domain::AudioOutput> audio_output = nullptr);
     ~ApiLayer();
 
     ApiLayer(const ApiLayer&) = delete;

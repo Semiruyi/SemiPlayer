@@ -24,14 +24,16 @@ void handle_open(src):
     // ② 打开资源 + 探测 (open 唯一的重活, 必须等)
     media_info = demuxer.open(src)      // 探测 + 暴露流配置(video_config/audio_config, 纯数据)
 
-    // ③ 配置解码器 + 建后端上下文 (不启动线程、不读数据)
+    // ③ 配置音频链路会话上下文 (worker 线程由模块生命周期自持；此处不读数据)
     //    ApiLayer 协调 demux 和 decoder: demux 出配置, decoder 用配置自建解码器
     video_decoder.configure(demuxer.video_config)
         // decoder 用 config 自己建解码器(含硬解上下文); 自包含, 不感知"流"概念
-    audio_decoder.configure(demuxer.audio_config)
-    audio_sink.setup(demuxer.audio_config)   // 探测 miniaudio 能力, 建 miniaudio 输出流 (暂停态); 产出 audio_output_config
-    audio_resampler.configure(input=demuxer.audio_config, output=audio_sink.audio_output_config)
-        // 按 input(解码格式) → output(miniaudio 格式) 建 SwrContext; 自包含, 不感知"流"概念
+    decoded = audio_decoder.configure(demuxer.audio_config)
+        // 产出 decoder 实际输出的 PCM format
+    output = audio_output.configure(options)
+        // 探测/选择系统输出支持的 playback PCM format
+    audio_resampler.configure(input=decoded.format, output=output.playback_format)
+        // 按 input(解码后 PCM) → output(设备播放 PCM) 建 SwrContext; 自包含, 不感知"流"概念
     audio_clock.reset(0)                     // 时钟基准归 0, 冻结
 
     // ④ 会话状态
@@ -52,9 +54,9 @@ void handle_open(src):
 | ① | `close_internal()` | 若已有媒体，清理旧媒体回 Idle | close.md（待设计）|
 | ② | `demuxer.open(src)` | 探测流信息（编码/分辨率/时长）→ MediaInfo + 暴露流配置（video_config/audio_config 纯数据） | demuxer.md（待设计）|
 | ③ | `video_decoder.configure(config)` | 用 config **自己建**视频解码器（含硬解上下文）；自包含，不感知流概念 | video_decoder.md |
-| ③ | `audio_decoder.configure(config)` | 用 config 自己建音频解码器 | audio_decoder.md |
-| ③ | `audio_sink.setup(config)` | 探测 miniaudio 能力、按支持的参数（采样率/声道/位深）建 miniaudio 输出流（暂停态）；产出 `audio_output_config` | audio_sink.md |
-| ③ | `audio_resampler.configure(input, output)` | 用 input(解码格式) → output(miniaudio 格式) 建 SwrContext；自包含，不感知流概念 | audio_resampler.md |
+| ③ | `audio_decoder.configure(config)` | 用 codec config 自己建音频解码器，并返回实际 decoded PCM format | audio_decoder.md |
+| ③ | `audio_output.configure(options)` | 探测/选择输出设备支持的播放格式，建输出后端上下文，返回 `playback_format` | audio_output.md |
+| ③ | `audio_resampler.configure(input, output)` | 用 decoded PCM → playback PCM 建 SwrContext；自包含，不感知流概念 | audio_resampler.md |
 | ③ | `audio_clock.reset(0)` | 时钟基准 PTS=0，冻结 | audio_clock.md |
 | ④ | 会话状态 | `player_state=Ready`、`target_start_pts=0`、记 current_media/duration | ApiLayer 内部 |
 
@@ -68,8 +70,8 @@ open 不预填充队列、不启动解封装/解码线程。只做"打开 + 探�
 ### open 完成 = 探测完成
 open 的 resolve 只等探测阶段（`demuxer.open` 拿到 MediaInfo），不等预填充。MediaInfo 在探测阶段就有，无需等队列填满。
 
-### configure 配置解码器，但不启动线程
-③ 步的 `configure` / `setup` 只建上下文（解码器、miniaudio 流），**不启动工作线程、不开始读数据**。线程启动和数据流动是 play 的职责。open 后管道是"冷的"——已装配、未运行。
+### configure 配置会话上下文，但不读数据
+③ 步的 `configure` 只建立当前媒体会话所需的后端上下文（解码器、重采样器、输出后端）。工作模块的 worker 线程由 IoC 装配后的模块生命周期自持；`open` 不启动数据读取，也不预填队列。数据流动仍由后续 `play` 语义接管。
 
 ### decoder 用 configure 自建解码器（自包含，不感知流）
 - ApiLayer 协调：demux 探测后暴露**流配置（video_config/audio_config，纯数据）**；decoder 收到 config 后**自己建解码器**（含硬解上下文）。
@@ -89,8 +91,8 @@ open 不是"在已有媒体上打开新文件"，而是"关掉旧的、开新的
 ### 状态 = Ready（不是 Playing）
 open 后不自动播放。`player_state = Ready`（就绪未播），时钟冻结在 0。`play()` 才进入 Playing。
 
-### miniaudio 流 setup 但不 start
-audio_sink 在 open 时按媒体 PCM 格式建好 miniaudio 输出流，但处于暂停态（不出声）。等 play 才 `start_playback`。避免 open 完还没 play 就出声。
+### AudioOutput 探测输出格式，但不出声
+AudioOutput 在 open 阶段根据系统/策略产出 `playback_format`，这份格式是 AudioResampler output format 的权威来源。输出后端可以建立必要上下文，但不会因为 open 完成就播放声音；真正出声仍由后续播放控制驱动。
 
 ---
 
