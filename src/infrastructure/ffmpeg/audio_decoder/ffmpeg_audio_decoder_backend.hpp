@@ -11,7 +11,8 @@ public:
     FfmpegAudioDecoderBackend();
     ~FfmpegAudioDecoderBackend() override;
 
-    [[nodiscard]] std::expected<void, contracts::audio_decoder::AudioDecoderBackendError>
+    [[nodiscard]] std::expected<contracts::audio_decoder::AudioDecoderBackendConfigureResult,
+                                contracts::audio_decoder::AudioDecoderBackendError>
     configure(const contracts::media::AudioCodecConfig& config) override;
 
     [[nodiscard]] std::expected<contracts::audio_decoder::DecodedAudioBatch,

@@ -18,6 +18,7 @@ namespace semi::infra::ffmpeg::audio_decoder {
 namespace {
 
 using contracts::audio_decoder::AudioDecoderBackendError;
+using contracts::audio_decoder::AudioDecoderBackendConfigureResult;
 using contracts::audio_decoder::AudioDecoderBackendOperation;
 using contracts::audio_decoder::DecodedAudioBatch;
 using contracts::demuxer::packet::EncodedPacket;
@@ -80,6 +81,29 @@ std::optional<std::int64_t> timestamp_us(const AVFrame& frame) noexcept {
         return std::nullopt;
     }
     return frame.best_effort_timestamp;
+}
+
+std::expected<AudioPcmFormat, AudioDecoderBackendError>
+decoded_format_from_context(const AVCodecContext& context) {
+    if (context.sample_rate <= 0 || context.ch_layout.nb_channels <= 0 ||
+        context.sample_fmt == AV_SAMPLE_FMT_NONE) {
+        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
+                                                "FFmpeg audio decoder did not expose a PCM output format"));
+    }
+
+    const auto native_format = static_cast<AVSampleFormat>(context.sample_fmt);
+    const auto contract_format = sample_format(native_format);
+    if (!contract_format || av_get_bytes_per_sample(native_format) <= 0) {
+        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
+                                                "FFmpeg audio decoder output sample format is unsupported"));
+    }
+
+    return AudioPcmFormat{
+        .sample_rate = static_cast<std::uint32_t>(context.sample_rate),
+        .channels = static_cast<std::uint32_t>(context.ch_layout.nb_channels),
+        .sample_format = *contract_format,
+        .planar = av_sample_fmt_is_planar(native_format) != 0,
+    };
 }
 
 std::expected<DecodedAudio, AudioDecoderBackendError>
@@ -235,7 +259,7 @@ FfmpegAudioDecoderBackend::~FfmpegAudioDecoderBackend() {
     unconfigure();
 }
 
-std::expected<void, AudioDecoderBackendError>
+std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
 FfmpegAudioDecoderBackend::configure(const contracts::media::AudioCodecConfig& config) {
     if (impl_->context != nullptr) {
         return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
@@ -284,11 +308,18 @@ FfmpegAudioDecoderBackend::configure(const contracts::media::AudioCodecConfig& c
         return std::unexpected(make_error(AudioDecoderBackendOperation::Configure, status));
     }
 
+    auto decoded_format = decoded_format_from_context(*context);
+    if (!decoded_format) {
+        return std::unexpected(std::move(decoded_format.error()));
+    }
+
     impl_->context = std::move(context);
     impl_->packet = std::move(packet);
     impl_->frame = std::move(frame);
     impl_->draining = false;
-    return {};
+    return AudioDecoderBackendConfigureResult{
+        .decoded_format = *decoded_format,
+    };
 }
 
 std::expected<DecodedAudioBatch, AudioDecoderBackendError>

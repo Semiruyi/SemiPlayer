@@ -72,7 +72,7 @@ DefaultAudioDecoder::~DefaultAudioDecoder() {
     audio_frame_store_not_full_subscription_.reset();
 }
 
-std::expected<void, AudioDecoderError> DefaultAudioDecoder::configure(
+std::expected<AudioDecoderConfigureResult, AudioDecoderError> DefaultAudioDecoder::configure(
     const contracts::media::AudioCodecConfig& config) {
     ConfigureCommand command;
     command.config = config;
@@ -167,7 +167,9 @@ void DefaultAudioDecoder::process_command(ConfigureCommand& command) noexcept {
         return;
     }
 
-    std::expected<void, AudioDecoderBackendError> configured;
+    std::expected<contracts::audio_decoder::AudioDecoderBackendConfigureResult,
+                  AudioDecoderBackendError>
+        configured;
     try {
         configured = backend_->configure(command.config);
     } catch (...) {
@@ -199,7 +201,9 @@ void DefaultAudioDecoder::process_command(ConfigureCommand& command) noexcept {
     output_not_full_hint_ = true;
     const bool succeeded = transition_session_locked(SessionEvent::ConfigureSucceeded);
     assert(succeeded);
-    command.completion.set_value({});
+    command.completion.set_value(AudioDecoderConfigureResult{
+        .decoded_format = configured->decoded_format,
+    });
 }
 
 void DefaultAudioDecoder::process_command(UnconfigureCommand& command) noexcept {

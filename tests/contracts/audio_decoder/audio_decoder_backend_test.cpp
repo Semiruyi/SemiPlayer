@@ -9,9 +9,16 @@ namespace {
 
 class FakeAudioDecoderBackend final : public AudioDecoderBackend {
 public:
-    std::expected<void, AudioDecoderBackendError>
+    std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
     configure(const media::AudioCodecConfig&) override {
-        return {};
+        return AudioDecoderBackendConfigureResult{
+            .decoded_format = media::AudioPcmFormat{
+                .sample_rate = 48000,
+                .channels = 2,
+                .sample_format = media::AudioSampleFormat::F32,
+                .planar = false,
+            },
+        };
     }
 
     std::expected<DecodedAudioBatch, AudioDecoderBackendError>
@@ -30,8 +37,11 @@ public:
 TEST(AudioDecoderBackendContract, RepresentsAnEmptyDecodedBatch) {
     FakeAudioDecoderBackend backend;
 
+    const auto configured = backend.configure({});
     auto drained = backend.drain();
 
+    ASSERT_TRUE(configured.has_value());
+    EXPECT_EQ(configured->decoded_format.sample_rate, 48000U);
     ASSERT_TRUE(drained.has_value());
     EXPECT_TRUE(drained->empty());
 }

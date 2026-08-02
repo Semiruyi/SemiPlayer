@@ -1,0 +1,531 @@
+# AudioOutput 模块设计
+
+> 音频输出模块。位于 `AudioResampler` 之后，负责从 playback PCM store 消费已经适配设备格式的音频帧，
+> 将其提交给真实音频设备或输出后端，并在设备缓冲实际 drain 完成后声明播放结束。
+
+`AudioOutput` 延续 Demuxer、AudioDecoder、AudioResampler 的 worker 模型：worker 线程属于模块生命周期，由
+IoC 装配时创建、释放时停止并 join；媒体会话通过 `configure()` / `unconfigure()` 表达。它不暴露
+`start()` / `stop()` / `seek()`。播放控制、seek 数据隔离和背压分别由上层编排、共享 `Generation` 与下游/后端状态表达。
+
+## Context
+
+AudioResampler 的输出已经是播放链路希望消费的 PCM 格式，例如：
+
+```text
+48000Hz / stereo / f32 / packed
+```
+
+AudioOutput 不再做解码或重采样。它负责探测/打开输出设备，选择播放链路最终要使用的 playback PCM 格式，
+并把符合该格式的 PCM 稳定交给设备边界。设备侧的自然结束和失败由 AudioOutput 转化为上层可观察事件。
+
+```text
+AudioPacketQueue(gen)
+  -> AudioDecoder
+  -> AudioFrameStore(gen, decoded PCM / EndOfInput)
+  -> AudioResampler
+  -> AudioFrameStore(gen, playback PCM / EndOfInput)
+  -> AudioOutput
+  -> AudioOutputBackend
+  -> OS / device
+```
+
+代码层面继续复用 `AudioFrameStore`。文档和 IoC 装配中需要区分两个角色：
+
+- decoded frame store：AudioDecoder 输出，AudioResampler 输入。
+- playback frame store：AudioResampler 输出，AudioOutput 输入。
+
+## 格式来源
+
+音频链路里有三类格式/配置，不能混在一起：
+
+```text
+Demuxer.open()
+  -> AudioCodecConfig             // encoded stream config，给 AudioDecoder
+
+AudioDecoder.configure(codec)
+  -> decoded AudioPcmFormat       // decoder 实际输出 PCM，给 AudioResampler input
+
+AudioOutput.configure(options)
+  -> playback AudioPcmFormat      // 设备/策略选择的播放 PCM，给 AudioResampler output
+```
+
+- Demuxer 探测的是容器和编码流信息，例如 codec、extradata、采样率、声道数等。
+- AudioDecoder 根据 encoded config 打开解码器，并在 configure 完成后产出真实 decoded PCM format。
+- AudioOutput 根据系统设备、默认策略或宿主选项选择 playback PCM format。
+- AudioResampler 只消费纯数据：`decoded_format -> playback_format`，不直接依赖 AudioDecoder 或 AudioOutput 模块实例。
+
+## 职责
+
+AudioOutput 负责：
+
+- 从 playback `AudioFrameSource` 拉取 `AudioFrame` 和 `AudioFrameEndOfInput`。
+- 检查 generation，丢弃过期 frame 和过期 EOF。
+- 将当前 generation 的 PCM frame 提交给 `AudioOutputBackend`。
+- 处理 backend 背压：设备缓冲暂不可写时等待 backend progress 通知。
+- 收到当前 generation EOF 后，等待 backend drain 完成，再发出播放完成事件。
+- generation 改变时丢弃 pending frame，reset backend，避免旧音频继续播放。
+- backend 失败时进入 Failed，并向上发送结构化失败事件。
+
+AudioOutput 不负责：
+
+- 不解码压缩音频包。
+- 不做重采样、sample format 转换或 planar/packed 转换。
+- 不选择音频流。
+- 不把目标播放格式交给上游猜测；AudioOutput 是 playback PCM format 的来源。
+- 不直接管理 Demuxer、AudioDecoder 或 AudioResampler 的生命周期。
+- 不向上暴露设备缓冲细节，例如 frame consumed、buffer empty、drain started。
+
+## 对外接口
+
+AudioOutput 的公开接口只表达媒体会话配置，不表达 worker 启停：
+
+```cpp
+struct AudioOutputOptions {
+    std::optional<std::string> device_id;
+};
+
+struct AudioOutputConfigureResult {
+    contracts::media::AudioPcmFormat playback_format;
+};
+
+class AudioOutput {
+public:
+    virtual ~AudioOutput() = default;
+
+    [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputError>
+    configure(const AudioOutputOptions& options) = 0;
+
+    virtual void unconfigure() noexcept = 0;
+};
+```
+
+| 方法 | 调用时机 | 语义 |
+|---|---|---|
+| `configure(options)` | open | 投递 ConfigureCommand 并同步等待完成；打开/选择输出设备，产出 playback PCM format；进入 Configured；成功后 worker 自动消费 playback frame store |
+| `unconfigure()` | close | 投递 UnconfigureCommand 并同步等待完成；结束当前媒体会话，释放设备输出上下文，回到 Constructed；幂等且 `noexcept` |
+
+没有 `start()` / `stop()`：
+
+- worker 线程生命周期与模块对象一致。
+- `configure()` 成功后自动工作。
+- `unconfigure()` 只结束当前媒体会话，不销毁 worker。
+- 后续 pause 可以通过 AudioOutput 停止消费或 backend pause 造成背压表达，但第一版不实现公开 pause/resume。
+
+没有 `seek()`：
+
+- ApiLayer 不需要向 AudioOutput 转发 seek 命令。
+- Demuxer/open/seek 成功推进共享 `Generation`。
+- AudioOutput worker 在数据面发现 generation 改变后 reset backend，并丢弃旧 generation 数据。
+
+## 依赖关系
+
+### 构造期注入
+
+| 依赖 | 用途 |
+|---|---|
+| `AudioFrameSource` | 输入端口；消费 playback frame store 中的播放格式 PCM 和 EOF |
+| `Generation` | 与 Demuxer、AudioDecoder、AudioResampler 共享；用于丢弃旧媒体会话或旧 seek 数据 |
+| `Notifier` | 接收输入 Store 非空、backend 可推进通知；发送 AudioOutput 自身事件 |
+| `AudioOutputBackend` | 纯设备输出后端抽象；当前预期可由 miniaudio、WASAPI、SDL 或 fake backend 实现 |
+| `AudioClock` | 目标设计中由 AudioOutput 在实际提交/播放进度处校准；第一版可以先不接入或只预留文档边界 |
+
+### configure 注入/返回的纯数据
+
+- `AudioOutputOptions`：输出设备选择和偏好策略。第一版可以为空或只表达默认设备。
+- `AudioOutputConfigureResult::playback_format`：AudioOutput 最终选择的播放格式，也是 AudioResampler 的 output format。
+
+AudioOutput 不运行时依赖 AudioResampler 模块本身。它只消费 resampler 写入的 playback frame store，并在 configure
+阶段向 open 编排返回纯数据格式，保持 DAG 单向。
+
+### 不依赖什么
+
+- 不依赖 AudioResampler 模块实例，只依赖其输出 Store 的 consumer port。
+- 不依赖 AudioDecoder 或 Demuxer 模块实例。
+- 领域层和契约层不暴露 miniaudio、WASAPI、SDL、FFmpeg 等具体后端类型。
+- 不依赖 ApiLayer 回调来驱动数据消费；ApiLayer 只负责 configure/unconfigure 和接收业务事件。
+
+## Backend 契约
+
+后端只处理“设备输出上下文”和“提交播放格式 PCM”。它不关心 Store、Generation、worker、ApiLayer 或上游模块。
+
+建议第一版采用非阻塞 submit/drain：
+
+```cpp
+enum class AudioOutputSubmitStatus {
+    Accepted,
+    WouldBlock,
+};
+
+enum class AudioOutputDrainStatus {
+    Drained,
+    WouldBlock,
+};
+
+struct AudioOutputBackendConfigureResult {
+    contracts::media::AudioPcmFormat playback_format;
+};
+
+class AudioOutputBackend {
+public:
+    virtual ~AudioOutputBackend() = default;
+
+    [[nodiscard]] virtual std::expected<AudioOutputBackendConfigureResult, AudioOutputBackendError>
+    configure(const AudioOutputOptions& options) = 0;
+
+    [[nodiscard]] virtual std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
+    try_submit(const contracts::media::DecodedAudio& audio) = 0;
+
+    [[nodiscard]] virtual std::expected<AudioOutputDrainStatus, AudioOutputBackendError>
+    try_drain() = 0;
+
+    virtual void reset() noexcept = 0;
+    virtual void unconfigure() noexcept = 0;
+};
+```
+
+后端操作语义：
+
+- `configure()`：打开/选择设备，建立输出上下文，并返回最终 playback PCM 格式。
+- `try_submit(audio)`：尝试提交一段 PCM；成功返回 `Accepted`，设备缓冲暂不可写返回 `WouldBlock`。
+- `try_drain()`：EOF 后尝试确认设备侧缓冲已经播放/排空；未完成返回 `WouldBlock`，完成返回 `Drained`。
+- `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态。
+- `unconfigure()`：释放设备资源。
+
+不建议第一版使用阻塞式 `write()`。阻塞式接口虽然简单，但会让 `unconfigure()`、析构和错误恢复被设备阻塞影响，测试背压也不如非阻塞契约清晰。
+
+### Backend progress 通知
+
+非阻塞 backend 需要在“可以再次推进”时唤醒 AudioOutput worker：
+
+```cpp
+class AudioOutputBackendProgressNotifier {
+public:
+    virtual ~AudioOutputBackendProgressNotifier() = default;
+    virtual void notify_audio_output_progress_available() noexcept = 0;
+};
+```
+
+这里不区分 “writable” 和 “drained”，统一表达为：
+
+```text
+可以再调用一次 try_submit() 或 try_drain() 了
+```
+
+这样可以避免把设备内部状态泄漏给 domain worker。worker 根据自己的 phase 决定下一次推进是 submit 还是 drain。
+
+## 事件通知
+
+AudioOutput 是音频流水线里第一个真正应该向上声明“播放自然结束”的模块，因为只有它知道 playback store EOF 已经到达，并且设备缓冲已经 drain 完。
+
+建议事件：
+
+```cpp
+struct AudioPlaybackFinished {
+    Generation::Value generation;
+};
+
+struct AudioOutputBackendFailure {
+    Generation::Value generation;
+    AudioOutputBackendError error;
+};
+```
+
+不建议发送：
+
+- 不发送 `FrameConsumed`。
+- 不发送 `BufferEmpty`。
+- 不发送 `DrainStarted`。
+- 不发送 `InputEnded`。
+
+这些都是输出链路内部细节。宿主通常只关心播放结束或播放失败。
+
+## 状态机与线程
+
+AudioOutput 和 Decoder/Resampler 一样拆成两个正交状态机：
+
+```text
+WorkerState（模块生命周期）
+Starting --Started--> Alive --ShutdownRequested--> ShuttingDown --Stopped--> Stopped
+
+SessionState（媒体会话）
+                 backend 失败
+Constructed --configure()--> Configuring --> Configured ------------------> Failed
+     ^                         |             |                              |
+     |                         |             |                              |
+     +--------- unconfigure() -+-------------+----------- unconfigure() ----+
+```
+
+`Configured` 下再维护一个数据面 phase：
+
+```cpp
+enum class PlaybackPhase {
+    Running,
+    Draining,
+    Finished,
+};
+```
+
+- `Running`：正常消费 playback frame store，并向 backend submit。
+- `Draining`：已经收到当前 generation 的 EOF，停止读取新 frame，反复尝试 `backend.try_drain()`。
+- `Finished`：backend drain 完成并发送 `AudioPlaybackFinished`；等待 unconfigure 或 generation 改变。
+
+输入为空、backend WouldBlock、播放暂停都不是独立 session state，只是 `Configured` 下的等待条件。
+
+## 命令通道
+
+`configure` / `unconfigure` 由 worker 执行，而不是调用方直接访问 backend：
+
+```cpp
+struct ConfigureCommand {
+    AudioOutputOptions options;
+    std::promise<std::expected<AudioOutputConfigureResult, AudioOutputError>> completion;
+};
+
+struct UnconfigureCommand {
+    std::promise<void> completion;
+};
+
+using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
+```
+
+- 命令只由 worker 线程处理。
+- backend 的 `configure/try_submit/try_drain/reset/unconfigure` 始终由 worker 独占调用。
+- worker 醒来后优先处理控制命令，再推进数据面。
+- `configure()` 失败经 completion 返回 `AudioOutputError`。
+- 运行期 backend 失败发送 `AudioOutputBackendFailure` 并进入 `Failed`。
+
+## 工作循环
+
+worker 醒来后优先处理控制命令，再处理数据：
+
+```text
+如果有 control command:
+  取出并执行
+否则如果 session != Configured:
+  wait
+
+否则如果 generation 改变:
+  清空 pending frame
+  backend.reset()
+  active_generation = current_generation
+  phase = Running
+
+否则如果 phase == Finished:
+  wait
+
+否则如果有 pending frame:
+  尝试 backend.try_submit(pending frame)
+  Accepted: 清除 pending frame，继续推进
+  WouldBlock: 等待 backend progress
+
+否则如果 phase == Draining:
+  尝试 backend.try_drain()
+  Drained: 发送 AudioPlaybackFinished，phase = Finished
+  WouldBlock: 等待 backend progress
+
+否则从 AudioFrameSource try_pop():
+  Empty: 等待 AudioFrameStoreNotEmpty
+  stale generation: 丢弃
+  AudioFrame: 保存为 pending frame，然后尝试 submit
+  AudioFrameEndOfInput: phase = Draining，然后尝试 drain
+```
+
+pending frame 是必要的：backend 可能因为设备缓冲满而暂时拒绝当前 frame。pending frame 保存“已经从输入 Store 取出，但尚未成功提交给设备”的有序数据，保证背压下不丢帧、不越过 EOF。
+
+## 背压与通知
+
+AudioOutput 订阅：
+
+- playback frame store 的 `AudioFrameStoreNotEmpty`：输入可读时唤醒。
+- backend progress：设备缓冲可能可写或 drain 状态可能变化时唤醒。
+
+AudioOutput 发送：
+
+- `AudioPlaybackFinished`。
+- `AudioOutputBackendFailure`。
+
+不发送 playback store empty/full 事件；这些是 Store 自己负责的资源状态。
+
+### 睡眠与 hint 正确性
+
+AudioOutput 可以沿用 AudioDecoder / AudioResampler 的 worker 自有锁 + 非阻塞端口 + hint 协议：
+
+```cpp
+AudioFrameSource::try_pop()
+AudioOutputBackend::try_submit()
+AudioOutputBackend::try_drain()
+```
+
+worker 只持有自己的 `mutex_` 检查：
+
+- `worker_state_`
+- `session_state_`
+- `commands_`
+- `pending_frame_`
+- `phase_`
+- `input_not_empty_hint_`
+- `backend_progress_hint_`
+
+Notifier 回调也必须先获取同一把 `mutex_`，设置对应 hint，然后 `cv.notify_one()`。因此在 `cv.wait(lock, predicate)` 的 predicate 检查和真正进入等待之间，不存在其他线程偷偷把 hint 从 `false` 改成 `true` 却丢失唤醒的窗口。
+
+hint 的含义仍然是“worker 有理由做一次非阻塞尝试”：
+
+- `true` 可以不精确，最多导致多尝试一次。
+- `false` 必须可靠，表示没有未消费的可重试信号，worker 才能安心睡眠。
+
+submit/drain 失败后不能无条件覆盖新的通知。正确做法是先在 worker mutex 下消费 hint，再释放锁执行非阻塞尝试；如果尝试期间 notifier 已经把 hint 重新置为 `true`，worker 重新取锁后应保留这个新信号。
+
+## Generation 与 seek
+
+AudioOutput 不提供公开 `seek()`，但必须正确响应 generation 变化。
+
+worker 发现 `generation.current()` 与 `active_generation_` 不一致时：
+
+1. 丢弃 pending frame。
+2. 调用 backend `reset()`，停止播放旧 generation 的设备缓冲。
+3. 更新 `active_generation_`。
+4. 将 phase 重置为 `Running`。
+5. 只处理当前 generation 的 frame 和 EOF。
+
+旧 generation frame 直接丢弃。旧 generation EOF 也直接丢弃，不得触发 `AudioPlaybackFinished`。
+
+这和 AudioClock 的约束配套：AudioOutput 丢弃旧 generation 数据时不应校准 AudioClock；只有当前 generation 且实际提交/播放的数据才能参与时钟校准。
+
+## EOF 与播放结束
+
+`AudioFrameEndOfInput` 是有序 Store item，不是 Notifier 事件。
+
+AudioOutput 消费到当前 generation 的 EOF 时：
+
+1. 确认 EOF 前面的普通 frame 已经按 FIFO 顺序提交给 backend。
+2. 进入 `Draining`。
+3. 反复尝试 `backend.try_drain()`。
+4. backend 返回 `Drained` 后，发送 `AudioPlaybackFinished{generation}`。
+5. 进入 `Finished`，不再消费更多输入，直到 generation 改变或 unconfigure。
+
+收到 EOF 不等于播放完成。播放完成必须等设备后端确认内部缓冲已经播放/排空。
+
+## AudioClock 配合
+
+目标设计中，AudioOutput 是 AudioClock 的写入者，因为它最接近真实设备播放进度。
+
+第一版可以先不实现 AudioClock 接入，但文档边界应保持：
+
+- AudioOutput 只用当前 generation 的真实播放数据校准 AudioClock。
+- 丢弃旧 generation 数据时不校准。
+- seek 时 AudioClock 由 ApiLayer/open/seek 编排显式 `jump_to()` 或 `reset()`，AudioOutput 只负责后续真实数据到达后的校准。
+- pause/resume 引入后，AudioClock 的 freeze/unfreeze 应和输出侧消费/设备暂停协同设计。
+
+## 对现有架构的连带影响
+
+1. 新增 `AudioOutput` worker 和 `AudioOutputBackend` 契约。
+2. IoC 创建 playback `AudioFrameStore` 并注入给 AudioOutput。
+3. AudioResampler 输出 sink 指向 playback frame store。
+4. open 编排按格式来源组织：
+   - `demuxer.open(source)` 返回 encoded audio config。
+   - `audio_decoder.configure(encoded_config)` 返回 decoded PCM format。
+   - `audio_output.configure(options)` 返回 playback PCM format。
+   - 配置 AudioResampler(decoded PCM format, playback PCM format)。
+5. close 编排增加 `audio_output.unconfigure()`。
+6. seek 编排不调用 `AudioOutput::seek()`；只推进共享 Generation，并由 AudioOutput 自行 reset/drop stale。
+7. ApiLayer 或宿主最终接收 `AudioPlaybackFinished`，而不是 Demuxer/Decoder/Resampler 的 EOF 细节。
+
+## 关键设计决策
+
+### 使用 AudioOutput 命名
+
+当前文档中曾出现 AudioSink/AudioRenderer。第一版建议统一使用 `AudioOutput` 作为 domain worker 名称：
+
+- `Sink` 更像纯被动写入端口，但本模块是自持线程、主动消费 Store 的 worker。
+- `Renderer` 容易和视频渲染概念混淆。
+- `Output` 更准确表达“音频输出设备边界”。
+
+后续如果需要区分实时设备输出与文件输出，可以在 backend 或更高层策略里扩展，而不是先拆多个 worker 名称。
+
+### AudioOutput 产出 playback format
+
+播放格式属于输出设备边界，而不是 Demuxer 或 Decoder 的职责。Demuxer 只能探测 encoded stream config；
+Decoder 可以产出 decoded PCM format；最终设备愿意稳定消费什么格式，应由 AudioOutput/backend 根据系统设备和策略决定。
+
+AudioResampler 因此不询问 AudioOutput 模块实例，只接收 open 编排传入的两个纯数据格式：
+
+```text
+AudioDecoderConfigureResult.decoded_format
+AudioOutputConfigureResult.playback_format
+```
+
+### 非阻塞 backend 而不是阻塞 write
+
+非阻塞 submit/drain 与现有队列/store 背压模型一致：
+
+- worker 每次只推进一步。
+- WouldBlock 通过 backend progress 通知恢复。
+- `unconfigure()` 和析构不长期卡在设备写入里。
+- 测试可以稳定模拟设备缓冲满、drain 未完成和恢复。
+
+### EOF 走数据，不走通知
+
+EOF 继续作为 `AudioFrameEndOfInput` 在 Store 中有序传播。AudioOutput 只在设备 drain 完后发业务事件。这样上游不需要知道“播放结束”语义，也不会把“读完/解码完/重采样完”和“听完”混在一起。
+
+### 第一版不做 pause/resume
+
+pause/resume 涉及：
+
+- 是否暂停设备回调。
+- 是否继续从 playback store 消费。
+- AudioClock freeze/unfreeze 时机。
+- pause 时 backend 内已有缓冲是否继续播放。
+
+这些属于播放控制整体设计。第一版先完成自然播放链路，避免把尚未稳定的控制语义塞进输出契约。
+
+## 当前实现范围
+
+第一版建议实现：
+
+- `AudioOutput` 契约。
+- `AudioOutputBackend` 契约。
+- `DefaultAudioOutput` worker。
+- Fake backend 测试：
+  - configure/unconfigure。
+  - configure 返回 playback PCM format。
+  - 输入为空等待。
+  - backend WouldBlock 背压。
+  - pending frame 顺序。
+  - EOF 后 drain。
+  - drain 完发送 `AudioPlaybackFinished`。
+  - generation 变化 reset/drop stale。
+  - backend failure 进入 Failed 并发送事件。
+
+暂不实现：
+
+- 真实 miniaudio/WASAPI/SDL backend。
+- 设备枚举和设备选择。
+- pause/resume。
+- 音量控制。
+- latency 统计。
+- AudioClock 校准。
+- 多输出设备。
+
+## 测试范围
+
+- `DefaultAudioOutput`：
+  - 构造启动 worker，析构完整退出。
+  - configure/unconfigure 幂等与非法状态。
+  - 输入为空时睡眠，输入到达后唤醒。
+  - backend WouldBlock 时保留 pending frame，progress 后继续提交。
+  - EOF 不立即 finished，必须 drain 完才发送 `AudioPlaybackFinished`。
+  - stale frame 和 stale EOF 被丢弃。
+  - generation 变化时调用 backend reset，丢弃 pending，phase 回到 Running。
+  - backend configure/submit/drain 失败进入 Failed。
+- `AudioOutputBackend` contract：
+  - submit/drain 状态枚举和错误结构可表达设备背压与失败。
+- 端到端：
+  - AudioResampler -> playback frame store -> AudioOutput，验证 generation、EOF 顺序和自然结束事件。
+
+## 边界
+
+- 不规定真实音频 API。miniaudio、WASAPI、SDL 等只属于 infrastructure backend。
+- 不规定完整设备能力探测策略。第一版可以由 backend 选择一个稳定默认 playback PCM format，例如默认设备支持的 preferred format。
+- 不实现 AudioClock 写入细节，只保留配合边界。
+- 不实现 pause/resume；后续应和 AudioClock、ApiLayer 播放状态一起设计。
+- 不把 Demuxer/Decoder/Resampler 的 EOF 事件暴露给宿主；宿主只观察最终播放完成。

@@ -40,7 +40,7 @@ public:
     DefaultAudioDecoder(DefaultAudioDecoder&&) = delete;
     DefaultAudioDecoder& operator=(DefaultAudioDecoder&&) = delete;
 
-    [[nodiscard]] std::expected<void, AudioDecoderError>
+    [[nodiscard]] std::expected<AudioDecoderConfigureResult, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) override;
 
     void unconfigure() noexcept override;
@@ -76,7 +76,7 @@ private:
 
     struct ConfigureCommand {
         contracts::media::AudioCodecConfig config;
-        std::promise<std::expected<void, AudioDecoderError>> completion;
+        std::promise<std::expected<AudioDecoderConfigureResult, AudioDecoderError>> completion;
     };
 
     struct UnconfigureCommand {

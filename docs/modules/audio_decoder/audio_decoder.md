@@ -95,9 +95,13 @@ struct DecodedAudio {
 领域接口由 `ApiLayer` 调用，建议如下：
 
 ```cpp
+struct AudioDecoderConfigureResult {
+    contracts::media::AudioPcmFormat decoded_format;
+};
+
 class AudioDecoder {
 public:
-    virtual std::expected<void, AudioDecoderError>
+    virtual std::expected<AudioDecoderConfigureResult, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
     virtual void unconfigure() noexcept = 0;
@@ -106,7 +110,7 @@ public:
 
 | 方法 | 调用时机 | 语义 |
 |---|---|---|
-| `configure` | `open` | 投递 ConfigureCommand 由 worker 执行，调用方同步等待完成（见「命令通道」）；建立解码上下文，状态进入 Configured；成功后自动开始消费输入，不额外创建线程 |
+| `configure` | `open` | 投递 ConfigureCommand 由 worker 执行，调用方同步等待完成（见「命令通道」）；建立解码上下文并返回 decoded PCM format；状态进入 Configured；成功后自动开始消费输入，不额外创建线程 |
 | `unconfigure` | `close` 的资源释放阶段 | 投递 UnconfigureCommand 同步等待完成；结束当前媒体会话，释放解码器上下文，回到 Constructed；`noexcept`，重复调用幂等 |
 
 没有 `start()`/`stop()`，也没有 `pause()`。worker 空闲时在条件变量上等待，
@@ -124,7 +128,7 @@ AudioDecoder；恢复播放后，`AudioFrameStore` 变为非满并唤醒 Decoder
 ```cpp
 struct ConfigureCommand {
     contracts::media::AudioCodecConfig config;
-    std::promise<std::expected<void, AudioDecoderError>> completion;
+    std::promise<std::expected<AudioDecoderConfigureResult, AudioDecoderError>> completion;
 };
 
 struct UnconfigureCommand {
@@ -138,8 +142,8 @@ using ControlCommand = std::variant<ConfigureCommand, UnconfigureCommand>;
   decode/drain/reset/unconfigure）因此始终由 worker 独占，无并发前提。
 - worker 循环：等待 cv 唤醒后**先处理命令队列**，再按 SessionState 决定是否消费
   输入；数据面唤醒（QueueNotEmpty/StoreNotFull）与命令面共用同一个 cv。
-- `configure` 失败时经 completion 把 `AudioDecoderError` 交还调用方；`unconfigure`
-  无错误值，`completion.wait()` 即可。
+- `configure` 成功时经 completion 返回 decoded PCM format，失败时返回 `AudioDecoderError`；
+  `unconfigure` 无错误值，`completion.wait()` 即可。
 
 ## 状态机与线程
 
@@ -318,14 +322,15 @@ DefaultAudioDecoder (domain worker)
 接口接收 `AudioCodecConfig` 和 `EncodedPacket`，返回纯 `DecodedAudio`；最小能力为：
 
 ```cpp
-configure(config) -> expected<void, AudioDecoderBackendError>
+configure(config) -> expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
 decode(encoded_packet) -> expected<vector<DecodedAudio>, AudioDecoderBackendError>
 drain() -> expected<vector<DecodedAudio>, AudioDecoderBackendError>
 reset() noexcept
 unconfigure() noexcept
 ```
 
-Backend 不知道队列、generation、线程、Notifier、播放状态或输出设备。
+Backend 不知道队列、generation、线程、Notifier、播放状态或输出设备。`configure()` 返回的
+`decoded_format` 是 decoder 实际会输出的 PCM 格式，是 AudioResampler input format 的权威来源。
 
 ### `FfmpegAudioDecoderBackend` 的职责
 

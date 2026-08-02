@@ -31,6 +31,7 @@ namespace semi::domain {
 namespace {
 
 using contracts::audio_decoder::AudioDecoderBackend;
+using contracts::audio_decoder::AudioDecoderBackendConfigureResult;
 using contracts::audio_decoder::AudioDecoderBackendError;
 using contracts::audio_decoder::AudioDecoderBackendOperation;
 using contracts::audio_decoder::DecodedAudioBatch;
@@ -38,7 +39,7 @@ using contracts::demuxer::packet::EncodedPacket;
 
 class FakeAudioDecoderBackend final : public AudioDecoderBackend {
 public:
-    std::expected<void, AudioDecoderBackendError>
+    std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
     configure(const contracts::media::AudioCodecConfig&) override {
         ++configure_calls;
         std::lock_guard lock(mutex_);
@@ -48,7 +49,7 @@ public:
             configure_error_.reset();
             return std::unexpected(std::move(error));
         }
-        return {};
+        return AudioDecoderBackendConfigureResult{.decoded_format = decoded_format};
     }
 
     std::expected<DecodedAudioBatch, AudioDecoderBackendError>
@@ -103,6 +104,12 @@ public:
     std::atomic_int drain_calls = 0;
     std::atomic_int reset_calls = 0;
     std::atomic_int unconfigure_calls = 0;
+    contracts::media::AudioPcmFormat decoded_format{
+        .sample_rate = 48000,
+        .channels = 2,
+        .sample_format = contracts::media::AudioSampleFormat::F32,
+        .planar = false,
+    };
 
 private:
     std::mutex mutex_;
@@ -115,7 +122,7 @@ private:
 
 class ThrowingAudioDecoderBackend final : public AudioDecoderBackend {
 public:
-    std::expected<void, AudioDecoderBackendError>
+    std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
     configure(const contracts::media::AudioCodecConfig&) override {
         throw std::runtime_error("boom");
     }
@@ -294,6 +301,10 @@ TEST(DefaultAudioDecoderTest, OwnsItsWorkerAcrossSessionChanges) {
 
     const auto configured = decoder->configure({});
     ASSERT_TRUE(configured.has_value());
+    EXPECT_EQ(configured->decoded_format.sample_rate, backend->decoded_format.sample_rate);
+    EXPECT_EQ(configured->decoded_format.channels, backend->decoded_format.channels);
+    EXPECT_EQ(configured->decoded_format.sample_format, backend->decoded_format.sample_format);
+    EXPECT_EQ(configured->decoded_format.planar, backend->decoded_format.planar);
     EXPECT_EQ(backend->configure_calls, 1);
 
     decoder->unconfigure();

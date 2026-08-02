@@ -33,7 +33,12 @@ TEST(FfmpegAudioDecoderBackendTest, DecodesOwnedU8PcmAndPreservesTimestamp) {
         .sample_rate = 8'000,
         .channels = 1,
     };
-    ASSERT_TRUE(backend.configure(config).has_value());
+    const auto configured = backend.configure(config);
+    ASSERT_TRUE(configured.has_value()) << configured.error().message;
+    EXPECT_EQ(configured->decoded_format.sample_rate, 8'000U);
+    EXPECT_EQ(configured->decoded_format.channels, 1U);
+    EXPECT_EQ(configured->decoded_format.sample_format, AudioSampleFormat::U8);
+    EXPECT_FALSE(configured->decoded_format.planar);
 
     const std::array<std::byte, 4> payload = {
         std::byte{0x80}, std::byte{0x81}, std::byte{0x7f}, std::byte{0x00}};
@@ -65,7 +70,10 @@ TEST(FfmpegAudioDecoderBackendTest, MapsS64PcmToTheMediaContract) {
         .sample_rate = 8'000,
         .channels = 1,
     };
-    ASSERT_TRUE(backend.configure(config).has_value());
+    const auto configured = backend.configure(config);
+    ASSERT_TRUE(configured.has_value()) << configured.error().message;
+    EXPECT_EQ(configured->decoded_format.sample_format, AudioSampleFormat::S64);
+    EXPECT_FALSE(configured->decoded_format.planar);
 
     const std::array<std::byte, 8> payload = {
         std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},

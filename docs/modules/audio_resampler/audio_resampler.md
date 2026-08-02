@@ -107,11 +107,12 @@ public:
 
 ### configure 注入的纯数据
 
-- `input_format`：AudioDecoder 输出 PCM 的格式。
-- `output_format`：AudioSink/AudioRenderer 在 open 阶段确定的播放目标格式。
+- `input_format`：`AudioDecoder::configure()` 返回的 decoded PCM format。
+- `output_format`：`AudioOutput::configure()` 返回的 playback PCM format。
 
-`AudioResampler` 不运行时依赖 `AudioSink`。目标格式是 open 阶段确定的静态配置，不是 worker 循环中动态
-查询的服务。这样可以避免 “AudioSink 依赖 playback frame store，Resampler 又依赖 AudioSink” 的环。
+`AudioResampler` 不运行时依赖 `AudioOutput`。目标格式是 open 阶段由 AudioOutput 探测/选择出的静态配置，
+不是 worker 循环中动态查询的服务。这样可以避免 “AudioOutput 依赖 playback frame store，Resampler 又依赖
+AudioOutput” 的环。
 
 ### 不依赖什么
 
@@ -320,28 +321,29 @@ backend 失败时：
 2. IoC 创建两个 `AudioFrameStore` 实例：decoded frame store 与 playback frame store。
 3. AudioDecoder 的输出 sink 指向 decoded frame store。
 4. AudioResampler 的输入 source 指向 decoded frame store，输出 sink 指向 playback frame store。
-5. AudioSink/AudioRenderer 后续从 playback frame store 消费。
-6. open 编排新增 `audio_resampler.configure(input_format, output_format)`。
+5. AudioOutput 后续从 playback frame store 消费。
+6. open 编排在拿到 decoder decoded format 和 output playback format 后调用
+   `audio_resampler.configure(input_format, output_format)`。
 7. close 编排新增 `audio_resampler.unconfigure()`。
 8. seek 编排不调用 Resampler；只依赖共享 Generation 推进。
 
 ## 关键设计决策
 
-### 独立成模块，而不是塞进 AudioDecoder 或 AudioSink
+### 独立成模块，而不是塞进 AudioDecoder 或 AudioOutput
 
 - 不塞进 AudioDecoder：Resampler 的目标格式来自输出设备侧，把这份知识放进 Decoder 会让 Decoder 依赖
   下游策略。
-- 不塞进 AudioSink：重采样是有状态计算，可能分配内存，也可能阻塞；不适合放进 miniaudio 实时线程。
+- 不塞进 AudioOutput：重采样是有状态计算，可能分配内存，也可能阻塞；不适合放进实时设备输出线程。
 - 独立模块 + Store 解耦：每个 worker 只关心自己的输入端口、输出端口和 backend，测试边界清楚。
 
 ### 目标格式 open 时确定
 
-目标输出格式是 open 阶段由输出链路探测或策略选择出的静态配置。Resampler configure 后运行期只转换数据，
-不再查询 AudioSink。这样 DAG 保持单向：
+目标输出格式是 open 阶段由 AudioOutput 探测或策略选择出的静态配置。Resampler configure 后运行期只转换数据，
+不再查询 AudioOutput。这样 DAG 保持单向：
 
 ```text
-AudioSink/Output capability -> output_format data -> AudioResampler.configure()
-AudioResampler -> playback frame store -> AudioSink/Renderer
+AudioOutput.configure() -> output_format data -> AudioResampler.configure()
+AudioResampler -> playback frame store -> AudioOutput
 ```
 
 ### 暂不做变速不变调

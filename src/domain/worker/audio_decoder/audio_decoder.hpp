@@ -25,6 +25,10 @@ struct AudioDecoderError {
     std::optional<AudioDecoderBackendError> backend_error;
 };
 
+struct AudioDecoderConfigureResult {
+    contracts::media::AudioPcmFormat decoded_format;
+};
+
 // Control-plane interface for the audio decoding worker. The worker belongs to
 // the module lifecycle (constructed with the module, joined on destruction), so
 // there is no start()/stop(). Playback pause is represented by downstream
@@ -38,7 +42,7 @@ public:
     AudioDecoder(AudioDecoder&&) = delete;
     AudioDecoder& operator=(AudioDecoder&&) = delete;
 
-    [[nodiscard]] virtual std::expected<void, AudioDecoderError>
+    [[nodiscard]] virtual std::expected<AudioDecoderConfigureResult, AudioDecoderError>
     configure(const contracts::media::AudioCodecConfig& config) = 0;
 
     virtual void unconfigure() noexcept = 0;
