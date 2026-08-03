@@ -7,6 +7,7 @@
 #include <miniaudio/miniaudio.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstddef>
 #include <cstring>
@@ -77,6 +78,80 @@ AudioOutputBackendError make_error(AudioOutputBackendOperation operation,
     };
 }
 
+class ByteSpscRing final {
+public:
+    void resize(std::size_t capacity) {
+        storage_.assign(capacity, std::byte{0});
+        read_index_.store(0, std::memory_order_relaxed);
+        write_index_.store(0, std::memory_order_relaxed);
+    }
+
+    void clear() noexcept {
+        storage_.clear();
+        storage_.shrink_to_fit();
+        read_index_.store(0, std::memory_order_relaxed);
+        write_index_.store(0, std::memory_order_relaxed);
+    }
+
+    void reset() noexcept {
+        const auto write = write_index_.load(std::memory_order_acquire);
+        read_index_.store(write, std::memory_order_release);
+    }
+
+    [[nodiscard]] std::size_t available() const noexcept {
+        const auto write = write_index_.load(std::memory_order_acquire);
+        const auto read = read_index_.load(std::memory_order_acquire);
+        return static_cast<std::size_t>(write - read);
+    }
+
+    [[nodiscard]] bool try_write(const std::byte* source, std::size_t count) noexcept {
+        const auto write = write_index_.load(std::memory_order_relaxed);
+        const auto read = read_index_.load(std::memory_order_acquire);
+        if (count > storage_.size() - static_cast<std::size_t>(write - read)) {
+            return false;
+        }
+        copy_in(source, count, write);
+        write_index_.store(write + count, std::memory_order_release);
+        return true;
+    }
+
+    std::size_t try_read(std::byte* destination, std::size_t count) noexcept {
+        const auto read = read_index_.load(std::memory_order_relaxed);
+        const auto write = write_index_.load(std::memory_order_acquire);
+        const auto available_bytes = static_cast<std::size_t>(write - read);
+        const auto copied = std::min(count, available_bytes);
+        copy_out(destination, copied, read);
+        read_index_.store(read + copied, std::memory_order_release);
+        return copied;
+    }
+
+private:
+    void copy_in(const std::byte* source, std::size_t count, std::uint64_t index) noexcept {
+        const auto offset = static_cast<std::size_t>(index % storage_.size());
+        const auto first = std::min(count, storage_.size() - offset);
+        std::memcpy(storage_.data() + offset, source, first);
+        if (count > first) {
+            std::memcpy(storage_.data(), source + first, count - first);
+        }
+    }
+
+    void copy_out(std::byte* destination, std::size_t count, std::uint64_t index) noexcept {
+        if (count == 0 || storage_.empty()) {
+            return;
+        }
+        const auto offset = static_cast<std::size_t>(index % storage_.size());
+        const auto first = std::min(count, storage_.size() - offset);
+        std::memcpy(destination, storage_.data() + offset, first);
+        if (count > first) {
+            std::memcpy(destination + first, storage_.data(), count - first);
+        }
+    }
+
+    std::vector<std::byte> storage_;
+    std::atomic<std::uint64_t> read_index_{0};
+    std::atomic<std::uint64_t> write_index_{0};
+};
+
 } // namespace
 
 struct MiniaudioAudioOutputBackend::Impl {
@@ -105,12 +180,8 @@ struct MiniaudioAudioOutputBackend::Impl {
         }
 
         playback_format = default_playback_format();
-        buffer.assign(playback_format.sample_rate * playback_format.channels * kBytesPerSample *
-                          kRingBufferSeconds,
-                      std::byte{0});
-        read_offset = 0;
-        write_offset = 0;
-        buffered_bytes = 0;
+        buffer.resize(playback_format.sample_rate * playback_format.channels * kBytesPerSample *
+                      kRingBufferSeconds);
 
         ma_device_config config = ma_device_config_init(ma_device_type_playback);
         config.playback.format = ma_format_f32;
@@ -178,11 +249,9 @@ struct MiniaudioAudioOutputBackend::Impl {
         if (expected_bytes == 0) {
             return AudioOutputSubmitStatus::Accepted;
         }
-        if (buffer.size() - buffered_bytes < expected_bytes) {
+        if (!buffer.try_write(audio.planes.front().data(), expected_bytes)) {
             return AudioOutputSubmitStatus::WouldBlock;
         }
-
-        write_bytes(audio.planes.front().data(), expected_bytes);
         return AudioOutputSubmitStatus::Accepted;
     }
 
@@ -194,35 +263,31 @@ struct MiniaudioAudioOutputBackend::Impl {
                 0,
                 "miniaudio output backend is not configured"));
         }
-        return buffered_bytes == 0 ? AudioOutputDrainStatus::Drained
+        return buffer.available() == 0 ? AudioOutputDrainStatus::Drained
                                    : AudioOutputDrainStatus::WouldBlock;
     }
 
     void reset() noexcept {
-        {
-            std::lock_guard lock(mutex);
-            read_offset = 0;
-            write_offset = 0;
-            buffered_bytes = 0;
+        if (device_initialized) {
+            (void)ma_device_stop(&device);
+        }
+        buffer.reset();
+        if (device_initialized) {
+            (void)ma_device_start(&device);
         }
         notify_progress_available();
     }
 
     void unconfigure() noexcept {
-        {
-            std::lock_guard lock(mutex);
-            configured = false;
-            read_offset = 0;
-            write_offset = 0;
-            buffered_bytes = 0;
-            playback_format = {};
-            buffer.clear();
-        }
-
         if (device_initialized) {
+            (void)ma_device_stop(&device);
             ma_device_uninit(&device);
             device_initialized = false;
         }
+        std::lock_guard lock(mutex);
+        configured = false;
+        playback_format = {};
+        buffer.clear();
     }
 
     static void data_callback(ma_device* device,
@@ -241,18 +306,12 @@ struct MiniaudioAudioOutputBackend::Impl {
             static_cast<std::size_t>(frame_count) * kPlaybackChannels * kBytesPerSample;
         auto* bytes = static_cast<std::byte*>(output);
 
-        std::size_t copied = 0;
-        contracts::audio_output::AudioOutputBackendProgressNotifier* notifier = nullptr;
-        {
-            std::lock_guard lock(mutex);
-            copied = read_bytes(bytes, requested_bytes);
-            notifier = progress_notifier;
-        }
+        const std::size_t copied = buffer.try_read(bytes, requested_bytes);
         if (copied < requested_bytes) {
             std::memset(bytes + copied, 0, requested_bytes - copied);
         }
-        if (copied > 0 && notifier != nullptr) {
-            notifier->notify_audio_output_progress_available();
+        if (copied > 0 && progress_notifier != nullptr) {
+            progress_notifier->notify_audio_output_progress_available();
         }
     }
 
@@ -273,40 +332,10 @@ struct MiniaudioAudioOutputBackend::Impl {
         }
     }
 
-    void write_bytes(const std::byte* source, std::size_t byte_count) noexcept {
-        assert(byte_count <= buffer.size() - buffered_bytes);
-        const std::size_t first_chunk = std::min(byte_count, buffer.size() - write_offset);
-        std::memcpy(buffer.data() + write_offset, source, first_chunk);
-        if (byte_count > first_chunk) {
-            std::memcpy(buffer.data(), source + first_chunk, byte_count - first_chunk);
-        }
-        write_offset = (write_offset + byte_count) % buffer.size();
-        buffered_bytes += byte_count;
-    }
-
-    std::size_t read_bytes(std::byte* destination, std::size_t byte_count) noexcept {
-        const std::size_t bytes_to_read = std::min(byte_count, buffered_bytes);
-        if (bytes_to_read == 0 || buffer.empty()) {
-            return 0;
-        }
-
-        const std::size_t first_chunk = std::min(bytes_to_read, buffer.size() - read_offset);
-        std::memcpy(destination, buffer.data() + read_offset, first_chunk);
-        if (bytes_to_read > first_chunk) {
-            std::memcpy(destination + first_chunk, buffer.data(), bytes_to_read - first_chunk);
-        }
-        read_offset = (read_offset + bytes_to_read) % buffer.size();
-        buffered_bytes -= bytes_to_read;
-        return bytes_to_read;
-    }
-
     std::mutex mutex;
     contracts::audio_output::AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
     AudioPcmFormat playback_format{};
-    std::vector<std::byte> buffer;
-    std::size_t read_offset = 0;
-    std::size_t write_offset = 0;
-    std::size_t buffered_bytes = 0;
+    ByteSpscRing buffer;
     ma_device device{};
     bool device_initialized = false;
     bool configured = false;

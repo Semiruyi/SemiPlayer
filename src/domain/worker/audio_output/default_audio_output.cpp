@@ -114,10 +114,7 @@ void DefaultAudioOutput::pause_playback() noexcept {
 }
 
 void DefaultAudioOutput::notify_audio_output_progress_available() noexcept {
-    {
-        std::lock_guard lock(mutex_);
-        backend_progress_hint_ = true;
-    }
+    backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
 

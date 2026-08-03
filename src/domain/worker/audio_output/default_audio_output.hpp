@@ -8,6 +8,7 @@
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <condition_variable>
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <future>
@@ -146,7 +147,7 @@ private:
     Generation::Value active_generation_ = 0;
     bool playback_enabled_ = false;
     bool input_not_empty_hint_ = false;
-    bool backend_progress_hint_ = false;
+    std::atomic_bool backend_progress_hint_ = false;
 };
 
 } // namespace semi::domain
