@@ -1,4 +1,5 @@
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
+#include "infrastructure/audio_output/byte_spsc_ring.hpp"
 
 #define MA_NO_DECODING
 #define MA_NO_ENCODING
@@ -6,15 +7,11 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio/miniaudio.h>
 
-#include <algorithm>
-#include <atomic>
-#include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
 #include <string>
 #include <utility>
-#include <vector>
 
 namespace semi::infra::audio_output {
 namespace {
@@ -77,80 +74,6 @@ AudioOutputBackendError make_error(AudioOutputBackendOperation operation,
         .message = std::move(message),
     };
 }
-
-class ByteSpscRing final {
-public:
-    void resize(std::size_t capacity) {
-        storage_.assign(capacity, std::byte{0});
-        read_index_.store(0, std::memory_order_relaxed);
-        write_index_.store(0, std::memory_order_relaxed);
-    }
-
-    void clear() noexcept {
-        storage_.clear();
-        storage_.shrink_to_fit();
-        read_index_.store(0, std::memory_order_relaxed);
-        write_index_.store(0, std::memory_order_relaxed);
-    }
-
-    void reset() noexcept {
-        const auto write = write_index_.load(std::memory_order_acquire);
-        read_index_.store(write, std::memory_order_release);
-    }
-
-    [[nodiscard]] std::size_t available() const noexcept {
-        const auto write = write_index_.load(std::memory_order_acquire);
-        const auto read = read_index_.load(std::memory_order_acquire);
-        return static_cast<std::size_t>(write - read);
-    }
-
-    [[nodiscard]] bool try_write(const std::byte* source, std::size_t count) noexcept {
-        const auto write = write_index_.load(std::memory_order_relaxed);
-        const auto read = read_index_.load(std::memory_order_acquire);
-        if (count > storage_.size() - static_cast<std::size_t>(write - read)) {
-            return false;
-        }
-        copy_in(source, count, write);
-        write_index_.store(write + count, std::memory_order_release);
-        return true;
-    }
-
-    std::size_t try_read(std::byte* destination, std::size_t count) noexcept {
-        const auto read = read_index_.load(std::memory_order_relaxed);
-        const auto write = write_index_.load(std::memory_order_acquire);
-        const auto available_bytes = static_cast<std::size_t>(write - read);
-        const auto copied = std::min(count, available_bytes);
-        copy_out(destination, copied, read);
-        read_index_.store(read + copied, std::memory_order_release);
-        return copied;
-    }
-
-private:
-    void copy_in(const std::byte* source, std::size_t count, std::uint64_t index) noexcept {
-        const auto offset = static_cast<std::size_t>(index % storage_.size());
-        const auto first = std::min(count, storage_.size() - offset);
-        std::memcpy(storage_.data() + offset, source, first);
-        if (count > first) {
-            std::memcpy(storage_.data(), source + first, count - first);
-        }
-    }
-
-    void copy_out(std::byte* destination, std::size_t count, std::uint64_t index) noexcept {
-        if (count == 0 || storage_.empty()) {
-            return;
-        }
-        const auto offset = static_cast<std::size_t>(index % storage_.size());
-        const auto first = std::min(count, storage_.size() - offset);
-        std::memcpy(destination, storage_.data() + offset, first);
-        if (count > first) {
-            std::memcpy(destination + first, storage_.data(), count - first);
-        }
-    }
-
-    std::vector<std::byte> storage_;
-    std::atomic<std::uint64_t> read_index_{0};
-    std::atomic<std::uint64_t> write_index_{0};
-};
 
 } // namespace
 
