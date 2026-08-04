@@ -417,6 +417,11 @@ CommandExecution execute_seek(std::int64_t position_us,
         return make_failure(SEMI_ERR_INTERNAL);
     }
 
+    if (impl.generation) {
+        std::lock_guard lock(impl.mutex);
+        impl.active_generation = impl.generation->current();
+    }
+
     CommandExecution execution;
     execution.status = SEMI_OK;
     execution.next_state = current_state == PlayerState::Ended ? PlayerState::Paused : current_state;

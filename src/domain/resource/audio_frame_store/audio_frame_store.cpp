@@ -10,20 +10,16 @@ AudioFrameStore::AudioFrameStore(std::shared_ptr<infra::Notifier> notifier,
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 AudioFramePushResult AudioFrameStore::try_push(AudioFrameStoreItem&& item) {
-    bool should_notify_not_empty = false;
     {
         std::lock_guard lock(mutex_);
         if (items_.size() >= capacity_) {
             return AudioFramePushResult::Full;
         }
 
-        should_notify_not_empty = items_.empty();
         items_.push_back(std::move(item));
     }
 
-    if (should_notify_not_empty) {
-        notify_not_empty();
-    }
+    notify_not_empty();
     return AudioFramePushResult::Accepted;
 }
 

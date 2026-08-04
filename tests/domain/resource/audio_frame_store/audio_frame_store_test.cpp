@@ -98,7 +98,7 @@ TEST(AudioFrameStore, ZeroCapacityStoreAlwaysReportsFull) {
     EXPECT_TRUE(store.full());
 }
 
-TEST(AudioFrameStore, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
+TEST(AudioFrameStore, NotifiesConsumerForEveryAcceptedPushAndProducerOnFullBoundary) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     AudioFrameStore store(notifier, 2);
     int not_empty_calls = 0;
@@ -116,7 +116,7 @@ TEST(AudioFrameStore, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
 
     EXPECT_EQ(store.try_push(make_frame(1, 10)), AudioFramePushResult::Accepted);
     EXPECT_EQ(store.try_push(make_frame(2, 11)), AudioFramePushResult::Accepted);
-    EXPECT_EQ(not_empty_calls, 1);
+    EXPECT_EQ(not_empty_calls, 2);
     EXPECT_EQ(not_full_calls, 0);
 
     ASSERT_TRUE(store.try_pop().has_value());
@@ -125,7 +125,7 @@ TEST(AudioFrameStore, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
     EXPECT_EQ(not_full_calls, 1);
 
     EXPECT_EQ(store.try_push(make_frame(3, 12)), AudioFramePushResult::Accepted);
-    EXPECT_EQ(not_empty_calls, 2);
+    EXPECT_EQ(not_empty_calls, 3);
     EXPECT_EQ(not_full_calls, 1);
 
     EXPECT_TRUE(not_empty_subscription->active());

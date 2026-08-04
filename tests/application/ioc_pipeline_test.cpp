@@ -4,10 +4,13 @@
 
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <thread>
+
 namespace semi::application {
 namespace {
 
-TEST(IoCPipelineTest, SeeksThenStartsSampleThroughConfiguredAudioOutput) {
+TEST(IoCPipelineTest, SeeksThenPlaysSampleThroughConfiguredAudioOutput) {
     auto& container = ioc::IoCContainer::instance();
     ASSERT_TRUE(container.dispose());
     ASSERT_TRUE(container.assemble());
@@ -30,6 +33,18 @@ TEST(IoCPipelineTest, SeeksThenStartsSampleThroughConfiguredAudioOutput) {
     const auto play = api_layer->play();
     ASSERT_NE(play, 0U);
     EXPECT_EQ(api_layer->await(play, result), SEMI_OK);
+
+    bool playback_finished = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline && !playback_finished) {
+        PlayerEvent event;
+        ASSERT_EQ(api_layer->poll_event(event), SEMI_OK);
+        playback_finished = event.type == PlayerEventType::PlaybackFinished;
+        if (!playback_finished) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    EXPECT_TRUE(playback_finished);
 
     const CommandHandle close = api_layer->close();
     ASSERT_NE(close, 0U);

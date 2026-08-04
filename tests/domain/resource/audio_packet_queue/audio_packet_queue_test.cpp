@@ -137,7 +137,7 @@ TEST(AudioPacketQueue, ZeroCapacityQueueAlwaysReportsFull) {
     EXPECT_TRUE(queue.full());
 }
 
-TEST(AudioPacketQueue, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
+TEST(AudioPacketQueue, NotifiesConsumerForEveryAcceptedPushAndProducerOnFullBoundary) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     AudioPacketQueue queue(notifier, 2);
     int not_empty_calls = 0;
@@ -155,7 +155,7 @@ TEST(AudioPacketQueue, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
 
     EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
     EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(2, 11)}), AudioPacketPushResult::Accepted);
-    EXPECT_EQ(not_empty_calls, 1);
+    EXPECT_EQ(not_empty_calls, 2);
     EXPECT_EQ(not_full_calls, 0);
 
     ASSERT_TRUE(queue.try_pop().has_value());
@@ -164,7 +164,7 @@ TEST(AudioPacketQueue, NotifiesOnlyOnEmptyAndFullBoundaryTransitions) {
     EXPECT_EQ(not_full_calls, 1);
 
     EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(3, 12)}), AudioPacketPushResult::Accepted);
-    EXPECT_EQ(not_empty_calls, 2);
+    EXPECT_EQ(not_empty_calls, 3);
     EXPECT_EQ(not_full_calls, 1);
 
     EXPECT_TRUE(not_empty_subscription->active());

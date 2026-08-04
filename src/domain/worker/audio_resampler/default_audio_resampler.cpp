@@ -238,7 +238,8 @@ bool DefaultAudioResampler::should_process_data_locked() const noexcept {
         return output_not_full_hint_;
     }
 
-    if (input_exhausted_) {
+    if (input_exhausted_ &&
+        (!generation_ || active_generation_ == generation_->current())) {
         return false;
     }
 
@@ -294,7 +295,9 @@ void DefaultAudioResampler::read_next_input_to_pending() noexcept {
     std::shared_ptr<AudioFrameSource> audio_frame_source;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured || input_exhausted_ ||
+        if (session_state_ != SessionState::Configured ||
+            (input_exhausted_ &&
+             (!generation_ || active_generation_ == generation_->current())) ||
             !pending_outputs_.empty()) {
             return;
         }
