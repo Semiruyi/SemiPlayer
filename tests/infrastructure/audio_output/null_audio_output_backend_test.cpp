@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace semi::infra::audio_output {
@@ -17,12 +18,15 @@ using contracts::media::AudioPcmFormat;
 using contracts::media::AudioSampleFormat;
 using contracts::media::DecodedAudio;
 
-class CountingProgressNotifier final
-    : public contracts::audio_output::AudioOutputBackendProgressNotifier {
+class FrameSink final : public infra::RealTimeNotificationSink<
+                            contracts::audio_output::AudioFramesConsumed> {
 public:
-    void notify_audio_output_progress_available() noexcept override { ++calls; }
+    void on_realtime_notification(
+        const contracts::audio_output::AudioFramesConsumed& event) noexcept override {
+        total_frames += event.frames;
+    }
 
-    std::atomic_int calls = 0;
+    std::uint32_t total_frames = 0;
 };
 
 DecodedAudio make_audio(AudioPcmFormat format) {
@@ -36,7 +40,7 @@ DecodedAudio make_audio(AudioPcmFormat format) {
 }
 
 TEST(NullAudioOutputBackendTest, ConfigureReturnsFixedPlaybackFormat) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
 
     const auto configured = backend.configure({});
 
@@ -48,7 +52,7 @@ TEST(NullAudioOutputBackendTest, ConfigureReturnsFixedPlaybackFormat) {
 }
 
 TEST(NullAudioOutputBackendTest, AcceptsMatchingPcmAndDrainsImmediately) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
 
@@ -62,7 +66,7 @@ TEST(NullAudioOutputBackendTest, AcceptsMatchingPcmAndDrainsImmediately) {
 }
 
 TEST(NullAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
 
     const auto submitted = backend.try_submit(make_audio({}));
     const auto drained = backend.try_drain();
@@ -74,7 +78,7 @@ TEST(NullAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
 }
 
 TEST(NullAudioOutputBackendTest, RejectsUnexpectedPcmFormat) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
 
@@ -87,7 +91,7 @@ TEST(NullAudioOutputBackendTest, RejectsUnexpectedPcmFormat) {
 }
 
 TEST(NullAudioOutputBackendTest, ResetKeepsConfigurationReusable) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
 
@@ -98,8 +102,28 @@ TEST(NullAudioOutputBackendTest, ResetKeepsConfigurationReusable) {
     EXPECT_EQ(*submitted, AudioOutputSubmitStatus::Accepted);
 }
 
+TEST(NullAudioOutputBackendTest, PublishesConsumedFramesThroughTheRealtimeNotifier) {
+    auto notifier = std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
+    NullAudioOutputBackend backend{notifier};
+    FrameSink sink;
+
+    ASSERT_TRUE(notifier->register_sink(sink));
+    ASSERT_TRUE(notifier->seal());
+
+    const auto configured = backend.configure({});
+    ASSERT_TRUE(configured.has_value()) << configured.error().message;
+    const auto submitted = backend.try_submit(make_audio(configured->playback_format));
+
+    ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
+    EXPECT_EQ(sink.total_frames, 1U);
+
+    backend.unconfigure();
+    ASSERT_TRUE(notifier->unseal());
+    EXPECT_TRUE(notifier->unregister_sink(sink));
+}
+
 TEST(NullAudioOutputBackendTest, UnconfigureReleasesTheSession) {
-    NullAudioOutputBackend backend;
+    NullAudioOutputBackend backend{nullptr};
     ASSERT_TRUE(backend.configure({}).has_value());
 
     backend.unconfigure();
@@ -107,17 +131,6 @@ TEST(NullAudioOutputBackendTest, UnconfigureReleasesTheSession) {
 
     ASSERT_FALSE(submitted.has_value());
     EXPECT_EQ(submitted.error().operation, AudioOutputBackendOperation::Submit);
-}
-
-TEST(NullAudioOutputBackendTest, NotifiesProgressOnConfigureAndReset) {
-    NullAudioOutputBackend backend;
-    CountingProgressNotifier notifier;
-    backend.set_progress_notifier(&notifier);
-
-    ASSERT_TRUE(backend.configure({}).has_value());
-    backend.reset();
-
-    EXPECT_EQ(notifier.calls, 2);
 }
 
 } // namespace

@@ -17,14 +17,6 @@ using contracts::media::AudioPcmFormat;
 using contracts::media::AudioSampleFormat;
 using contracts::media::DecodedAudio;
 
-class CountingProgressNotifier final
-    : public contracts::audio_output::AudioOutputBackendProgressNotifier {
-public:
-    void notify_audio_output_progress_available() noexcept override { ++calls; }
-
-    std::atomic_int calls = 0;
-};
-
 DecodedAudio make_audio(AudioPcmFormat format, std::uint32_t samples_per_channel = 128) {
     const std::size_t bytes_per_sample = sizeof(float);
     const std::size_t byte_count =
@@ -38,7 +30,7 @@ DecodedAudio make_audio(AudioPcmFormat format, std::uint32_t samples_per_channel
 }
 
 TEST(MiniaudioAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
-    MiniaudioAudioOutputBackend backend;
+    MiniaudioAudioOutputBackend backend{nullptr};
 
     const auto submitted = backend.try_submit(make_audio({}));
     const auto drained = backend.try_drain();
@@ -50,7 +42,7 @@ TEST(MiniaudioAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) 
 }
 
 TEST(MiniaudioAudioOutputBackendTest, RejectsDeviceIdUntilSelectionIsImplemented) {
-    MiniaudioAudioOutputBackend backend;
+    MiniaudioAudioOutputBackend backend{nullptr};
 
     const auto configured = backend.configure({.device_id = "not-yet-supported"});
 
@@ -59,10 +51,7 @@ TEST(MiniaudioAudioOutputBackendTest, RejectsDeviceIdUntilSelectionIsImplemented
 }
 
 TEST(MiniaudioAudioOutputBackendTest, ConfigureSubmitDrainWhenDeviceIsAvailable) {
-    MiniaudioAudioOutputBackend backend;
-    CountingProgressNotifier notifier;
-    backend.set_progress_notifier(&notifier);
-
+    MiniaudioAudioOutputBackend backend{nullptr};
     const auto configured = backend.configure({});
     if (!configured.has_value()) {
         GTEST_SKIP() << "miniaudio playback device unavailable: " << configured.error().message;
@@ -89,7 +78,7 @@ TEST(MiniaudioAudioOutputBackendTest, ConfigureSubmitDrainWhenDeviceIsAvailable)
 }
 
 TEST(MiniaudioAudioOutputBackendTest, RejectsUnexpectedFormatWhenDeviceIsAvailable) {
-    MiniaudioAudioOutputBackend backend;
+    MiniaudioAudioOutputBackend backend{nullptr};
 
     const auto configured = backend.configure({});
     if (!configured.has_value()) {

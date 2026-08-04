@@ -172,8 +172,6 @@ class AudioOutputBackend {
 public:
     virtual ~AudioOutputBackend() = default;
 
-    virtual void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept = 0;
-
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 
@@ -191,7 +189,7 @@ public:
 后端操作语义：
 
 - `configure()`：打开/选择设备，建立输出上下文，并返回最终 playback PCM 格式。
-- `set_progress_notifier()`：注入或清除 worker 唤醒端口；backend 可在设备缓冲可写或 drain 状态推进时通知。
+- backend 在构造时注入并持有 `shared_ptr<AudioOutputRealTimeNotifier>`；通知目标在整个 backend 生命周期内保持不变。
 - `try_submit(audio)`：尝试提交一段 PCM；成功返回 `Accepted`，设备缓冲暂不可写返回 `WouldBlock`。
 - `try_drain()`：EOF 后尝试确认设备侧缓冲已经播放/排空；未完成返回 `WouldBlock`，完成返回 `Drained`。
 - `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态。
@@ -199,25 +197,22 @@ public:
 
 不建议第一版使用阻塞式 `write()`。阻塞式接口虽然简单，但会让 `unconfigure()`、析构和错误恢复被设备阻塞影响，测试背压也不如非阻塞契约清晰。
 
-### Backend progress 通知
+### Backend 实时通知
 
-非阻塞 backend 需要在“可以再次推进”时唤醒 AudioOutput worker：
+backend 在设备回调中发布统一的实时事件，而不是持有 AudioOutput 的专用回调接口：
 
 ```cpp
-class AudioOutputBackendProgressNotifier {
-public:
-    virtual ~AudioOutputBackendProgressNotifier() = default;
-    virtual void notify_audio_output_progress_available() noexcept = 0;
+struct AudioFramesConsumed {
+    std::uint32_t frames;
 };
+
+using AudioOutputRealTimeNotifier = RealTimeNotifier<
+    RealTimeEventSpec<AudioFramesConsumed, 2>>;
 ```
 
-这里不区分 “writable” 和 “drained”，统一表达为：
+`DefaultAudioOutput` 是第一个 sink：收到事件后只设置原子进度提示并唤醒自己的 worker，worker 再根据 phase 决定推进 `try_submit()` 还是 `try_drain()`。第二个 slot 预留给 `AudioClock`。
 
-```text
-可以再调用一次 try_submit() 或 try_drain() 了
-```
-
-这样可以避免把设备内部状态泄漏给 domain worker。worker 根据自己的 phase 决定下一次推进是 submit 还是 drain。
+只有设备回调真正从 PCM ring 读出的媒体帧会发布 `AudioFramesConsumed`；欠载时补出的静音不会发布事件，因此不会错误推进音频时钟。通知器的注册、冻结和解绑规则见 `notifier/realtime_notifier.md`。
 
 ## 事件通知
 

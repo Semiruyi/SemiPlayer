@@ -83,10 +83,9 @@ private:
 
 class FakeAudioOutputBackend final : public AudioOutputBackend {
 public:
-    void set_progress_notifier(
-        contracts::audio_output::AudioOutputBackendProgressNotifier* notifier) noexcept override {
-        progress_notifier = notifier;
-    }
+    explicit FakeAudioOutputBackend(
+        std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> notifier)
+        : realtime_notifier(std::move(notifier)) {}
 
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) override {
@@ -167,8 +166,8 @@ public:
     }
 
     void notify_progress() {
-        if (progress_notifier != nullptr) {
-            progress_notifier->notify_audio_output_progress_available();
+        if (realtime_notifier) {
+            realtime_notifier->notify(contracts::audio_output::AudioFramesConsumed{.frames = 1});
         }
     }
 
@@ -190,7 +189,7 @@ public:
     contracts::media::AudioPcmFormat format = playback_format();
     AudioOutputOptions last_options;
     std::vector<std::byte> submitted_markers;
-    contracts::audio_output::AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier;
 
 private:
     mutable std::mutex mutex_;
@@ -203,9 +202,6 @@ private:
 
 class ThrowingAudioOutputBackend final : public AudioOutputBackend {
 public:
-    void set_progress_notifier(
-        contracts::audio_output::AudioOutputBackendProgressNotifier*) noexcept override {}
-
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions&) override {
         throw std::runtime_error("boom");
@@ -227,17 +223,21 @@ public:
 };
 
 struct OutputDependencies {
+    std::shared_ptr<infra::DefaultNotifier> notifier;
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier;
     std::shared_ptr<FakeAudioFrameSource> source;
     std::shared_ptr<AudioOutputBackend> backend;
-    std::shared_ptr<infra::DefaultNotifier> notifier;
     std::shared_ptr<Generation> generation;
 };
 
 OutputDependencies complete_dependencies() {
+    auto realtime_notifier =
+        std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
     return OutputDependencies{
-        .source = std::make_shared<FakeAudioFrameSource>(),
-        .backend = std::make_shared<FakeAudioOutputBackend>(),
         .notifier = std::make_shared<infra::DefaultNotifier>(),
+        .realtime_notifier = realtime_notifier,
+        .source = std::make_shared<FakeAudioFrameSource>(),
+        .backend = std::make_shared<FakeAudioOutputBackend>(realtime_notifier),
         .generation = std::make_shared<Generation>(),
     };
 }
@@ -247,6 +247,7 @@ std::unique_ptr<DefaultAudioOutput> make_output(const OutputDependencies& depend
         dependencies.source,
         dependencies.backend,
         dependencies.notifier,
+        dependencies.realtime_notifier,
         dependencies.generation);
 }
 
@@ -273,9 +274,11 @@ TEST(DefaultAudioOutputTest, OwnsItsWorkerAcrossSessionChanges) {
     ASSERT_TRUE(backend->last_options.device_id.has_value());
     EXPECT_EQ(*backend->last_options.device_id, "default");
     EXPECT_EQ(backend->configure_calls, 1);
+    EXPECT_TRUE(dependencies.realtime_notifier->sealed());
 
     output->unconfigure();
     EXPECT_EQ(backend->unconfigure_calls, 1);
+    EXPECT_FALSE(dependencies.realtime_notifier->sealed());
 
     const auto reconfigured = output->configure({});
     ASSERT_TRUE(reconfigured.has_value());

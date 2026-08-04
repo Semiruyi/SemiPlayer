@@ -78,13 +78,10 @@ AudioOutputBackendError make_error(AudioOutputBackendOperation operation,
 } // namespace
 
 struct MiniaudioAudioOutputBackend::Impl {
-    ~Impl() { unconfigure(); }
+    explicit Impl(std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> notifier)
+        : realtime_notifier(std::move(notifier)) {}
 
-    void set_progress_notifier(
-        contracts::audio_output::AudioOutputBackendProgressNotifier* notifier) noexcept {
-        std::lock_guard lock(mutex);
-        progress_notifier = notifier;
-    }
+    ~Impl() { unconfigure(); }
 
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) {
@@ -135,7 +132,6 @@ struct MiniaudioAudioOutputBackend::Impl {
         }
 
         configured = true;
-        notify_progress_available_unlocked();
         return AudioOutputConfigureResult{.playback_format = playback_format};
     }
 
@@ -198,7 +194,6 @@ struct MiniaudioAudioOutputBackend::Impl {
         if (device_initialized) {
             (void)ma_device_start(&device);
         }
-        notify_progress_available();
     }
 
     void unconfigure() noexcept {
@@ -233,30 +228,16 @@ struct MiniaudioAudioOutputBackend::Impl {
         if (copied < requested_bytes) {
             std::memset(bytes + copied, 0, requested_bytes - copied);
         }
-        if (copied > 0 && progress_notifier != nullptr) {
-            progress_notifier->notify_audio_output_progress_available();
-        }
-    }
-
-    void notify_progress_available() noexcept {
-        contracts::audio_output::AudioOutputBackendProgressNotifier* notifier = nullptr;
-        {
-            std::lock_guard lock(mutex);
-            notifier = progress_notifier;
-        }
-        if (notifier != nullptr) {
-            notifier->notify_audio_output_progress_available();
-        }
-    }
-
-    void notify_progress_available_unlocked() noexcept {
-        if (progress_notifier != nullptr) {
-            progress_notifier->notify_audio_output_progress_available();
+        if (copied > 0 && realtime_notifier) {
+            const std::size_t bytes_per_frame = kPlaybackChannels * kBytesPerSample;
+            realtime_notifier->notify(contracts::audio_output::AudioFramesConsumed{
+                .frames = static_cast<std::uint32_t>(copied / bytes_per_frame),
+            });
         }
     }
 
     std::mutex mutex;
-    contracts::audio_output::AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier;
     AudioPcmFormat playback_format{};
     ByteSpscRing buffer;
     ma_device device{};
@@ -264,15 +245,11 @@ struct MiniaudioAudioOutputBackend::Impl {
     bool configured = false;
 };
 
-MiniaudioAudioOutputBackend::MiniaudioAudioOutputBackend()
-    : impl_(std::make_unique<Impl>()) {}
+MiniaudioAudioOutputBackend::MiniaudioAudioOutputBackend(
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier)
+    : impl_(std::make_unique<Impl>(std::move(realtime_notifier))) {}
 
 MiniaudioAudioOutputBackend::~MiniaudioAudioOutputBackend() = default;
-
-void MiniaudioAudioOutputBackend::set_progress_notifier(
-    contracts::audio_output::AudioOutputBackendProgressNotifier* notifier) noexcept {
-    impl_->set_progress_notifier(notifier);
-}
 
 std::expected<contracts::audio_output::AudioOutputConfigureResult,
               contracts::audio_output::AudioOutputBackendError>

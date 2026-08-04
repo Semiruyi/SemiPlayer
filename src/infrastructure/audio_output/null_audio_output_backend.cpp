@@ -20,13 +20,12 @@ bool same_format(const contracts::media::AudioPcmFormat& lhs,
 
 } // namespace
 
+NullAudioOutputBackend::NullAudioOutputBackend(
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier)
+    : realtime_notifier_(std::move(realtime_notifier)) {}
+
 NullAudioOutputBackend::~NullAudioOutputBackend() {
     unconfigure();
-}
-
-void NullAudioOutputBackend::set_progress_notifier(
-    contracts::audio_output::AudioOutputBackendProgressNotifier* notifier) noexcept {
-    progress_notifier_ = notifier;
 }
 
 std::expected<contracts::audio_output::AudioOutputConfigureResult,
@@ -40,9 +39,6 @@ NullAudioOutputBackend::configure(const contracts::audio_output::AudioOutputOpti
 
     playback_format_ = default_playback_format();
     configured_ = true;
-    if (progress_notifier_ != nullptr) {
-        progress_notifier_->notify_audio_output_progress_available();
-    }
     return contracts::audio_output::AudioOutputConfigureResult{
         .playback_format = playback_format_,
     };
@@ -62,6 +58,11 @@ NullAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) 
             "null audio output backend received an unexpected PCM format"));
     }
 
+    if (realtime_notifier_) {
+        realtime_notifier_->notify(contracts::audio_output::AudioFramesConsumed{
+            .frames = audio.samples_per_channel,
+        });
+    }
     return contracts::audio_output::AudioOutputSubmitStatus::Accepted;
 }
 
@@ -77,11 +78,7 @@ NullAudioOutputBackend::try_drain() {
     return contracts::audio_output::AudioOutputDrainStatus::Drained;
 }
 
-void NullAudioOutputBackend::reset() noexcept {
-    if (progress_notifier_ != nullptr) {
-        progress_notifier_->notify_audio_output_progress_available();
-    }
-}
+void NullAudioOutputBackend::reset() noexcept {}
 
 void NullAudioOutputBackend::unconfigure() noexcept {
     playback_format_ = {};

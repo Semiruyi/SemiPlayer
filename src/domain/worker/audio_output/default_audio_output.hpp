@@ -21,12 +21,13 @@
 
 namespace semi::domain {
 
-class DefaultAudioOutput final : public AudioOutput,
-                                 public contracts::audio_output::AudioOutputBackendProgressNotifier {
+class DefaultAudioOutput final : public AudioOutput {
 public:
     DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_frame_source,
                        std::shared_ptr<AudioOutputBackend> backend,
                        std::shared_ptr<infra::Notifier> notifier,
+                       std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier>
+                           realtime_notifier,
                        std::shared_ptr<Generation> generation);
     ~DefaultAudioOutput() override;
 
@@ -44,9 +45,19 @@ public:
 
     void unconfigure() noexcept override;
 
-    void notify_audio_output_progress_available() noexcept override;
-
 private:
+    class ProgressSink final : public infra::RealTimeNotificationSink<
+                                   contracts::audio_output::AudioFramesConsumed> {
+    public:
+        explicit ProgressSink(DefaultAudioOutput& owner) noexcept : owner_(owner) {}
+
+        void on_realtime_notification(
+            const contracts::audio_output::AudioFramesConsumed& event) noexcept override;
+
+    private:
+        DefaultAudioOutput& owner_;
+    };
+
     enum class WorkerState : std::uint8_t {
         Starting,
         Alive,
@@ -124,6 +135,8 @@ private:
     void handle_backend_failure(AudioOutputBackendError error) noexcept;
     void notify_backend_failure(AudioOutputBackendError error, Generation::Value generation) noexcept;
     void notify_playback_finished(Generation::Value generation) noexcept;
+    void on_audio_frames_consumed(
+        const contracts::audio_output::AudioFramesConsumed& event) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
@@ -131,7 +144,9 @@ private:
     std::shared_ptr<AudioFrameSource> audio_frame_source_;
     std::shared_ptr<AudioOutputBackend> backend_;
     std::shared_ptr<infra::Notifier> notifier_;
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier_;
     std::shared_ptr<Generation> generation_;
+    ProgressSink progress_sink_;
 
     std::shared_ptr<infra::Notifier::Subscription> audio_frame_store_not_empty_subscription_;
 

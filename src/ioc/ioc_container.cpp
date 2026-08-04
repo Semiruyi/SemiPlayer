@@ -33,6 +33,8 @@ bool IoCContainer::assemble() noexcept {
     SEMI_LOG_INFO("assemble begin");
     try {
         auto notifier = std::make_shared<infra::DefaultNotifier>();
+        auto audio_realtime_notifier =
+            std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
         auto generation = std::make_shared<domain::Generation>();
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
@@ -45,7 +47,7 @@ bool IoCContainer::assemble() noexcept {
         auto audio_resampler_backend =
             std::make_shared<infra::ffmpeg::audio_resampler::FfmpegAudioResamplerBackend>();
         auto audio_output_backend =
-            std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>();
+            std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(audio_realtime_notifier);
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
             demuxer_backend, audio_packet_queue, notifier, generation);
@@ -55,7 +57,7 @@ bool IoCContainer::assemble() noexcept {
             decoded_audio_frame_store, playback_audio_frame_store, audio_resampler_backend, notifier,
             generation);
         auto audio_output = std::make_shared<domain::DefaultAudioOutput>(
-            playback_audio_frame_store, audio_output_backend, notifier, generation);
+            playback_audio_frame_store, audio_output_backend, notifier, audio_realtime_notifier, generation);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
             demuxer, audio_decoder, audio_resampler, audio_output, notifier, generation);

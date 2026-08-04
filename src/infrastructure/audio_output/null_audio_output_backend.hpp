@@ -2,20 +2,20 @@
 
 #include "contracts/audio_output/audio_output_backend.hpp"
 
+#include <memory>
+
 namespace semi::infra::audio_output {
 
 class NullAudioOutputBackend final : public contracts::audio_output::AudioOutputBackend {
 public:
-    NullAudioOutputBackend() = default;
+    explicit NullAudioOutputBackend(
+        std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier);
     ~NullAudioOutputBackend() override;
 
     NullAudioOutputBackend(const NullAudioOutputBackend&) = delete;
     NullAudioOutputBackend& operator=(const NullAudioOutputBackend&) = delete;
     NullAudioOutputBackend(NullAudioOutputBackend&&) = delete;
     NullAudioOutputBackend& operator=(NullAudioOutputBackend&&) = delete;
-
-    void set_progress_notifier(
-        contracts::audio_output::AudioOutputBackendProgressNotifier* notifier) noexcept override;
 
     [[nodiscard]] std::expected<contracts::audio_output::AudioOutputConfigureResult,
                                 contracts::audio_output::AudioOutputBackendError>
@@ -37,7 +37,7 @@ private:
     state_error(contracts::audio_output::AudioOutputBackendOperation operation,
                 const char* message) const;
 
-    contracts::audio_output::AudioOutputBackendProgressNotifier* progress_notifier_ = nullptr;
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier_;
     contracts::media::AudioPcmFormat playback_format_{};
     bool configured_ = false;
 };

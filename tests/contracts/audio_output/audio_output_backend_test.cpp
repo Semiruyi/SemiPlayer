@@ -18,10 +18,6 @@ media::AudioPcmFormat playback_format() {
 
 class FakeAudioOutputBackend final : public AudioOutputBackend {
 public:
-    void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept override {
-        progress_notifier = notifier;
-    }
-
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) override {
         last_options = options;
@@ -42,17 +38,9 @@ public:
 
     AudioOutputSubmitStatus submit_status = AudioOutputSubmitStatus::Accepted;
     AudioOutputDrainStatus drain_status = AudioOutputDrainStatus::Drained;
-    AudioOutputBackendProgressNotifier* progress_notifier = nullptr;
     AudioOutputOptions last_options;
     std::atomic_int reset_calls = 0;
     std::atomic_int unconfigure_calls = 0;
-};
-
-class CountingProgressNotifier final : public AudioOutputBackendProgressNotifier {
-public:
-    void notify_audio_output_progress_available() noexcept override { ++calls; }
-
-    std::atomic_int calls = 0;
 };
 
 TEST(AudioOutputBackendContract, ConfigureReturnsPlaybackFormat) {
@@ -90,14 +78,6 @@ TEST(AudioOutputBackendContract, PreservesOperationInStructuredError) {
     EXPECT_EQ(error.operation, AudioOutputBackendOperation::Submit);
     EXPECT_EQ(error.native_code, -123);
     EXPECT_EQ(error.message, "audio output submit failed");
-}
-
-TEST(AudioOutputBackendProgressNotifier, SignalsProgressWithoutExposingBackendState) {
-    CountingProgressNotifier notifier;
-
-    notifier.notify_audio_output_progress_available();
-
-    EXPECT_EQ(notifier.calls, 1);
 }
 
 } // namespace

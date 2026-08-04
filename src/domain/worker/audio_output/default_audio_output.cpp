@@ -30,21 +30,29 @@ AudioOutputBackendError backend_exception(AudioOutputBackendOperation operation,
 
 } // namespace
 
+void DefaultAudioOutput::ProgressSink::on_realtime_notification(
+    const contracts::audio_output::AudioFramesConsumed& event) noexcept {
+    owner_.on_audio_frames_consumed(event);
+}
+
 DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_frame_source,
                                        std::shared_ptr<AudioOutputBackend> backend,
                                        std::shared_ptr<infra::Notifier> notifier,
+                                       std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier>
+                                           realtime_notifier,
                                        std::shared_ptr<Generation> generation)
     : audio_frame_source_(std::move(audio_frame_source)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
+      realtime_notifier_(std::move(realtime_notifier)),
       generation_(std::move(generation)),
+      progress_sink_(*this),
       worker_([this] {
           worker_main();
       }) {
-    if (backend_) {
-        backend_->set_progress_notifier(this);
+    if (realtime_notifier_) {
+        (void)realtime_notifier_->register_sink(progress_sink_);
     }
-
     if (!notifier_) {
         return;
     }
@@ -63,7 +71,13 @@ DefaultAudioOutput::~DefaultAudioOutput() {
     shutdown_worker();
     audio_frame_store_not_empty_subscription_.reset();
     if (backend_) {
-        backend_->set_progress_notifier(nullptr);
+        backend_->unconfigure();
+    }
+    if (realtime_notifier_) {
+        if (realtime_notifier_->sealed()) {
+            (void)realtime_notifier_->unseal();
+        }
+        (void)realtime_notifier_->unregister_sink(progress_sink_);
     }
 }
 
@@ -113,7 +127,8 @@ void DefaultAudioOutput::pause_playback() noexcept {
     completion.wait();
 }
 
-void DefaultAudioOutput::notify_audio_output_progress_available() noexcept {
+void DefaultAudioOutput::on_audio_frames_consumed(
+    const contracts::audio_output::AudioFramesConsumed&) noexcept {
     backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
@@ -183,12 +198,21 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
         }
     }
 
-    if (!backend_ || !audio_frame_source_ || !notifier_ || !generation_) {
+    if (!backend_ || !audio_frame_source_ || !notifier_ || !realtime_notifier_ || !generation_) {
         std::lock_guard lock(mutex_);
         const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
         assert(failed);
         command.completion.set_value(
             std::unexpected(invalid_state("audio output dependencies are unavailable")));
+        return;
+    }
+
+    if (!realtime_notifier_->seal()) {
+        std::lock_guard lock(mutex_);
+        const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
+        assert(failed);
+        command.completion.set_value(
+            std::unexpected(invalid_state("audio output real-time notifier is already sealed")));
         return;
     }
 
@@ -204,6 +228,7 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
     }
     if (!configured) {
         backend_->unconfigure();
+        (void)realtime_notifier_->unseal();
         std::lock_guard lock(mutex_);
         const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
         assert(failed);
@@ -240,6 +265,9 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
 
     if (backend_) {
         backend_->unconfigure();
+    }
+    if (realtime_notifier_ && realtime_notifier_->sealed()) {
+        (void)realtime_notifier_->unseal();
     }
 
     std::lock_guard lock(mutex_);

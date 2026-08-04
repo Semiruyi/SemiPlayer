@@ -1,5 +1,6 @@
 #pragma once
 
+#include "contracts/audio_output/audio_output_realtime_events.hpp"
 #include "contracts/media/media_types.hpp"
 
 #include <cstdint>
@@ -41,21 +42,6 @@ enum class AudioOutputDrainStatus : std::uint8_t {
     WouldBlock,
 };
 
-class AudioOutputBackendProgressNotifier {
-public:
-    virtual ~AudioOutputBackendProgressNotifier() = default;
-
-    AudioOutputBackendProgressNotifier(const AudioOutputBackendProgressNotifier&) = delete;
-    AudioOutputBackendProgressNotifier& operator=(const AudioOutputBackendProgressNotifier&) = delete;
-    AudioOutputBackendProgressNotifier(AudioOutputBackendProgressNotifier&&) = delete;
-    AudioOutputBackendProgressNotifier& operator=(AudioOutputBackendProgressNotifier&&) = delete;
-
-    virtual void notify_audio_output_progress_available() noexcept = 0;
-
-protected:
-    AudioOutputBackendProgressNotifier() = default;
-};
-
 // Backend boundary for PCM output. Implementations own all native device state.
 // Calls are made exclusively by the domain worker.
 class AudioOutputBackend {
@@ -66,8 +52,6 @@ public:
     AudioOutputBackend& operator=(const AudioOutputBackend&) = delete;
     AudioOutputBackend(AudioOutputBackend&&) = delete;
     AudioOutputBackend& operator=(AudioOutputBackend&&) = delete;
-
-    virtual void set_progress_notifier(AudioOutputBackendProgressNotifier* notifier) noexcept = 0;
 
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
