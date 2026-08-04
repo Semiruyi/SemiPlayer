@@ -401,6 +401,28 @@ CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) 
     return execution;
 }
 
+CommandExecution execute_seek(std::int64_t position_us,
+                               PlayerState current_state,
+                               ApiLayer::Impl& impl) noexcept {
+    if (position_us < 0 || !impl.demuxer) {
+        return make_failure(position_us < 0 ? SEMI_ERR_INVALID_ARGUMENT : SEMI_ERR_INTERNAL);
+    }
+    try {
+        auto result = impl.demuxer->seek(position_us);
+        if (!result) {
+            return make_failure(demuxer_status(result.error()));
+        }
+    } catch (...) {
+        SEMI_LOG_ERROR("demuxer seek failed with an exception");
+        return make_failure(SEMI_ERR_INTERNAL);
+    }
+
+    CommandExecution execution;
+    execution.status = SEMI_OK;
+    execution.next_state = current_state == PlayerState::Ended ? PlayerState::Paused : current_state;
+    return execution;
+}
+
 CommandExecution execute_close(PlayerState current_state, ApiLayer::Impl& impl) noexcept {
     CommandExecution execution;
     execution.status = SEMI_OK;
@@ -433,7 +455,9 @@ CommandExecution execute_command(PlayerState current_state,
                 [&impl, current_state](const PauseCommand&) {
                     return execute_pause(current_state, impl);
                 },
-                [](const SeekCommand&) -> CommandExecution { return {}; },
+                [&impl, current_state](const SeekCommand& value) {
+                    return execute_seek(value.position_us, current_state, impl);
+                },
                 [&impl, current_state](const CloseCommand&) {
                     return execute_close(current_state, impl);
                 },

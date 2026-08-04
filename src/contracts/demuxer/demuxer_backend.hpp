@@ -33,6 +33,7 @@ enum class DemuxerBackendOperation : std::uint8_t {
     Open,
     Probe,
     Read,
+    Seek,
 };
 
 struct DemuxerBackendError {
@@ -55,6 +56,9 @@ public:
 
     [[nodiscard]] virtual std::expected<BackendReadResult, DemuxerBackendError>
     read_packet() = 0;
+
+    [[nodiscard]] virtual std::expected<void, DemuxerBackendError>
+    seek(std::int64_t position_us) = 0;
 
     virtual void close() noexcept = 0;
 

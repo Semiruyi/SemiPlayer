@@ -146,3 +146,27 @@ TEST(FfmpegDemuxerBackendTest, ProbesCommittedMp4Fixture) {
     EXPECT_EQ(audio_config.channels, 1U);
     backend.close();
 }
+
+TEST(FfmpegDemuxerBackendTest, SeeksCommittedMp4Fixture) {
+    semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
+    const auto opened = backend.open(SEMI_PLAYER_TEST_MEDIA_PATH);
+    ASSERT_TRUE(opened.has_value()) << opened.error().message;
+
+    ASSERT_TRUE(backend.seek(1'000'000).has_value());
+
+    bool reached_target = false;
+    for (int index = 0; index < 128 && !reached_target; ++index) {
+        const auto packet = backend.read_packet();
+        ASSERT_TRUE(packet.has_value()) << packet.error().message;
+        if (const auto* media_packet =
+                std::get_if<semi::contracts::demuxer::BackendPacket>(&*packet)) {
+            if (media_packet->packet.pts_us.has_value() && *media_packet->packet.pts_us >= 500'000) {
+                reached_target = true;
+            }
+        } else {
+            break;
+        }
+    }
+    EXPECT_TRUE(reached_target);
+    backend.close();
+}

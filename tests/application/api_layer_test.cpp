@@ -20,6 +20,9 @@ public:
     bool is_open = false;
     int open_calls = 0;
     int close_calls = 0;
+    int seek_calls = 0;
+    std::int64_t last_seek_position = -1;
+    bool fail_seek = false;
 
     std::expected<domain::DemuxerOpenResult, domain::DemuxerError>
     open(std::string_view) override {
@@ -59,7 +62,20 @@ public:
         return result;
     }
 
-    std::expected<void, domain::DemuxerError> seek(std::int64_t) override {
+    std::expected<void, domain::DemuxerError> seek(std::int64_t position_us) override {
+        ++seek_calls;
+        last_seek_position = position_us;
+        if (fail_seek) {
+            return std::unexpected(domain::DemuxerError{
+                .code = domain::DemuxerErrorCode::BackendFailure,
+                .message = "cannot seek source",
+                .backend_error = domain::DemuxerBackendError{
+                    .operation = domain::DemuxerBackendOperation::Seek,
+                    .native_code = -3,
+                    .message = "seek failed",
+                },
+            });
+        }
         return {};
     }
 
@@ -209,6 +225,37 @@ TEST(ApiLayerTest, AwaitConsumesHandle) {
     CommandResult result;
     EXPECT_EQ(layer.await(handle, result), SEMI_ERR_INTERNAL);
     EXPECT_EQ(layer.await(handle, result), SEMI_ERR_INVALID_HANDLE);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, SeekDelegatesToDemuxerAndPreservesPlaybackState) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const auto open = layer.open("movie.mp4");
+    ASSERT_EQ(layer.await(open, result), SEMI_OK);
+    const auto seek = layer.seek(1'000'000);
+    ASSERT_NE(seek, 0U);
+    EXPECT_EQ(layer.await(seek, result), SEMI_OK);
+    EXPECT_EQ(pipeline.demuxer->seek_calls, 1);
+    EXPECT_EQ(pipeline.demuxer->last_seek_position, 1'000'000);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, SeekMapsBackendFailureToInvalidResource) {
+    FakePipeline pipeline;
+    pipeline.demuxer->fail_seek = true;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const auto open = layer.open("movie.mp4");
+    ASSERT_EQ(layer.await(open, result), SEMI_OK);
+    const auto seek = layer.seek(1'000'000);
+    ASSERT_NE(seek, 0U);
+    EXPECT_EQ(layer.await(seek, result), SEMI_ERR_INVALID_RESOURCE);
     EXPECT_TRUE(layer.stop());
 }
 

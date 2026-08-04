@@ -19,6 +19,9 @@ public:
                                  contracts::demuxer::DemuxerBackendError>
     read_packet() override;
 
+    [[nodiscard]] std::expected<void, contracts::demuxer::DemuxerBackendError>
+    seek(std::int64_t position_us) override;
+
     void close() noexcept override;
 
 private:

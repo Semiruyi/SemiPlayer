@@ -282,4 +282,31 @@ void FfmpegDemuxerBackend::close() noexcept {
     }
 }
 
+std::expected<void, DemuxerBackendError>
+FfmpegDemuxerBackend::seek(std::int64_t position_us) {
+    if (impl_->format_context == nullptr) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Seek,
+            .native_code = AVERROR(EINVAL),
+            .message = "FFmpeg demuxer backend is not open",
+        });
+    }
+    if (position_us < 0) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Seek,
+            .native_code = AVERROR(EINVAL),
+            .message = "seek position must not be negative",
+        });
+    }
+
+    const int status = avformat_seek_file(impl_->format_context.get(), -1,
+                                          std::numeric_limits<std::int64_t>::min(),
+                                          position_us, std::numeric_limits<std::int64_t>::max(),
+                                          AVSEEK_FLAG_BACKWARD);
+    if (status < 0) {
+        return std::unexpected(make_error(DemuxerBackendOperation::Seek, status));
+    }
+    return {};
+}
+
 } // namespace semi::infra::ffmpeg::demuxer

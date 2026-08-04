@@ -52,6 +52,19 @@ public:
         return result;
     }
 
+    std::expected<void, DemuxerBackendError> seek(std::int64_t position_us) override {
+        ++seek_calls;
+        last_seek_position = position_us;
+        if (fail_seek) {
+            return std::unexpected(DemuxerBackendError{
+                .operation = DemuxerBackendOperation::Seek,
+                .native_code = -9,
+                .message = "seek failed",
+            });
+        }
+        return {};
+    }
+
     void close() noexcept override { ++close_calls; }
 
     void push_read_result(BackendReadResult result) {
@@ -68,6 +81,9 @@ public:
     std::atomic_int open_calls = 0;
     std::atomic_int close_calls = 0;
     std::atomic_int read_calls = 0;
+    std::atomic_int seek_calls = 0;
+    std::atomic<std::int64_t> last_seek_position = -1;
+    bool fail_seek = false;
 
 private:
     std::mutex mutex_;
@@ -194,6 +210,38 @@ TEST(DefaultDemuxerTest, ReadsSelectedAudioPacketsAndSkipsOtherStreams) {
     ASSERT_NE(end_of_input, nullptr);
     EXPECT_EQ(end_of_input->generation, 1U);
 
+    demuxer.close();
+}
+
+TEST(DefaultDemuxerTest, SeeksBackendAndStartsANewGeneration) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->probe.streams.push_back(audio_stream(7));
+    auto generation = std::make_shared<Generation>();
+    auto queue = std::make_shared<AudioPacketQueue>(nullptr, 4);
+    DefaultDemuxer demuxer(backend, queue, nullptr, generation);
+
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    const auto before = generation->current();
+    const auto seek = demuxer.seek(2'000'000);
+    ASSERT_TRUE(seek.has_value());
+    EXPECT_EQ(backend->seek_calls, 1);
+    EXPECT_EQ(backend->last_seek_position, 2'000'000);
+    EXPECT_EQ(generation->current(), before + 1);
+    demuxer.close();
+}
+
+TEST(DefaultDemuxerTest, RejectsNegativeSeek) {
+    auto backend = std::make_shared<FakeBackend>();
+    backend->probe.streams.push_back(audio_stream(7));
+    auto generation = std::make_shared<Generation>();
+    auto queue = std::make_shared<AudioPacketQueue>(nullptr, 4);
+    DefaultDemuxer demuxer(backend, queue, nullptr, generation);
+
+    ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
+    const auto seek = demuxer.seek(-1);
+    ASSERT_FALSE(seek.has_value());
+    EXPECT_EQ(seek.error().code, DemuxerErrorCode::InvalidState);
+    EXPECT_EQ(backend->seek_calls, 0);
     demuxer.close();
 }
 

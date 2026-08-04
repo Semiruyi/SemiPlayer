@@ -19,10 +19,10 @@ struct Overloaded : Functions... {
 template <typename... Functions>
 Overloaded(Functions...) -> Overloaded<Functions...>;
 
-DemuxerError command_handling_not_implemented() {
+DemuxerError invalid_command_state() {
     return DemuxerError{
         .code = DemuxerErrorCode::InvalidState,
-        .message = "default demuxer command handling is not implemented",
+        .message = "demuxer session does not allow this command",
         .backend_error = std::nullopt,
     };
 }
@@ -248,13 +248,44 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
 }
 
 void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
-    std::lock_guard lock(mutex_);
-    if (session_state_ != SessionState::Running &&
-        session_state_ != SessionState::Exhausted) {
-        command.completion.set_value(std::unexpected(command_handling_not_implemented()));
+    std::shared_ptr<DemuxerBackend> backend;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Running &&
+            session_state_ != SessionState::Exhausted) {
+            command.completion.set_value(std::unexpected(invalid_command_state()));
+            return;
+        }
+        backend = backend_;
+    }
+
+    if (!backend || !generation_ || command.position_us < 0) {
+        command.completion.set_value(std::unexpected(DemuxerError{
+            .code = DemuxerErrorCode::InvalidState,
+            .message = command.position_us < 0 ? "seek position must not be negative"
+                                               : "demuxer dependencies are unavailable",
+            .backend_error = std::nullopt,
+        }));
         return;
     }
-    command.completion.set_value(std::unexpected(command_handling_not_implemented()));
+
+    auto seek_result = backend->seek(command.position_us);
+    if (!seek_result) {
+        command.completion.set_value(std::unexpected(backend_failure(std::move(seek_result.error()))));
+        return;
+    }
+
+    generation_->bump();
+    const auto session_generation = generation_->current();
+    {
+        std::lock_guard lock(mutex_);
+        pending_audio_output_.reset();
+        session_generation_ = session_generation;
+        audio_queue_not_full_hint_.store(false, std::memory_order_release);
+        const bool resumed = transition_session_locked(SessionEvent::SeekSucceeded);
+        assert(resumed);
+    }
+    command.completion.set_value({});
 }
 
 void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
