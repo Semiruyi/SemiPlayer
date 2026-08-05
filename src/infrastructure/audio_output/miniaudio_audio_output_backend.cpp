@@ -119,20 +119,54 @@ struct MiniaudioAudioOutputBackend::Impl {
                 "miniaudio device initialization failed"));
         }
         device_initialized = true;
-
-        result = ma_device_start(&device);
-        if (result != MA_SUCCESS) {
-            ma_device_uninit(&device);
-            device_initialized = false;
-            buffer.clear();
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Configure,
-                static_cast<int>(result),
-                "miniaudio device start failed"));
-        }
-
         configured = true;
         return AudioOutputConfigureResult{.playback_format = playback_format};
+    }
+
+    std::expected<void, AudioOutputBackendError> pause() {
+        std::lock_guard lock(mutex);
+        if (!configured) {
+            return std::unexpected(make_error(
+                AudioOutputBackendOperation::Pause,
+                0,
+                "miniaudio output backend is not configured"));
+        }
+        if (!device_running) {
+            return {};
+        }
+
+        const ma_result result = ma_device_stop(&device);
+        if (result != MA_SUCCESS) {
+            return std::unexpected(make_error(
+                AudioOutputBackendOperation::Pause,
+                static_cast<int>(result),
+                "miniaudio device pause failed"));
+        }
+        device_running = false;
+        return {};
+    }
+
+    std::expected<void, AudioOutputBackendError> resume() {
+        std::lock_guard lock(mutex);
+        if (!configured) {
+            return std::unexpected(make_error(
+                AudioOutputBackendOperation::Resume,
+                0,
+                "miniaudio output backend is not configured"));
+        }
+        if (device_running) {
+            return {};
+        }
+
+        const ma_result result = ma_device_start(&device);
+        if (result != MA_SUCCESS) {
+            return std::unexpected(make_error(
+                AudioOutputBackendOperation::Resume,
+                static_cast<int>(result),
+                "miniaudio device resume failed"));
+        }
+        device_running = true;
+        return {};
     }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
@@ -186,19 +220,39 @@ struct MiniaudioAudioOutputBackend::Impl {
                                    : AudioOutputDrainStatus::WouldBlock;
     }
 
-    void reset() noexcept {
-        if (device_initialized) {
-            (void)ma_device_stop(&device);
+    std::expected<void, AudioOutputBackendError> reset() {
+        const bool was_running = device_running;
+        if (device_initialized && was_running) {
+            const ma_result stopped = ma_device_stop(&device);
+            if (stopped != MA_SUCCESS) {
+                return std::unexpected(make_error(
+                    AudioOutputBackendOperation::Reset,
+                    static_cast<int>(stopped),
+                    "miniaudio device reset stop failed"));
+            }
+            device_running = false;
         }
         buffer.reset();
-        if (device_initialized) {
-            (void)ma_device_start(&device);
+        if (device_initialized && was_running) {
+            const ma_result started = ma_device_start(&device);
+            if (started != MA_SUCCESS) {
+                device_running = false;
+                return std::unexpected(make_error(
+                    AudioOutputBackendOperation::Reset,
+                    static_cast<int>(started),
+                    "miniaudio device reset restart failed"));
+            }
+            device_running = true;
         }
+        return {};
     }
 
     void unconfigure() noexcept {
-        if (device_initialized) {
+        if (device_initialized && device_running) {
             (void)ma_device_stop(&device);
+            device_running = false;
+        }
+        if (device_initialized) {
             ma_device_uninit(&device);
             device_initialized = false;
         }
@@ -242,6 +296,7 @@ struct MiniaudioAudioOutputBackend::Impl {
     ByteSpscRing buffer;
     ma_device device{};
     bool device_initialized = false;
+    bool device_running = false;
     bool configured = false;
 };
 
@@ -257,6 +312,16 @@ MiniaudioAudioOutputBackend::configure(const contracts::audio_output::AudioOutpu
     return impl_->configure(options);
 }
 
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+MiniaudioAudioOutputBackend::pause() {
+    return impl_->pause();
+}
+
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+MiniaudioAudioOutputBackend::resume() {
+    return impl_->resume();
+}
+
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
 MiniaudioAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
@@ -269,8 +334,9 @@ MiniaudioAudioOutputBackend::try_drain() {
     return impl_->try_drain();
 }
 
-void MiniaudioAudioOutputBackend::reset() noexcept {
-    impl_->reset();
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+MiniaudioAudioOutputBackend::reset() {
+    return impl_->reset();
 }
 
 void MiniaudioAudioOutputBackend::unconfigure() noexcept {

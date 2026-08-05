@@ -71,7 +71,7 @@ MiniaudioAudioOutputBackend -> DefaultAudioOutput
 ApiLayer(demuxer, audio_decoder, audio_resampler, audio_output)
 ```
 
-`MiniaudioAudioOutputBackend` 是当前 IoC 默认音频输出后端：它打开系统默认播放设备，产出固定 playback PCM format，并通过内部 ring buffer 把 `DefaultAudioOutput` 提交的 PCM 交给 miniaudio 设备回调。
+`MiniaudioAudioOutputBackend` 是当前 IoC 默认音频输出后端：它初始化系统默认播放设备，产出固定 playback PCM format，并通过内部 ring buffer 把 `DefaultAudioOutput` 提交的 PCM 交给 miniaudio 设备回调；设备 callback 由 play/pause 控制。
 `NullAudioOutputBackend` 保留为测试/占位后端，用于不需要真实设备的单元测试。
 
 `dispose()` 先停止并释放 `ApiLayer`，再按依赖者到被依赖者的顺序释放工作模块、资源队列、

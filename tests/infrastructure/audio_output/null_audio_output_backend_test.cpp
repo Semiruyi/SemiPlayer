@@ -65,6 +65,26 @@ TEST(NullAudioOutputBackendTest, AcceptsMatchingPcmAndDrainsImmediately) {
     EXPECT_EQ(*drained, AudioOutputDrainStatus::Drained);
 }
 
+TEST(NullAudioOutputBackendTest, PauseAndResumeAreNoOpsWhenConfigured) {
+    NullAudioOutputBackend backend{nullptr};
+    ASSERT_TRUE(backend.configure({}).has_value());
+
+    EXPECT_TRUE(backend.pause().has_value());
+    EXPECT_TRUE(backend.resume().has_value());
+}
+
+TEST(NullAudioOutputBackendTest, RejectsPauseAndResumeBeforeConfiguration) {
+    NullAudioOutputBackend backend{nullptr};
+
+    const auto paused = backend.pause();
+    const auto resumed = backend.resume();
+
+    ASSERT_FALSE(paused.has_value());
+    ASSERT_FALSE(resumed.has_value());
+    EXPECT_EQ(paused.error().operation, AudioOutputBackendOperation::Pause);
+    EXPECT_EQ(resumed.error().operation, AudioOutputBackendOperation::Resume);
+}
+
 TEST(NullAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
     NullAudioOutputBackend backend{nullptr};
 
@@ -95,7 +115,8 @@ TEST(NullAudioOutputBackendTest, ResetKeepsConfigurationReusable) {
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
 
-    backend.reset();
+    const auto reset = backend.reset();
+    ASSERT_TRUE(reset.has_value()) << reset.error().message;
     const auto submitted = backend.try_submit(make_audio(configured->playback_format));
 
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;

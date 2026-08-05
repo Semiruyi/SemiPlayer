@@ -6,8 +6,8 @@
 ## Context
 
 - **open** 准备好播放前提：探测 + 配置 Demuxer/AudioDecoder/AudioResampler/AudioOutput，状态=Ready。
-- **play** 打开最下游 AudioOutput 的消费阀门，使 playback frame store 开始被消费，音频链路开始流动。
-- **pause** 关闭 AudioOutput 的消费阀门，但**不拆管道**——下游停消费后靠背压自然停上游，使 resume 是热的。
+- **play** 恢复最下游 AudioOutput 的 backend 设备并打开消费阀门，使 playback frame store 开始被消费，音频链路开始流动。
+- **pause** 暂停 AudioOutput 的 backend 设备并关闭消费阀门，但**不拆管道**——下游停消费后靠背压自然停上游，使 resume 是热的。
 
 首次 play 有冷启动延迟（队列从空开始填）；pause 后再 play 是热启动（管道还在、队列有数据）。
 
@@ -23,7 +23,7 @@ void handle_play():
     if player_state == Ended:
         handle.resolve(InvalidState); return   // 暂不支持无 seek 的直接重播
 
-    // ② 打开音频输出消费阀门
+    // ② 恢复音频设备并打开消费阀门
     audio_output.start_playback()
 
     player_state = Playing
@@ -50,8 +50,8 @@ void handle_pause():
     if player_state != Playing:
         handle.resolve(Ok(())); return         // 非播放态, 无操作
 
-    // ① 下游停消费
-    audio_output.pause_playback()              // AudioOutput 暂停消费 playback store
+    // ① 暂停设备并停止下游消费
+    audio_output.pause_playback()              // AudioOutput 暂停 backend 和 playback store 消费
 
     // ② 不主动停 demuxer/decoder!
     //    下游停消费 → 队列填满 → demuxer/decoder 阻塞在 cv 上 (背压自然停)
@@ -72,13 +72,13 @@ void handle_pause():
 
 | 步骤 | 模块方法 | 高层职责 | 内部细节归属 |
 |------|---------|---------|------------|
-| ② | `audio_output.start_playback` | 允许 AudioOutput 消费 playback frame store，音频链路开始流动 | audio_output.md |
+| ② | `audio_output.start_playback` | 恢复 backend 设备并允许 AudioOutput 消费 playback frame store，音频链路开始流动 | audio_output.md |
 
 ## pause 各步的职责
 
 | 步骤 | 模块方法 | 高层职责 |
 |------|---------|---------|
-| ① | `audio_output.pause_playback` | 暂停消费 playback frame store，不清队列、不 reset |
+| ① | `audio_output.pause_playback` | 暂停 backend 和 playback frame store 消费，不清队列、不 reset |
 | — | （不动 demuxer/decoder）| 背压自然停 |
 
 ---
@@ -89,13 +89,13 @@ void handle_pause():
 当前阶段先实现最小闭环：play 打开 AudioOutput 消费，数据从上游自然流动。预填水位、音画同步和时钟冻结属于后续播放质量层的编排。
 
 ### pause 后再 play 是热启动（快）
-只有 Ready→Playing 是冷启动（填水位）。Paused→Playing 是热的：管道还在跑、队列有数据，play 只需解冻时钟 + 恢复消费，瞬间响应。
+只有 Ready→Playing 是冷启动（填水位）。Paused→Playing 是热的：管道还在跑、队列有数据，play 只需恢复 backend、解冻时钟 + 恢复消费，瞬间响应。
 
 ### pause 靠背压自然停上游
 pause 不主动停 demuxer/decoder 线程。下游停消费→队列满→上游阻塞。resume 即热。符合"缓冲满自然停"哲学。
 
 ### 时钟 freeze/unfreeze 的偏移修正
-当前阶段还没有接入 AudioClock；pause/play 只控制 AudioOutput 消费。后续接入 AudioClock 时，
+当前阶段还没有接入 AudioClock；pause/play 已控制 AudioOutput backend 和消费。后续接入 AudioClock 时，
 pause 需要冻结时钟，resume 需要修正暂停偏移，保证 PTS 连续不跳。
 
 ### Ended 态暂不直接 play

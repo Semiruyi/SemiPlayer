@@ -21,6 +21,12 @@ public:
                                 contracts::audio_output::AudioOutputBackendError>
     configure(const contracts::audio_output::AudioOutputOptions& options) override;
 
+    [[nodiscard]] std::expected<void, contracts::audio_output::AudioOutputBackendError>
+    pause() override;
+
+    [[nodiscard]] std::expected<void, contracts::audio_output::AudioOutputBackendError>
+    resume() override;
+
     [[nodiscard]] std::expected<contracts::audio_output::AudioOutputSubmitStatus,
                                 contracts::audio_output::AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio& audio) override;
@@ -29,7 +35,8 @@ public:
                                 contracts::audio_output::AudioOutputBackendError>
     try_drain() override;
 
-    void reset() noexcept override;
+    [[nodiscard]] std::expected<void, contracts::audio_output::AudioOutputBackendError>
+    reset() override;
     void unconfigure() noexcept override;
 
 private:

@@ -28,6 +28,14 @@ AudioOutputBackendError backend_exception(AudioOutputBackendOperation operation,
     };
 }
 
+AudioOutputError backend_failure(AudioOutputBackendError error) {
+    return AudioOutputError{
+        .code = AudioOutputErrorCode::BackendFailure,
+        .message = error.message,
+        .backend_error = std::move(error),
+    };
+}
+
 } // namespace
 
 void DefaultAudioOutput::ProgressSink::on_realtime_notification(
@@ -116,7 +124,7 @@ std::expected<void, AudioOutputError> DefaultAudioOutput::start_playback() {
     return completion.get();
 }
 
-void DefaultAudioOutput::pause_playback() noexcept {
+std::expected<void, AudioOutputError> DefaultAudioOutput::pause_playback() {
     PausePlaybackCommand command;
     auto completion = command.completion.get_future();
     {
@@ -124,7 +132,7 @@ void DefaultAudioOutput::pause_playback() noexcept {
         commands_.emplace_back(std::move(command));
     }
     cv_.notify_one();
-    completion.wait();
+    return completion.get();
 }
 
 void DefaultAudioOutput::on_audio_frames_consumed(
@@ -283,13 +291,29 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
 }
 
 void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept {
-    std::lock_guard lock(mutex_);
-    if (session_state_ != SessionState::Configured) {
-        command.completion.set_value(
-            std::unexpected(invalid_state("audio output is not configured")));
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Configured) {
+            command.completion.set_value(
+                std::unexpected(invalid_state("audio output is not configured")));
+            return;
+        }
+    }
+
+    std::expected<void, AudioOutputBackendError> resumed;
+    try {
+        resumed = backend_->resume();
+    } catch (...) {
+        resumed = std::unexpected(backend_exception(
+            AudioOutputBackendOperation::Resume,
+            "audio output backend resume threw an exception"));
+    }
+    if (!resumed) {
+        command.completion.set_value(std::unexpected(backend_failure(std::move(resumed.error()))));
         return;
     }
 
+    std::lock_guard lock(mutex_);
     playback_enabled_ = true;
     input_not_empty_hint_ = true;
     backend_progress_hint_ = true;
@@ -298,11 +322,30 @@ void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept
 }
 
 void DefaultAudioOutput::process_command(PausePlaybackCommand& command) noexcept {
-    std::lock_guard lock(mutex_);
-    if (session_state_ == SessionState::Configured) {
-        playback_enabled_ = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Configured) {
+            command.completion.set_value({});
+            return;
+        }
     }
-    command.completion.set_value();
+
+    std::expected<void, AudioOutputBackendError> paused;
+    try {
+        paused = backend_->pause();
+    } catch (...) {
+        paused = std::unexpected(backend_exception(
+            AudioOutputBackendOperation::Pause,
+            "audio output backend pause threw an exception"));
+    }
+    if (!paused) {
+        command.completion.set_value(std::unexpected(backend_failure(std::move(paused.error()))));
+        return;
+    }
+
+    std::lock_guard lock(mutex_);
+    playback_enabled_ = false;
+    command.completion.set_value({});
 }
 
 bool DefaultAudioOutput::should_process_data_locked() const noexcept {
@@ -351,9 +394,25 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
         }
     }
 
-    if (generation_changed && backend_) {
-        backend_->reset();
+    if (generation_changed && backend_ && !reset_backend_for_generation()) {
+        return;
     }
+}
+
+bool DefaultAudioOutput::reset_backend_for_generation() noexcept {
+    std::expected<void, AudioOutputBackendError> reset;
+    try {
+        reset = backend_->reset();
+    } catch (...) {
+        reset = std::unexpected(backend_exception(
+            AudioOutputBackendOperation::Reset,
+            "audio output backend reset threw an exception"));
+    }
+    if (!reset) {
+        handle_backend_failure(std::move(reset.error()));
+        return false;
+    }
+    return true;
 }
 
 DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_submit_pending_frame() noexcept {
@@ -511,8 +570,8 @@ void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
         }
     }
 
-    if (generation_changed && backend_) {
-        backend_->reset();
+    if (generation_changed && backend_ && !reset_backend_for_generation()) {
+        return;
     }
 
     if (audio_frame_store_item_generation(item) != current_generation) {

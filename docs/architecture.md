@@ -180,7 +180,7 @@ ApiLayer 命令线程串行取 Command:
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
 | VideoSync | FinalFrameStore, AudioClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady/ClockJumped 等）|
-| AudioSink | AudioResampledStore, AudioClock, Generation, miniaudio | ApiLayer 命令线程调 setup()/start_playback()/stop_playback()/set_volume()；复用 miniaudio 实时线程（回调驱动，不需 Notifier）|
+| AudioSink | AudioResampledStore, AudioClock, Generation, miniaudio | ApiLayer 命令线程调 setup()/start_playback()/pause_playback()/set_volume()；复用 miniaudio 实时线程（回调驱动，不需 Notifier）|
 | Generation | 无 | — |
 | AudioClock | 无（被 AudioSink 写 / VideoSync 读 / ApiLayer 控制） | ApiLayer 命令线程调 reset()/freeze()/unfreeze()/jump_to();AudioSink 回调调 calibrate();读端无锁 current_pts() |
 | ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
@@ -225,7 +225,7 @@ ApiLayer 命令线程串行取 Command:
 ```
 Dart 调用 ──▶ ApiLayer 投递 Command ──▶ 返回 CommandHandle (UI 不阻塞)
 ApiLoop 串行执行 (忠实执行, 不跳过/合并):
-  play/pause → 调对应模块 set_paused(); 模块自洽(时钟冻结/miniaudio静音); 队列满背压自然停上游
+  play/pause → 调对应模块 set_paused(); 模块自洽(时钟冻结/miniaudio设备暂停); 队列满背压自然停上游
   seek(pos)  → ApiLoop 顺序调各模块编排 (demuxer/视频decoder/音频decoder/字幕decoder/clock); 完成才 resolve
                数据正确性靠世代号(第②层)+flush(第①层)+PTS过滤(第③层); 详见 api_layer/seek.md
                字幕侧同走世代号自洽 flush (SubtitleDecoder/SubtitleRenderer 旧世代事件/位图被丢弃)

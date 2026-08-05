@@ -386,13 +386,17 @@ CommandExecution execute_play(PlayerState current_state, ApiLayer::Impl& impl) {
     return execution;
 }
 
-CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) noexcept {
+CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) {
     if (current_state != PlayerState::Playing) {
         return make_failure(SEMI_OK);
     }
 
     if (impl.audio_pipeline_configured && impl.audio_output) {
-        impl.audio_output->pause_playback();
+        auto paused = impl.audio_output->pause_playback();
+        if (!paused) {
+            SEMI_LOG_ERROR("audio output pause playback failed: {}", paused.error().message);
+            return make_failure(output_status(paused.error()));
+        }
     }
 
     CommandExecution execution;

@@ -44,6 +44,26 @@ NullAudioOutputBackend::configure(const contracts::audio_output::AudioOutputOpti
     };
 }
 
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+NullAudioOutputBackend::pause() {
+    if (!configured_) {
+        return std::unexpected(state_error(
+            contracts::audio_output::AudioOutputBackendOperation::Pause,
+            "null audio output backend is not configured"));
+    }
+    return {};
+}
+
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+NullAudioOutputBackend::resume() {
+    if (!configured_) {
+        return std::unexpected(state_error(
+            contracts::audio_output::AudioOutputBackendOperation::Resume,
+            "null audio output backend is not configured"));
+    }
+    return {};
+}
+
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
 NullAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
@@ -78,7 +98,10 @@ NullAudioOutputBackend::try_drain() {
     return contracts::audio_output::AudioOutputDrainStatus::Drained;
 }
 
-void NullAudioOutputBackend::reset() noexcept {}
+std::expected<void, contracts::audio_output::AudioOutputBackendError>
+NullAudioOutputBackend::reset() {
+    return {};
+}
 
 void NullAudioOutputBackend::unconfigure() noexcept {
     playback_format_ = {};

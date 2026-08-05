@@ -22,6 +22,9 @@ struct AudioOutputConfigureResult {
 // are backend-specific (for example, an OS audio API error code).
 enum class AudioOutputBackendOperation : std::uint8_t {
     Configure,
+    Pause,
+    Resume,
+    Reset,
     Submit,
     Drain,
 };
@@ -56,6 +59,10 @@ public:
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> pause() = 0;
+
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> resume() = 0;
+
     [[nodiscard]] virtual std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const media::DecodedAudio& audio) = 0;
 
@@ -63,7 +70,7 @@ public:
     try_drain() = 0;
 
     // Drops backend-buffered samples after the worker has observed a new generation.
-    virtual void reset() noexcept = 0;
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> reset() = 0;
     virtual void unconfigure() noexcept = 0;
 
 protected:

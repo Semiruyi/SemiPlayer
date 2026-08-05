@@ -45,7 +45,7 @@ public:
 
     [[nodiscard]] virtual std::expected<void, AudioOutputError> start_playback() = 0;
 
-    virtual void pause_playback() noexcept = 0;
+    [[nodiscard]] virtual std::expected<void, AudioOutputError> pause_playback() = 0;
 
     virtual void unconfigure() noexcept = 0;
 

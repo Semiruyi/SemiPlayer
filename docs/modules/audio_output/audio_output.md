@@ -98,7 +98,7 @@ public:
 
     [[nodiscard]] virtual std::expected<void, AudioOutputError> start_playback() = 0;
 
-    virtual void pause_playback() noexcept = 0;
+    [[nodiscard]] virtual std::expected<void, AudioOutputError> pause_playback() = 0;
 
     virtual void unconfigure() noexcept = 0;
 };
@@ -107,16 +107,16 @@ public:
 | 方法 | 调用时机 | 语义 |
 |---|---|---|
 | `configure(options)` | open | 投递 ConfigureCommand 并同步等待完成；打开/选择输出设备，产出 playback PCM format；进入 Configured；成功后默认暂停，不消费 playback frame store |
-| `start_playback()` | play | 允许 worker 从 playback frame store 消费并提交给 backend；幂等 |
-| `pause_playback()` | pause | 暂停 worker 消费；不清队列、不 reset backend、不推进 generation |
+| `start_playback()` | play | 恢复 backend 设备并允许 worker 从 playback frame store 消费；幂等 |
+| `pause_playback()` | pause | 暂停 backend 设备和 worker 消费；不清队列、不 reset backend、不推进 generation；失败返回 backend 错误 |
 | `unconfigure()` | close | 投递 UnconfigureCommand 并同步等待完成；结束当前媒体会话，释放设备输出上下文，回到 Constructed；幂等且 `noexcept` |
 
 没有 `start()` / `stop()`：
 
 - worker 线程生命周期与模块对象一致。
-- `configure()` 只建立媒体会话上下文；`start_playback()` 才打开消费阀门。
+- `configure()` 只建立媒体会话上下文，backend 初始为 paused；`start_playback()` 恢复设备并打开消费阀门。
 - `unconfigure()` 只结束当前媒体会话，不销毁 worker。
-- `pause_playback()` 表达播放暂停；下游停止消费后，上游通过有界队列背压自然停住。
+- `pause_playback()` 同时暂停 backend 设备和 AudioOutput 消费；下游停止消费后，上游通过有界队列背压自然停住。
 
 没有 `seek()`：
 
@@ -175,24 +175,30 @@ public:
     [[nodiscard]] virtual std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) = 0;
 
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> pause() = 0;
+
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> resume() = 0;
+
     [[nodiscard]] virtual std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio& audio) = 0;
 
     [[nodiscard]] virtual std::expected<AudioOutputDrainStatus, AudioOutputBackendError>
     try_drain() = 0;
 
-    virtual void reset() noexcept = 0;
+    [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> reset() = 0;
     virtual void unconfigure() noexcept = 0;
 };
 ```
 
 后端操作语义：
 
-- `configure()`：打开/选择设备，建立输出上下文，并返回最终 playback PCM 格式。
+- `configure()`：打开/选择设备，建立输出上下文，但不启动设备 callback，并返回最终 playback PCM 格式。
+- `pause()`：停止设备 callback；保留 backend ring 中尚未播放的 PCM；已 paused 时幂等成功。
+- `resume()`：启动设备 callback；保留并继续消费 pause 前已经提交的 PCM；已 running 时幂等成功。
 - backend 在构造时注入并持有 `shared_ptr<AudioOutputRealTimeNotifier>`；通知目标在整个 backend 生命周期内保持不变。
 - `try_submit(audio)`：尝试提交一段 PCM；成功返回 `Accepted`，设备缓冲暂不可写返回 `WouldBlock`。
 - `try_drain()`：EOF 后尝试确认设备侧缓冲已经播放/排空；未完成返回 `WouldBlock`，完成返回 `Drained`。
-- `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态。
+- `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态；必须保持 reset 前的 paused/running 状态。
 - `unconfigure()`：释放设备资源。
 
 不建议第一版使用阻塞式 `write()`。阻塞式接口虽然简单，但会让 `unconfigure()`、析构和错误恢复被设备阻塞影响，测试背压也不如非阻塞契约清晰。
@@ -307,9 +313,13 @@ worker 醒来后优先处理控制命令，再处理数据：
 
 否则如果 generation 改变:
   清空 pending frame
-  backend.reset()
   active_generation = current_generation
   phase = Running
+  reset = backend.reset()
+  如果 reset 失败:
+    发送 AudioOutputBackendFailure
+    session = Failed
+    等待 unconfigure()
 
 否则如果 phase == Finished:
   wait
@@ -468,16 +478,17 @@ AudioOutputConfigureResult.playback_format
 
 EOF 继续作为 `AudioFrameEndOfInput` 在 Store 中有序传播。AudioOutput 只在设备 drain 完后发业务事件。这样上游不需要知道“播放结束”语义，也不会把“读完/解码完/重采样完”和“听完”混在一起。
 
-### pause/resume 只控制消费阀门
+### pause/resume 同时控制设备和消费阀门
 
-当前阶段的 pause/resume 不直接暂停设备回调，也不清空 backend 缓冲。它只控制
+pause/resume 不拆管道，也不清空 backend 缓冲。它同时控制设备 callback 和
 `DefaultAudioOutput` 是否继续从 playback store 消费：
 
-- `start_playback()`：打开消费阀门。
-- `pause_playback()`：关闭消费阀门。
+- `start_playback()`：调用 backend `resume()`，再打开消费阀门。
+- `pause_playback()`：调用 backend `pause()`，成功后关闭消费阀门。
 
-这样 pause 后下游停止拉取，playback store 会逐渐填满并通过背压让上游自然停住。AudioClock 的
-freeze/unfreeze 和更精确的设备暂停策略属于后续播放质量层。
+pause 后设备不再从 ring 消费，已经提交但尚未播放的 PCM 会保留；下游停止拉取后，
+playback store 会逐渐填满并通过背压让上游自然停住。AudioClock 的 freeze/unfreeze
+仍属于后续播放质量层。
 
 ## 当前实现范围
 
@@ -488,8 +499,9 @@ freeze/unfreeze 和更精确的设备暂停策略属于后续播放质量层。
 - `DefaultAudioOutput` worker。
 - `MiniaudioAudioOutputBackend` infrastructure 后端：
   - 固定输出 `48000Hz / stereo / F32 / packed`。
-  - 使用 miniaudio playback device callback 从内部 ring buffer 取样本，不足时补静音。
-  - `try_submit()` 非阻塞写入 ring buffer，满时返回 `WouldBlock`。
+   - 使用 miniaudio playback device callback 从内部 ring buffer 取样本，不足时补静音。
+   - configure 后保持设备 paused；play/pause 通过 resume/pause 控制设备 callback。
+   - `try_submit()` 非阻塞写入 ring buffer，满时返回 `WouldBlock`。
   - `try_drain()` 在 ring buffer 清空后返回 `Drained`。
   - 第一版暂不实现 `device_id` 选择。
 - Fake / Null backend 测试：
@@ -500,8 +512,9 @@ freeze/unfreeze 和更精确的设备暂停策略属于后续播放质量层。
   - pending frame 顺序。
   - EOF 后 drain。
   - drain 完发送 `AudioPlaybackFinished`。
-  - generation 变化 reset/drop stale。
-  - backend failure 进入 Failed 并发送事件。
+   - generation 变化 reset/drop stale。
+   - pause/resume 保留 ring/pending 数据，paused 状态下 generation reset 不恢复设备。
+   - backend failure 进入 Failed 并发送事件。
 
 暂不实现：
 
@@ -520,13 +533,14 @@ freeze/unfreeze 和更精确的设备暂停策略属于后续播放质量层。
   - backend WouldBlock 时保留 pending frame，progress 后继续提交。
   - EOF 不立即 finished，必须 drain 完才发送 `AudioPlaybackFinished`。
   - stale frame 和 stale EOF 被丢弃。
-  - generation 变化时调用 backend reset，丢弃 pending，phase 回到 Running。
-  - backend configure/submit/drain 失败进入 Failed。
+  - generation 变化时调用 backend reset，丢弃 pending，phase 回到 Running；reset 失败会发送 `AudioOutputBackendFailure` 并进入 `Failed`。
+  - backend configure/pause/resume/reset/submit/drain 失败返回结构化错误。
 - `AudioOutputBackend` contract：
   - submit/drain 状态枚举和错误结构可表达设备背压与失败。
 - `MiniaudioAudioOutputBackend`：
-  - 未配置时拒绝 submit/drain。
-  - 默认设备可用时 configure/submit/reset/drain/unconfigure。
+   - 未配置时拒绝 pause/resume/submit/drain。
+   - 默认设备可用时 configure/submit/reset/drain/unconfigure。
+   - 默认设备可用时 pause/resume 保留已提交但未播放的 ring 数据。
   - 默认设备不可用时跳过真实设备 smoke。
   - 暂不支持 `device_id` 选择。
 - 端到端：

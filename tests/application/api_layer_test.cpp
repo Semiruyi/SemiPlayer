@@ -136,6 +136,7 @@ public:
 class FakeAudioOutput final : public domain::AudioOutput {
 public:
     bool fail_start_playback = false;
+    bool fail_pause_playback = false;
     int configure_calls = 0;
     int start_playback_calls = 0;
     int pause_playback_calls = 0;
@@ -166,7 +167,17 @@ public:
         return {};
     }
 
-    void pause_playback() noexcept override { ++pause_playback_calls; }
+    std::expected<void, domain::AudioOutputError> pause_playback() override {
+        ++pause_playback_calls;
+        if (fail_pause_playback) {
+            return std::unexpected(domain::AudioOutputError{
+                .code = domain::AudioOutputErrorCode::BackendFailure,
+                .message = "audio output pause failed",
+                .backend_error = std::nullopt,
+            });
+        }
+        return {};
+    }
 
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
@@ -372,6 +383,35 @@ TEST(ApiLayerTest, PlayAndPauseControlAudioOutput) {
     ASSERT_NE(duplicate_pause, 0U);
     EXPECT_EQ(layer.await(duplicate_pause, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PauseFailureDoesNotCommitPausedState) {
+    FakePipeline pipeline;
+    pipeline.output->fail_pause_playback = true;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const CommandHandle open = layer.open("movie.mp4");
+    ASSERT_NE(open, 0U);
+    EXPECT_EQ(layer.await(open, result), SEMI_OK);
+
+    const CommandHandle play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_OK);
+
+    const CommandHandle pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_ERR_INTERNAL);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+
+    pipeline.output->fail_pause_playback = false;
+    const CommandHandle retry = layer.pause();
+    ASSERT_NE(retry, 0U);
+    EXPECT_EQ(layer.await(retry, result), SEMI_OK);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 2);
 
     EXPECT_TRUE(layer.stop());
 }

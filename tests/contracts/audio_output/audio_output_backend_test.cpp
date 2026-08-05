@@ -24,6 +24,10 @@ public:
         return AudioOutputConfigureResult{.playback_format = playback_format()};
     }
 
+    std::expected<void, AudioOutputBackendError> pause() override { return {}; }
+
+    std::expected<void, AudioOutputBackendError> resume() override { return {}; }
+
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const media::DecodedAudio&) override {
         return submit_status;
@@ -33,7 +37,10 @@ public:
         return drain_status;
     }
 
-    void reset() noexcept override { ++reset_calls; }
+    std::expected<void, AudioOutputBackendError> reset() override {
+        ++reset_calls;
+        return {};
+    }
     void unconfigure() noexcept override { ++unconfigure_calls; }
 
     AudioOutputSubmitStatus submit_status = AudioOutputSubmitStatus::Accepted;
@@ -66,6 +73,20 @@ TEST(AudioOutputBackendContract, RepresentsSubmitAndDrainBackpressure) {
     ASSERT_TRUE(drained.has_value());
     EXPECT_EQ(*submitted, AudioOutputSubmitStatus::WouldBlock);
     EXPECT_EQ(*drained, AudioOutputDrainStatus::WouldBlock);
+}
+
+TEST(AudioOutputBackendContract, RepresentsPauseAndResume) {
+    FakeAudioOutputBackend backend;
+
+    EXPECT_TRUE(backend.pause().has_value());
+    EXPECT_TRUE(backend.resume().has_value());
+}
+
+TEST(AudioOutputBackendContract, RepresentsReset) {
+    FakeAudioOutputBackend backend;
+
+    EXPECT_TRUE(backend.reset().has_value());
+    EXPECT_EQ(backend.reset_calls, 1);
 }
 
 TEST(AudioOutputBackendContract, PreservesOperationInStructuredError) {

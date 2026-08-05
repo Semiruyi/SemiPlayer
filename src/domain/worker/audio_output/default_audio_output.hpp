@@ -41,7 +41,7 @@ public:
 
     [[nodiscard]] std::expected<void, AudioOutputError> start_playback() override;
 
-    void pause_playback() noexcept override;
+    [[nodiscard]] std::expected<void, AudioOutputError> pause_playback() override;
 
     void unconfigure() noexcept override;
 
@@ -106,7 +106,7 @@ private:
     };
 
     struct PausePlaybackCommand {
-        std::promise<void> completion;
+        std::promise<std::expected<void, AudioOutputError>> completion;
     };
 
     using ControlCommand =
@@ -126,6 +126,7 @@ private:
 
     [[nodiscard]] bool should_process_data_locked() const noexcept;
     void handle_generation_change_if_needed() noexcept;
+    [[nodiscard]] bool reset_backend_for_generation() noexcept;
     [[nodiscard]] DataStepResult try_submit_pending_frame() noexcept;
     [[nodiscard]] DataStepResult try_drain_backend() noexcept;
     void read_next_input_to_pending() noexcept;

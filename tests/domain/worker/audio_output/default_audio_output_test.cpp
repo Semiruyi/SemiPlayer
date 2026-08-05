@@ -100,6 +100,28 @@ public:
         return AudioOutputConfigureResult{.playback_format = format};
     }
 
+    std::expected<void, AudioOutputBackendError> pause() override {
+        ++pause_calls;
+        std::lock_guard lock(mutex_);
+        if (pause_error_) {
+            auto error = std::move(*pause_error_);
+            pause_error_.reset();
+            return std::unexpected(std::move(error));
+        }
+        return {};
+    }
+
+    std::expected<void, AudioOutputBackendError> resume() override {
+        ++resume_calls;
+        std::lock_guard lock(mutex_);
+        if (resume_error_) {
+            auto error = std::move(*resume_error_);
+            resume_error_.reset();
+            return std::unexpected(std::move(error));
+        }
+        return {};
+    }
+
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio& audio) override {
         ++submit_calls;
@@ -137,7 +159,16 @@ public:
         return AudioOutputDrainStatus::Drained;
     }
 
-    void reset() noexcept override { ++reset_calls; }
+    std::expected<void, AudioOutputBackendError> reset() override {
+        ++reset_calls;
+        std::lock_guard lock(mutex_);
+        if (reset_error_) {
+            auto error = std::move(*reset_error_);
+            reset_error_.reset();
+            return std::unexpected(std::move(error));
+        }
+        return {};
+    }
     void unconfigure() noexcept override { ++unconfigure_calls; }
 
     void push_submit_result(AudioOutputSubmitStatus status) {
@@ -153,6 +184,21 @@ public:
     void set_configure_error(AudioOutputBackendError error) {
         std::lock_guard lock(mutex_);
         configure_error_ = std::move(error);
+    }
+
+    void set_pause_error(AudioOutputBackendError error) {
+        std::lock_guard lock(mutex_);
+        pause_error_ = std::move(error);
+    }
+
+    void set_resume_error(AudioOutputBackendError error) {
+        std::lock_guard lock(mutex_);
+        resume_error_ = std::move(error);
+    }
+
+    void set_reset_error(AudioOutputBackendError error) {
+        std::lock_guard lock(mutex_);
+        reset_error_ = std::move(error);
     }
 
     void set_submit_error(AudioOutputBackendError error) {
@@ -182,6 +228,8 @@ public:
     }
 
     std::atomic_int configure_calls = 0;
+    std::atomic_int pause_calls = 0;
+    std::atomic_int resume_calls = 0;
     std::atomic_int submit_calls = 0;
     std::atomic_int drain_calls = 0;
     std::atomic_int reset_calls = 0;
@@ -194,6 +242,9 @@ public:
 private:
     mutable std::mutex mutex_;
     std::optional<AudioOutputBackendError> configure_error_;
+    std::optional<AudioOutputBackendError> pause_error_;
+    std::optional<AudioOutputBackendError> resume_error_;
+    std::optional<AudioOutputBackendError> reset_error_;
     std::optional<AudioOutputBackendError> submit_error_;
     std::optional<AudioOutputBackendError> drain_error_;
     std::deque<AudioOutputSubmitStatus> submit_results_;
@@ -207,6 +258,10 @@ public:
         throw std::runtime_error("boom");
     }
 
+    std::expected<void, AudioOutputBackendError> pause() override { return {}; }
+
+    std::expected<void, AudioOutputBackendError> resume() override { return {}; }
+
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio&) override {
         return AudioOutputSubmitStatus::Accepted;
@@ -216,7 +271,7 @@ public:
         return AudioOutputDrainStatus::Drained;
     }
 
-    void reset() noexcept override {}
+    std::expected<void, AudioOutputBackendError> reset() override { return {}; }
     void unconfigure() noexcept override { ++unconfigure_calls; }
 
     std::atomic_int unconfigure_calls = 0;
@@ -372,7 +427,8 @@ TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
 
     ASSERT_TRUE(output->configure({}).has_value());
     ASSERT_TRUE(output->start_playback().has_value());
-    output->pause_playback();
+    ASSERT_TRUE(output->pause_playback().has_value());
+    EXPECT_EQ(backend->pause_calls, 1);
 
     dependencies.source->push(make_frame_item(7, dependencies.generation->current()));
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
@@ -381,9 +437,88 @@ TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
     EXPECT_EQ(backend->submit_calls, 0);
 
     ASSERT_TRUE(output->start_playback().has_value());
+    EXPECT_EQ(backend->resume_calls, 2);
 
     ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x07});
+}
+
+TEST(DefaultAudioOutputTest, PropagatesBackendPauseFailureAndKeepsPlaybackEnabled) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    backend->set_pause_error(AudioOutputBackendError{
+        .operation = AudioOutputBackendOperation::Pause,
+        .native_code = -7,
+        .message = "pause failed",
+    });
+
+    const auto paused = output->pause_playback();
+
+    ASSERT_FALSE(paused.has_value());
+    EXPECT_EQ(paused.error().code, AudioOutputErrorCode::BackendFailure);
+    ASSERT_TRUE(paused.error().backend_error.has_value());
+    EXPECT_EQ(paused.error().backend_error->operation, AudioOutputBackendOperation::Pause);
+
+    dependencies.source->push(make_frame_item(8, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x08});
+}
+
+TEST(DefaultAudioOutputTest, PropagatesBackendResumeFailureAndRemainsPaused) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    backend->set_resume_error(AudioOutputBackendError{
+        .operation = AudioOutputBackendOperation::Resume,
+        .native_code = -8,
+        .message = "resume failed",
+    });
+
+    const auto started = output->start_playback();
+
+    ASSERT_FALSE(started.has_value());
+    EXPECT_EQ(started.error().code, AudioOutputErrorCode::BackendFailure);
+    ASSERT_TRUE(started.error().backend_error.has_value());
+    EXPECT_EQ(started.error().backend_error->operation, AudioOutputBackendOperation::Resume);
+
+    dependencies.source->push(make_frame_item(9, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(backend->submit_calls, 0);
+
+    ASSERT_TRUE(output->start_playback().has_value());
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x09});
+}
+
+TEST(DefaultAudioOutputTest, ResetWhilePausedDoesNotResumeBackend) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    ASSERT_TRUE(output->pause_playback().has_value());
+    EXPECT_EQ(backend->resume_calls, 1);
+
+    dependencies.generation->bump();
+    dependencies.source->push(make_frame_item(10, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    ASSERT_TRUE(eventually([&] { return backend->reset_calls.load() == 1; }));
+    EXPECT_EQ(backend->resume_calls, 1);
+    EXPECT_EQ(backend->submitted_marker_count(), 0U);
+
+    ASSERT_TRUE(output->start_playback().has_value());
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x0A});
 }
 
 TEST(DefaultAudioOutputTest, KeepsPendingFrameUntilBackendProgressAfterWouldBlock) {
@@ -476,6 +611,40 @@ TEST(DefaultAudioOutputTest, ResetsBackendAndDropsPendingFrameWhenGenerationChan
     ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 2; }));
     ASSERT_EQ(backend->submitted_marker_count(), 1U);
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x04});
+}
+
+TEST(DefaultAudioOutputTest, ReportsResetFailureAndRequiresUnconfigureForRecovery) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    std::vector<AudioOutputBackendFailure> failure_events;
+    auto failure_subscription = dependencies.notifier->subscribe<AudioOutputBackendFailure>(
+        [&failure_events](const AudioOutputBackendFailure& event) {
+            failure_events.push_back(event);
+        });
+    backend->set_reset_error(AudioOutputBackendError{
+        .operation = AudioOutputBackendOperation::Reset,
+        .native_code = -9,
+        .message = "reset failed",
+    });
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    dependencies.generation->bump();
+    dependencies.source->push(make_frame_item(6, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    ASSERT_TRUE(eventually([&] { return !failure_events.empty(); }));
+    EXPECT_EQ(failure_events.front().generation, dependencies.generation->current());
+    EXPECT_EQ(failure_events.front().error.operation, AudioOutputBackendOperation::Reset);
+
+    const auto reconfigure_while_failed = output->configure({});
+    ASSERT_FALSE(reconfigure_while_failed.has_value());
+    EXPECT_EQ(reconfigure_while_failed.error().code, AudioOutputErrorCode::InvalidState);
+
+    output->unconfigure();
+    const auto reconfigured = output->configure({});
+    ASSERT_TRUE(reconfigured.has_value());
 }
 
 TEST(DefaultAudioOutputTest, ReportsSubmitFailureAndRequiresUnconfigureForRecovery) {
