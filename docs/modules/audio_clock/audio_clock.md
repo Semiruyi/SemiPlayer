@@ -1,233 +1,399 @@
-# AudioClock 模块设计
+# AudioClock 模块设计（当前版）
 
-> 音频主时钟。整个播放器的"时间感"基准——pts ↔ wall clock(Instant)的双向映射。
-> 对外接口由 ApiLayer 调用（seek 的 `jump_to`、open/close 的 `reset`）；被 AudioSink 写、VideoSync 读。本文件描述其内部设计。
+> 本文以当前代码为准，描述 AudioClock 的目标契约和接入方式。
+> AudioClock 目前还没有实现；本文不是现状报告，而是下一阶段实现依据。
 
-## Context
+## 1. 当前背景
 
-播放器需要一个稳定的"当前播放到哪个时间点(pts)"的来源,供 VideoSync 选帧、seek 跳点后对齐。SemiPlayer 采用**音频主时钟**:声卡以恒定采样率消耗样本,**已播放样本数 = 精确流逝的音频时间**,是整个系统最稳的时间基准(不依赖系统时钟漂移、不受 CPU 抖动影响)。
+播放器需要一个统一的音频播放位置，供未来的 VideoSync 按 PTS 选择视频帧。
+当前音频链路已经具备声卡消费通知，但还没有把这些通知转换成可查询的播放时钟。
 
-AudioClock 就是这个基准。它维护"某个 wall-clock 时刻对应某个音频 pts"的映射,所有想查当前 pts 的模块用当前系统时间推算。
+当前真实的数据路径是：
 
----
-
-## 定位
-
-```
-              写(校准基准)                读(推算当前 pts)
-AudioSink(miniaudio 实时线程) ──→ AudioClock ←── VideoSync
-                                    ↑
-                            ApiLoop 控制: jump_to / reset / freeze / unfreeze
-```
-
-- **资源管理者层,无线程**(被多线程读写)。
-- DAG 第 0 层,无依赖,被所有人依赖。
-- **不做**:不决定播什么(VideoSync 选帧)、不驱动音频播放(miniaudio)、不参与世代号(它是标量不是数据流)。
-
----
-
-## 职责
-
-- **建立 pts ↔ wall clock 映射**:记录"某 wall-clock 时刻 `base_time` 对应音频 pts `base_pts`"。任意时刻当前 pts = `base_pts + (now - base_time) × rate`。
-- **被 AudioSink 校准**:miniaudio 回调喂声卡数据后,用样本计数算出 ground truth 当前 pts,刷新基准(详见校准机制)。
-- **被读**:VideoSync 无锁读当前 pts(推算)。
-- **freeze / unfreeze**:pause 时冻结(查询返回固定 pts),resume 时更新 pts 对应的系统时间。
-- **jump_to(pos)**:seek 时时钟跳到目标 pts(连续标量,不能靠世代号丢弃识别——这是 seek.md 第⑤步专门调它的原因)。
-- **reset(0)**:open/close 时归零冻结。
-
----
-
-## 核心机制:两层时钟(校准层 + 推算层)
-
-时钟分两层。校准层只在 miniaudio 回调里跑,算 ground truth;推算层给查询者,在两次校准间用 wall clock 插值。每次校准 = 用校准层结果刷新推算层基准。
-
-### 校准层(回调里,精确,ground truth)
-
-miniaudio 回调每次喂声卡 N 个样本后,用**绝对值**校准当前 pts:
-
-```
-当前 pts = first_pts + (provided − buffered) / sample_rate
-                    ↑           ↑
-              已提供给 miniaudio    声卡 buffer 残留
-              的样本总数       (还没真播出去的)
+```text
+AudioFrameStore
+    ↓
+DefaultAudioOutput worker
+    ↓  try_submit(DecodedAudio)
+AudioOutputBackend 的 PCM ring buffer
+    ↓
+miniaudio playback callback
+    ↓  AudioFramesConsumed{frames}
+AudioOutputRealTimeNotifier
 ```
 
-- `first_pts`:首帧音频的 pts(**取自第一块喂声卡的 PCM 块的 pts,不是算出来的**)。整个会话不变,直到 reset/jump_to 重置。详见"首帧 pts 的确立"。
-- `provided`:累计已提供给 miniaudio 的样本数。
-- `buffered`:声卡 buffer 里还没播出去的样本数(声卡 latency)。
-- `sample_rate`:采样率。
+这里有几个必须明确的术语边界：
 
-**为什么用绝对值而非累加**:`provided - buffered` 反映**声卡的真实播放位置**(已播 = 提供了但不再在 buffer 里)。每次回调都从这个绝对值重算,误差不累积、每次校准都重新对齐 ground truth。简单累加(每次 +N/采样率)会因浮点/除法误差漂移,且不知道 buffer 积压了多少没真播。
+- 当前没有 `AudioSink` 类；音频消费模块是 `DefaultAudioOutput`。
+- 当前没有名为 `AudioResampledStore` 的类型；IoC 中使用第二个 `AudioFrameStore` 保存重采样后的 PCM。
+- `DecodedAudio::pts_us` 是媒体时间线上的微秒 PTS。
+- `AudioFramesConsumed` 只表示 callback 实际从 backend buffer 读出的 PCM frame 数。
+- callback 补出的静音不是媒体数据，不产生 `AudioFramesConsumed`。
 
-> 这是专业播放器(ffplay/mpv)的做法:用声卡 latency 做时钟校准。声卡以恒定采样率消耗样本,是系统最稳的时间基准。
+## 2. 模块定位
 
-### 首帧 pts 的确立(关键)
+AudioClock 是第 0 层的无 worker 资源，不负责拉起线程，也不决定播放哪些数据。
 
-`first_pts` 是校准公式的**固定基准**,取自第一块喂给声卡的音频 PCM 块的 pts(AudioResampledStore 的每块带 pts)。判断"是不是第一块"靠一个内部标志 `first_pts: Option<Pts>`(None = 未确立):
-
-```
-calibrate(block_pts, samples_this_call, buffered_samples):
-    if first_pts is None:              # 第一次:确立基准
-        first_pts = block_pts          # 取自这块 PCM 的 pts
-        provided = samples_this_call
-    else:                              # 后续:只累加计数
-        provided += samples_this_call
-    ground_truth = first_pts + (provided − buffered_samples) / sample_rate
-    base_time = now; base_pts = ground_truth
-```
-
-- `reset(pts)` / `jump_to(pos)` 会清除 first_pts(置 None),下次 calibrate 重新确立。
-- 后续 calibrate 的 block_pts 可忽略(已用样本计数推进,不再靠 block_pts)。
-
-### 推算层(查询时,插值)
-
-校准只在回调时发生,查询者随时来读拿不到当前 buffer 残留,所以在两次校准间用 wall clock 插值:
-
-```
-查询当前 pts:
-    if frozen:
-        return frozen_pts                          // 暂停时返回固定值
-    else:
-        return base_pts + (now - base_time) × rate
+```text
+                         控制面
+ApiLayer ───────────────────────────────┐
+  open/close: reset                     │
+  play: resume                          │
+  pause: pause                          ▼
+                                   AudioClock
+DefaultAudioOutput ── PCM 时间锚点 ──────┤
+miniaudio callback ── 实际消费 frame ─────┤
+                                         │
+                                   current_pts()
+                                         ▲
+                                      VideoSync
 ```
 
-- `base_time` / `base_pts` / `rate` / `frozen` / `frozen_pts` 组成复合状态。
-- 每次校准(回调)用校准层结果刷新:`base_time = now, base_pts = 校准算出的 pts`。wall clock 漂移不累积(每次校准重新对齐)。
+AudioClock 的职责：
 
-### 两层协作
+- 维护当前媒体音频 PTS；
+- 以实际被声卡消费的 PCM 为播放进度依据；
+- 在 pause、EOF、backend failure 后停止时间推进；
+- 在 seek 或新媒体会话后丢弃旧的时间锚点；
+- 向 VideoSync 提供线程安全的 `current_pts()` 查询。
 
-```
-miniaudio 回调(喂一块 PCM,带 block_pts + N 样本):
-    if first_pts is None:
-        first_pts = block_pts; provided = N        # 第一次:确立基准(取自块 pts)
-    else:
-        provided += N                              # 后续:累加计数
-    校准 pts = first_pts + (provided − latency_samples) / sample_rate   ← 校准层 ground truth
-    base_time = now; base_pts = 校准 pts                                 ← 刷新推算层基准
+AudioClock 不负责：
 
-VideoSync 读:
-    base_pts + (now − base_time) × rate                                  ← 推算层插值
-```
+- 从 `AudioFrameStore` 取 PCM；
+- 调用 miniaudio 或控制声卡；
+- 处理 generation 对应的数据丢弃；
+- 选择或提交视频帧；
+- 处理音量、变速或音频重采样。
 
----
+## 3. 时钟语义
 
-## 线程可见性
+### 3.1 主时钟来源
 
-无线程,被多线程读写:
-- **写者**:AudioSink(miniaudio 实时线程,校准基准);ApiLoop(freeze/unfreeze/jump_to/reset)。
-- **读者**:VideoSync（工作线程）。
+AudioClock 以实际消费的音频 frame 为主时钟，而不是以提交给 backend 的 frame 为主时钟。
 
-**原子性**:`(base_time, base_pts, rate, frozen, frozen_pts)` 是复合状态,多线程读需一致快照。用 `std::atomic<std::shared_ptr>` 整体替换指针——读端无锁、写端罕见(校准/冻结/跳点)。与 api_layer.md 里 MediaInfo 的方案一致。
+原因是提交只代表 PCM 进入了播放 buffer，不能代表已经听到。pause 时 backend buffer
+保留但设备停止，时钟也必须停止；backend reset 清空旧 buffer 后，旧 PCM 不能继续推进时钟。
 
----
+在两次 callback 通知之间，AudioClock 可以用 `std::chrono::steady_clock` 对最近一次精确
+消费位置做短距离插值，从而让 VideoSync 不被 callback 周期量化。插值只是查询层的估计，
+下一次实际消费通知到达后重新对齐。
 
-## 依赖
+### 3.2 时间单位
 
-- **构造期注入**:无(纯资源,第 0 层,被所有人依赖)。
-- **运行时被注入给**:AudioSink(写)、VideoSync(读)、ApiLoop(控制)。
+- 对外播放位置统一使用微秒 `std::int64_t pts_us`。
+- PCM 的 `frames` 是每声道的采样帧数，不是所有声道样本数之和。
+- 推进速度由输出采样率决定：
 
----
-
-## 状态机(内部,无对外可见状态)
-
-AudioClock 自身无"模块状态机"(它是标量资源,不是工作模块)。但它有一个内部的**冻结位**影响查询行为:
-
-```
-frozen=true ──unfreeze()/校准──▶ frozen=false ──freeze()──▶ frozen=true
+```text
+audio_duration_us = consumed_frames × 1'000'000 / sample_rate
 ```
 
-- open 后 reset(0):frozen=true,base_pts=0(冻结在 0,等 play)。
-- play 启动出声:miniaudio 第一次回调校准 → frozen=false,base_time/base_pts 确立。
-- pause:freeze() → 立刻把当前推算 pts 存为 frozen_pts,frozen=true。
-- resume:unfreeze() → 用 frozen_pts + now 重置 base(base_time=now, base_pts=frozen_pts),frozen=false。
-- seek:jump_to(pos) → base_pts=pos, base_time=now(无论冻结与否)。
-- close:reset(0) → 归零,frozen=true。
+实现时应避免通过反复浮点累加推进时间；应使用累计 frame 数或整数乘除计算。
 
----
+### 3.3 没有有效音频时的查询
 
-## 对外接口(高层,不含内部实现)
+`current_pts()` 建议返回 `std::optional<std::int64_t>`：
 
-| 方法 | 调用时机 | 职责 |
-|------|---------|------|
-| `reset(pts)` | open / close 命令 | base_pts=pts, base_time=now, frozen=true(冻结基准,等 play) |
-| `calibrate(block_pts, samples_this_call, buffered_samples)` | AudioSink miniaudio 回调 | 首次确立 first_pts(取 block_pts);算 ground truth pts,刷新 base_time/base_pts;若 frozen 则 unfreeze |
-| `current_pts()` | VideoSync 查询 | 无锁读:if frozen return frozen_pts else base_pts + (now-base_time)×rate |
-| `freeze()` | pause 命令 | 算当前 pts 存为 frozen_pts,frozen=true |
-| `unfreeze()` | play(pause 后恢复)命令 | base_time=now, base_pts=frozen_pts, frozen=false |
-| `jump_to(pos)` | seek 命令 | base_pts=pos, base_time=now(连续标量跳点,不靠丢弃) |
+- 没有打开媒体；
+- 已配置但还没有首个带 PTS 的 PCM；
+- seek 后新 generation 的 PCM 尚未到达；
 
-> 接口签名细节(参数类型、std::atomic<std::shared_ptr> 怎么用)归实现阶段。
+这些情况下返回 `std::nullopt`，而不是伪造 `0`。VideoSync 可以据此等待有效音频时钟。
 
----
+`jump_to(position_us)` 后，在新 PCM 到达前，可以暂时返回目标位置作为 provisional position；
+首个新 generation PCM 实际消费后，再用真实 PTS 建立锚点并修正该位置。
 
-## seek 响应
+## 4. 内部状态
 
-AudioClock 的 seek 是 `jump_to(pos)`:把 base_pts 设为 pos、base_time 设为 now。这是 seek.md 编排的第⑤步(也是最后一步),在 demuxer/decoder/resampler 都 seek 完后调。
+AudioClock 不是工作模块，但有一个内部播放阶段：
 
-**为什么时钟要单独 jump_to 而不能靠世代号**:世代号机制防"旧数据混杂"(队列里旧包被丢弃),但时钟是**连续标量**——它没有"新旧数据"之分,不能靠"丢弃识别"。seek 到 100s,时钟必须显式跳到 100s,否则 VideoSync 还按旧 pts 选帧。这是 seek 三层数据正确性之外、时钟独有的第④件事(见 seek.md)。
-
----
-
-## 关键设计决策
-
-### 音频主时钟(声卡为基准)
-声卡以恒定采样率消耗样本,已播放样本数 = 精确流逝的音频时间。这比系统时钟(wall clock 会漂移、受 NTP 调整影响)和视频帧 PTS(受解码抖动影响)都稳。音频主时钟是 A/V sync 的标准做法。
-
-### 绝对值校准(防累积漂移)
-用 `first_pts + (provided − buffered) / sample_rate` 而非"每次回调 +N/采样率"累加。前者每次校准都从绝对值重算,误差不累积;后者浮点/除法误差越积越大,且不知 buffer 积压。这是用声卡 latency 做校准的核心。
-
-### 两层时钟(校准层 + 推算层)
-校准层(回调里,拿得到 buffer 残留)算 ground truth;推算层(查询时,拿不到 buffer 残留)用 wall clock 插值。每次校准刷新推算层基准。wall clock 漂移不累积(每次校准重新对齐)。两层分工让"精确校准"和"随时可查"兼得。
-
-### 暂停冻结(frozen 状态位)
-暂停时 wall clock 还在走,若查询用 `base_pts + (now - base_time)` 会得到不断增大的错误 pts。故引入 frozen 位:暂停时存 frozen_pts、查询返回固定值;恢复时用 frozen_pts 重置 base。VideoSync 暂停停贴帧依赖这一点。
-
-### std::atomic<std::shared_ptr> 原子快照
-复合状态(base_time/base_pts/rate/frozen/frozen_pts)多线程读需一致。std::atomic<std::shared_ptr> 整体替换指针,读端无锁、写端罕见。不拆成多个 AtomicXX(会撕裂)。
-
-### 变速 rate 字段预留
-rate 本阶段固定 1.0,但纳入映射公式(`× rate`)。set_speed 来时改 rate 即可,不用改时钟结构。真变速不变调需 SoundTouch(在 AudioResampler),时钟只反映 rate 变化。
-
----
-
-## 坑与边界
-
-### 声卡 latency 的获取
-`buffered`(声卡 buffer 残留样本数)需通过 miniaudio latency API(`stream.latency()`,平台支持时)或自维护 ring 计数(送多少 vs 估计播了多少)获取。平台差异在实现阶段处理,不影响架构。
-
-### 首帧 pts 的确立
-`first_pts` 是校准公式的固定基准,**取自第一块喂声卡的 PCM 块的 pts**(AudioResampledStore 的每块带 pts),不是算出来的。判断"第一块"靠 `Option<Pts>` 标志(None=未确立):reset/jump_to 清除,第一次 calibrate 确立。若首帧 pts ≠ 0(如从中间 seek 起播),校准自动对齐到真实首帧 pts。
-
-### seek 后 first_pts 必须重置(否则时钟被拉回旧位置)
-seek 时 `jump_to(pos)` 设 base_pts=pos,但若不重置 first_pts,会出现 bug:
-- seek 后音频链路重新定位+解码+重采样需要时间,这期间 miniaudio 回调还在跑,buffer 里可能还有**旧世代数据**。
-- 若 AudioSink 播旧世代数据时还调 calibrate(用旧 first_pts + 旧 provided),算出的 ground truth 是**旧位置**,会**覆盖 jump_to 设的 base_pts=pos**——把时钟从 pos 拉回旧位置。
-
-**解法(两层配合)**:
-- `jump_to(pos)` 时**清除 first_pts**(重置标志),后续新数据第一次 calibrate 重新确立。
-- **AudioSink 丢弃旧世代数据时不调 calibrate**(喂静音即可,与 AudioSink"丢弃旧 generation"现有职责一致)。只有**新世代数据**才 calibrate。
-
-时序:
-```
-jump_to(pos):  base_pts=pos, first_pts=None(清除)
-[旧世代数据被 AudioSink 丢弃,喂静音,不 calibrate]  ← base_pts 保持 pos
-[新世代数据到达]
-第一次新 calibrate:  first_pts=新块pts, 算 ground_truth ≈ pos, 修正 base  ← 真实数据对齐
+```text
+Reset
+  ↓ reset(sample_rate)
+WaitingForAudio
+  ↓ 首个有效 PCM 被实际消费
+Running  ↔  Paused
+  ↓ EOF / backend failure
+Finished
 ```
 
-> 新块 pts 可能 ≠ pos(FFmpeg seek 到最近关键帧 + PTS 过滤,pts 略 ≥ pos)。第一次 calibrate 用真实 pts 修正 jump_to 的估计值——jump_to 先给个估计,calibrate 用真实数据精校。
+### Reset
 
-### miniaudio 回调里的开销
-calibrate 在 miniaudio 实时线程执行,必须极轻量(算术 + std::atomic<std::shared_ptr> store),不拿重锁、不干重活、不 malloc。std::atomic<std::shared_ptr> store 是无锁原子操作,符合实时约束。
+没有可用的播放时间。`sample_rate` 可以已经配置，但没有当前音频锚点。
 
-### jump_to 与冻结态
-jump_to 无论 frozen 与否都更新 base_pts/base_time。若 seek 时正在暂停(frozen=true),jump_to 后查询仍返回 frozen_pts(因为 frozen 位还在)——这是对的:暂停态 seek 后保持暂停在新位置,unfreeze 时才从新 pts 起播。
+### WaitingForAudio
 
----
+已经 open 或 seek，且已经知道目标 generation，但新的 PCM 还没有实际消费。
+时钟不会使用 wall clock 自行向前推进。
 
-## 边界（本文档不涉及）
+### Running
 
-- ❌ miniaudio latency API 的具体使用 / 自维护 ring 计数的实现 → 实现阶段
-- ❌ std::atomic<std::shared_ptr> 的具体用法 / 状态结构体的字段布局 → 实现阶段
-- ❌ 变速不变调（SoundTouch）的接入 → AudioResampler 文档 / 未来阶段
-- ❌ VideoSync 如何用 current_pts 选帧 → video_sync.md（待设计）
+有有效锚点，且播放允许推进。查询值由最近一次 callback 的精确位置加短距离插值得到。
+
+### Paused
+
+保存 pause 时的当前位置。wall clock 继续流逝，但 `current_pts()` 返回固定位置。
+
+### Finished
+
+当前 generation 的 backend 已经 drain 完成。时钟停止推进，直到下一次 `reset()` 或 `jump_to()`。
+
+backend failure 不需要增加 AudioClock 自己的错误状态；ApiLayer 或 AudioOutput 的错误状态
+负责停止它。
+
+## 5. 时间锚点与实际消费
+
+单靠当前的 `AudioFramesConsumed{frames}` 无法知道 PTS，因此需要两类输入：
+
+1. `DefaultAudioOutput` 提供 PCM 的时间锚点；
+2. miniaudio callback 提供实际消费的 frame 数。
+
+逻辑上，当前 generation 的第一个有效 PCM 块包含：
+
+```text
+anchor_pts_us = PCM block 的 pts_us
+sample_rate   = output playback format 的 sample_rate
+```
+
+当 callback 实际消费 `N` 个 frame 后：
+
+```text
+played_pts_us = anchor_pts_us + consumed_frames × 1'000'000 / sample_rate
+```
+
+后续 PCM 块默认沿当前 generation 的音频时间线连续排列；其 PTS 主要用于建立首个锚点
+和处理新 generation。若未来需要支持音频时间线中的显式 gap 或 discontinuity，再增加
+segment 队列，不在第一版引入。
+
+### 提交与消费的顺序
+
+时间锚点必须和 PCM 进入 backend buffer 的顺序一致：
+
+- `try_submit()` 接受一块 PCM 后，输出 worker 必须把这块 PCM 的 PTS 元数据提供给 clock；
+- callback 只报告实际从 buffer 读出的 frame 数；
+- `WouldBlock`、backend error 或 generation 不匹配的 PCM 不能成为新的时间锚点；
+- 新 generation 的第一块有效 PCM 到达后，旧锚点必须已经失效。
+
+这里的关键不是让 callback 读取 PTS，而是保证“PCM 字节进入 buffer”和“时间元数据进入
+clock”具有同样的顺序。实现时需要用测试覆盖 submit 与 callback 并发的边界。
+
+当前 `AudioOutputBackend::try_submit()` 只接收 `DecodedAudio`，并没有把 PCM 字节和时序
+元数据作为一个原子提交操作。因此，实现不能机械地假设“`try_submit()` 返回后再通知
+clock”就一定没有竞态；miniaudio callback 可能在 backend 已经写入 ring 后立即运行。
+实现阶段必须选择并验证一种顺序保证：
+
+- 在 PCM 字节对 callback 可见前，先发布可撤销的时间元数据；`WouldBlock` 或 error 时撤销；
+- 或者扩展 backend 的提交边界，使 PCM 和时间元数据一起进入可消费队列。
+
+这属于实现契约，不在本文中提前绑定某一种数据结构。
+
+## 6. 建议契约
+
+下面是目标接口的语义草案，具体文件位置和是否采用抽象接口在实现阶段决定：
+
+```cpp
+class AudioClock {
+public:
+    // sample_rate == 0 means that there is no active media session.
+    void reset(std::uint32_t sample_rate) noexcept;
+    void resume() noexcept;
+    void pause() noexcept;
+
+    void jump_to(std::int64_t pts_us,
+                 Generation::Value generation) noexcept;
+
+    // Called by DefaultAudioOutput for accepted PCM metadata.
+    void on_audio_submitted(std::optional<std::int64_t> pts_us,
+                            std::uint32_t frames,
+                            Generation::Value generation) noexcept;
+
+    // Called by the AudioFramesConsumed realtime sink.
+    void on_audio_frames_consumed(std::uint32_t frames) noexcept;
+
+    void finish() noexcept;
+
+    [[nodiscard]] std::optional<std::int64_t> current_pts() const noexcept;
+};
+```
+
+约束如下：
+
+- `on_audio_frames_consumed()` 必须是 `noexcept`；
+- realtime callback 路径不能加重锁、分配内存或发送普通 Notifier 事件；
+- `current_pts()` 可以被 VideoSync 高频调用，不能依赖 AudioOutput worker 的 mutex；
+- `reset()`、`pause()`、`resume()`、`jump_to()`、`finish()` 由控制面串行调用；
+- `Generation::Value` 只用于使时间锚点失效和拒绝旧 PCM，不把 AudioClock 变成数据队列。
+
+## 7. 控制面生命周期
+
+### Open
+
+当前 `ApiLayer` 的音频配置顺序是：
+
+```text
+AudioDecoder.configure()
+AudioOutput.configure()       → 得到 playback_format
+AudioResampler.configure()    → 使用 playback_format
+```
+
+AudioClock 应在获得 playback sample rate 后执行：
+
+```text
+clock.reset(output.playback_format.sample_rate)
+```
+
+Open 成功后播放器处于 Ready，时钟等待第一次 play 和有效 PCM。
+
+### Play / Resume
+
+```text
+audio_output.start_playback()
+clock.resume()
+```
+
+`start_playback()` 在当前 AudioOutput 中既表示第一次启动，也表示 pause 后恢复。
+如果 backend 启动失败，clock 不得进入 Running。
+
+恢复后如果还没有有效 PCM，clock 保持 `WaitingForAudio`；首个 PCM 被消费后才开始推进。
+
+### Pause
+
+```text
+audio_output.pause_playback()
+clock.pause()
+```
+
+只有 backend pause 成功后才冻结 clock。失败时保留原播放器状态和时钟状态。
+
+暂停不清理 playback buffer，不改变 generation，也不重置时间锚点。
+
+### Seek
+
+当前 seek 的数据语义是由 `Demuxer` 推进 generation，其他 worker 在后续处理数据时观察
+generation 并 reset 自己的 backend。AudioClock 的处理应为：
+
+```text
+demuxer.seek(position_us) 成功
+    ↓
+active_generation 更新
+    ↓
+clock.jump_to(position_us, new_generation)
+    ↓
+AudioOutput 丢弃旧 generation，reset backend buffer
+    ↓
+新 generation PCM 到达并重新建立时间锚点
+```
+
+`jump_to()` 必须立刻清除旧锚点，防止旧 PCM 的消费通知把时钟拉回 seek 前的位置。
+如果 seek 发生在 Paused 状态，时钟跳到新位置后仍保持暂停；resume 后从新 generation PCM
+重新开始。
+
+`AudioOutputBackend::reset()` 返回成功前，必须保证旧 device callback 不再继续产生有效的
+旧 PCM 消费通知。当前 miniaudio 实现依赖 `ma_device_stop()` 建立这个边界；这应作为 backend
+行为和测试的明确前提。
+
+### Close
+
+```text
+demuxer.close()
+audio_decoder.unconfigure()
+audio_resampler.unconfigure()
+audio_output.unconfigure()
+clock.reset(0)
+```
+
+close 后时钟不可继续推进。下一次 open 重新配置 sample rate，并从新会话建立锚点。
+
+### EOF 与错误
+
+AudioOutput 在 backend drain 完成后发送 `AudioPlaybackFinished`。ApiLayer 接收当前 generation
+的事件后应调用 `clock.finish()`，再把播放器状态转为 Ended。
+
+AudioOutput backend failure、AudioResampler failure 或其他导致播放停止的错误，也必须停止
+clock 的推进，避免 VideoSync 在音频已经停止后继续向未来选帧。
+
+## 8. 线程与实时约束
+
+当前 `AudioOutputRealTimeNotifier` 为 `AudioFramesConsumed` 预留两个 sink：
+
+- 一个由 `DefaultAudioOutput` 使用，用来唤醒 worker 处理 backend progress；
+- 第二个供 AudioClock 的 realtime sink 使用。
+
+AudioClock 的 realtime sink 必须满足：
+
+- 只做原子计数、时间戳更新和轻量算术；
+- 不获取 `DefaultAudioOutput::mutex_`；
+- 不调用普通 `Notifier`；
+- 不创建 `std::shared_ptr`、容器节点或其他可能分配内存的对象；
+- 不依赖 callback 线程之外的 worker 及时运行。
+
+初版实现不采用“callback 每次创建 `std::atomic<std::shared_ptr>` 快照”的方案，因为这会
+把潜在分配带入声卡实时线程。具体实现应优先采用预分配状态、原子字段或单向 realtime
+计数器，再由查询端计算当前 PTS。
+
+## 9. 测试计划
+
+### 纯 AudioClock 测试
+
+- reset 后 `current_pts()` 没有有效锚点；
+- 首个带 PTS 的 PCM 被消费后建立正确位置；
+- 按 sample rate 消费 frame，PTS 推进正确；
+- 两次消费通知之间的查询不会明显倒退；
+- pause 后等待 wall clock，PTS 保持不变；
+- resume 后从冻结位置继续；
+- jump while running 会立即清除旧锚点；
+- jump while paused 保持暂停并返回新位置；
+- 旧 generation 的 PCM 不会建立锚点；
+- finish 后 PTS 不再继续推进；
+- 没有 PTS 的 PCM 不会伪造有效时钟。
+
+### 音频输出集成测试
+
+- `try_submit()` 被接受后，PCM 时间元数据和消费通知顺序一致；
+- pause/resume 不清空已经提交的 PCM；
+- generation change 会 reset backend 并丢弃旧 PCM；
+- backend reset 后旧 callback 不会推进新 generation 的时钟；
+- EOF drain 后 clock 进入 Finished；
+- backend failure 后 clock 停止推进。
+
+### 后续 VideoSync 测试
+
+- `current_pts() == std::nullopt` 时不选择新视频帧；
+- pause 时保持最后一帧；
+- seek 后等待新 generation，并按照新 clock 选帧；
+- 音频 callback 周期抖动时，视频选择不依赖 worker 唤醒时机。
+
+## 10. 实现顺序与边界
+
+建议按以下顺序落地：
+
+1. 实现无外部依赖的 AudioClock 状态和纯单元测试；
+2. 将 AudioClock 注入 IoC，并接入 playback sample rate；
+3. 让 DefaultAudioOutput 提供 PCM 时间锚点；
+4. 注册第二个 realtime sink，接收 `AudioFramesConsumed`；
+5. 接入 ApiLayer 的 open/play/pause/seek/close/EOF/error 生命周期；
+6. 最后实现 VideoSync 的时钟读取和选帧策略。
+
+本阶段不涉及：
+
+- miniaudio latency API 的平台细节；
+- 音量控制；
+- 变速不变调；
+- 音频 PTS discontinuity 的完整 segment 队列；
+- VideoSync 的完整选帧算法；
+- 对外暴露当前播放位置的 C ABI。
+
+## 11. 与旧设计的差异
+
+本版明确废弃以下旧前提：
+
+- 用 `AudioSink` 作为当前模块名；
+- 假设存在 `AudioResampledStore` 类型；
+- 在 callback 中通过 `provided - buffered` 获取完整声卡 latency；
+- 把 `AudioClock` 视为已经实现的资源；
+- 使用 `std::atomic<std::shared_ptr>` 作为 realtime callback 的默认状态更新方式；
+- 假设 seek 会同步等待所有下游 worker 完成 reset。
+
+旧版的“音频为主时钟”“pause 冻结”“seek 必须清除旧锚点”这些原则仍然保留，
+但实现边界改为适配当前的 `DefaultAudioOutput`、backend ring buffer、realtime notifier
+和 generation 机制。
