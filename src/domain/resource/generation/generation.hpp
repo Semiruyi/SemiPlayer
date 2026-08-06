@@ -2,6 +2,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
+
+namespace semi::infra {
+class Notifier;
+}
 
 namespace semi::domain {
 
@@ -16,19 +21,20 @@ namespace semi::domain {
 //          定位完成后才 +1，保证 generation 永远对应定位后的新数据。
 //
 // 归类说明：generation 与播放器业务（seek 的数据正确性）强相关，故放 domain/。
-// DAG 第 0 层，无线程、无依赖。
+// DAG 第 0 层，无线程。bump 后通过普通 Notifier 发送 GenerationChanged；通知只是唤醒
+// hint，消费者仍须比较 current()，从而不依赖通知一定被观察到。
 class Generation {
 public:
     using Value = uint32_t;
 
-    Generation() noexcept;
+    explicit Generation(std::shared_ptr<infra::Notifier> notifier = nullptr) noexcept;
     ~Generation() = default;
 
     Generation(const Generation&) = delete;
     Generation& operator=(const Generation&) = delete;
 
     // 新媒体会话成功 open 后，或 seek 定位完成后推进世代号。
-    void bump() noexcept;
+    Value bump() noexcept;
 
     // 当前世代号。
     Value current() const noexcept;
@@ -38,6 +44,7 @@ public:
 
 private:
     std::atomic<Value> value_{0};
+    std::shared_ptr<infra::Notifier> notifier_;
 };
 
 } // namespace semi::domain

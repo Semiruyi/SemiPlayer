@@ -2,7 +2,7 @@
 
 namespace semi::domain {
 
-// Sent after an item is successfully pushed into the store.
+// Sent when the store changes from empty to non-empty.
 struct AudioFrameStoreNotEmpty {};
 
 // Sent when the store changes from full to non-full.

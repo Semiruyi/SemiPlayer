@@ -1,4 +1,6 @@
 #include "domain/resource/generation/generation.hpp"
+#include "domain/resource/generation/generation_events.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
 
@@ -21,6 +23,21 @@ TEST(Generation, BumpIncrements) {
     EXPECT_FALSE(g.is_current(0));
     g.bump();
     EXPECT_EQ(g.current(), 2u);
+}
+
+TEST(Generation, BumpPublishesTheNewValue) {
+    auto notifier = std::make_shared<semi::infra::DefaultNotifier>();
+    Generation generation(notifier);
+    std::vector<Generation::Value> observed;
+    const auto subscription = notifier->subscribe<semi::domain::GenerationChanged>(
+        [&observed](const semi::domain::GenerationChanged& event) {
+            observed.push_back(event.value);
+        });
+
+    EXPECT_EQ(generation.bump(), 1u);
+    EXPECT_EQ(generation.bump(), 2u);
+    EXPECT_EQ(observed, (std::vector<Generation::Value>{1u, 2u}));
+    EXPECT_TRUE(subscription->active());
 }
 
 TEST(Generation, ConcurrentBumpsAreAtomic) {

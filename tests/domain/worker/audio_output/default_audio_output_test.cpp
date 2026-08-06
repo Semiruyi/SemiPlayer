@@ -288,12 +288,13 @@ struct OutputDependencies {
 OutputDependencies complete_dependencies() {
     auto realtime_notifier =
         std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
     return OutputDependencies{
-        .notifier = std::make_shared<infra::DefaultNotifier>(),
+        .notifier = notifier,
         .realtime_notifier = realtime_notifier,
         .source = std::make_shared<FakeAudioFrameSource>(),
         .backend = std::make_shared<FakeAudioOutputBackend>(realtime_notifier),
-        .generation = std::make_shared<Generation>(),
+        .generation = std::make_shared<Generation>(notifier),
     };
 }
 
@@ -441,6 +442,29 @@ TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
 
     ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x07});
+}
+
+TEST(DefaultAudioOutputTest, PausedGenerationChangeDropsStaleFramesAndPrimesTheNewFrame) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    ASSERT_TRUE(output->pause_playback().has_value());
+
+    dependencies.source->push(make_frame_item(1, dependencies.generation->current()));
+    dependencies.generation->bump();
+    dependencies.source->push(make_frame_item(2, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    ASSERT_TRUE(eventually([&] { return backend->reset_calls.load() == 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    EXPECT_EQ(backend->submit_calls, 0);
+
+    ASSERT_TRUE(output->start_playback().has_value());
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x02});
 }
 
 TEST(DefaultAudioOutputTest, PropagatesBackendPauseFailureAndKeepsPlaybackEnabled) {

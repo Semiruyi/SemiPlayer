@@ -1,5 +1,6 @@
 #include "domain/worker/audio_decoder/default_audio_decoder.hpp"
 
+#include "domain/resource/generation/generation_events.hpp"
 #include "domain/worker/audio_decoder/audio_decoder_events.hpp"
 
 #include <cassert>
@@ -64,12 +65,17 @@ DefaultAudioDecoder::DefaultAudioDecoder(
             }
             cv_.notify_one();
         });
+    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
+        [this](const GenerationChanged&) {
+            cv_.notify_one();
+        });
 }
 
 DefaultAudioDecoder::~DefaultAudioDecoder() {
     shutdown_worker();
     audio_queue_not_empty_subscription_.reset();
     audio_frame_store_not_full_subscription_.reset();
+    generation_changed_subscription_.reset();
 }
 
 std::expected<AudioDecoderConfigureResult, AudioDecoderError> DefaultAudioDecoder::configure(
@@ -121,6 +127,7 @@ void DefaultAudioDecoder::worker_main() noexcept {
         }
         if (should_process_data_locked()) {
             lock.unlock();
+            adopt_generation_if_needed(generation_ ? generation_->current() : 0);
             if (try_push_pending_output() == PendingOutputPushResult::NoPending) {
                 read_next_input_to_pending();
             }
@@ -237,6 +244,10 @@ bool DefaultAudioDecoder::should_process_data_locked() const noexcept {
         return false;
     }
 
+    if (generation_ && active_generation_ != generation_->current()) {
+        return true;
+    }
+
     if (!pending_outputs_.empty()) {
         return output_not_full_hint_;
     }
@@ -247,6 +258,27 @@ bool DefaultAudioDecoder::should_process_data_locked() const noexcept {
     }
 
     return input_not_empty_hint_;
+}
+
+void DefaultAudioDecoder::adopt_generation_if_needed(Generation::Value current_generation) noexcept {
+    bool generation_changed = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+            return;
+        }
+
+        pending_outputs_.clear();
+        input_exhausted_ = false;
+        active_generation_ = current_generation;
+        input_not_empty_hint_ = true;
+        output_not_full_hint_ = false;
+        generation_changed = true;
+    }
+
+    if (generation_changed && backend_) {
+        backend_->reset();
+    }
 }
 
 DefaultAudioDecoder::PendingOutputPushResult
@@ -323,22 +355,13 @@ void DefaultAudioDecoder::read_next_input_to_pending() noexcept {
 
 void DefaultAudioDecoder::handle_input_item(AudioPacketQueueItem item) noexcept {
     const Generation::Value current_generation = generation_ ? generation_->current() : 0;
-    bool generation_changed = false;
+    adopt_generation_if_needed(current_generation);
+
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured) {
             return;
         }
-        if (current_generation != active_generation_) {
-            pending_outputs_.clear();
-            input_exhausted_ = false;
-            active_generation_ = current_generation;
-            generation_changed = true;
-        }
-    }
-
-    if (generation_changed && backend_) {
-        backend_->reset();
     }
 
     if (audio_packet_queue_item_generation(item) != current_generation) {

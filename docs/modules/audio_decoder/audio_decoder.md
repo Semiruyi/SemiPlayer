@@ -168,8 +168,10 @@ Constructed --configure()--> Configuring --> Configured ────────
 - `Configured`：解码器就绪，worker 消费输入并输出 PCM；输入空、输出满、暂停都只是
   背压等待，不是独立状态。
 - `Unconfiguring`：`unconfigure` 命令执行中（backend 释放解码上下文），同步等待完成。
-- `Failed`：worker 遇到 backend 或运行时错误；必须 `unconfigure` 后才能重新 `configure`。
-  `Failed` 不销毁 worker，也不会自动重试。
+- `Failed`：worker 遇到 backend 或运行时错误；这是 decoder 级致命状态，不因 seek 或
+  generation 变化而降级。decoder 不自行恢复，宿主必须执行完整的 `close -> open` 生命周期；
+  其中 `unconfigure` 和下一次 `configure` 分别由该生命周期编排。`Failed` 不销毁 worker，
+  也不会自动重试。
 
 worker 空闲时在条件变量上等待，不占用 CPU；线程销毁只发生在模块析构。不要为
 `configure/unconfigure` 之外的会话切换创建或销毁线程。
@@ -272,7 +274,9 @@ Generation。AudioDecoder 不提供 `seek()`；worker 在处理后续输入时�
 worker 观察到 generation 变化时：
 
 1. 丢弃队列中的旧世代包；下游消费者也会丢弃旧世代 `AudioFrame`。
-2. 清除 FFmpeg 解码器内部残留，且**不输出** flush 前的旧 PCM。
+2. 清除 FFmpeg 解码器内部残留。generation 变化可能与一次锁外的 `decode()`、`drain()` 或
+   输出提交并发；该次已开始操作产生的旧 PCM 允许短暂进入 `AudioFrameStore`，但每个下游
+   消费者必须在使用前按 generation 丢弃，因而不会与新世代数据混用。
 3. 只对新世代包解码。
 因此 ApiLayer 不需要向 AudioDecoder 转发 seek 命令，FFmpeg 上下文的 reset 始终由
 worker 独占执行。generation 负责隔离旧数据；目标 PTS 过滤若以后需要，应另行设计数据
@@ -297,8 +301,9 @@ struct AudioFrameEndOfInput {
 当前 generation 的结束项后 drain 自己的 `SwrContext`。它表示 Decoder 的输出已经结束，不等同于
 Demuxer 的输入结束；最终播放结束由输出链路确认。
 
-后端失败仍经 Notifier 发送 `AudioDecoderBackendFailure`；worker 回到可停止的等待状态，不在通知
-回调中执行恢复策略。
+后端失败仍经 Notifier 发送 `AudioDecoderBackendFailure`；不论错误对应的输入 generation 是否已
+过期，均视为 decoder 级致命错误，SessionState 进入 `Failed`。worker 回到可停止的等待状态，
+不在通知回调中执行恢复策略；恢复必须由宿主执行完整的 `close -> open` 生命周期。
 
 ## FFmpeg 后端封装
 
@@ -353,7 +358,8 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 ## 测试范围
 
 - `DefaultAudioDecoder`：configure/unconfigure 幂等、输入空等待、输出满背压、空闲等待时
-  unconfigure 立即返回、generation 丢弃与 backend reset、EOF drain 与错误事件。
+  unconfigure 立即返回、generation 丢弃与 backend reset、EOF drain、旧 generation PCM 由
+  下游丢弃，以及 backend 错误后等待宿主 `close -> open` 恢复。
 - `FfmpegAudioDecoderBackend`：真实媒体 fixture 的配置、解码 PCM 格式与 PTS、drain、
   无效 codec/extradata 的错误映射。
 - 端到端：Demuxer -> AudioPacketQueue -> AudioDecoder -> AudioFrameStore，验证包与帧的

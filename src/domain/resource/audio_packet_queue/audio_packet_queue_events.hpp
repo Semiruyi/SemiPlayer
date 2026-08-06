@@ -2,7 +2,7 @@
 
 namespace semi::domain {
 
-// Sent after an item is successfully pushed into the queue.
+// Sent when the queue changes from empty to non-empty.
 struct AudioQueueNotEmpty {};
 
 // Sent when the queue changes from full to non-full.

@@ -10,16 +10,20 @@ AudioPacketQueue::AudioPacketQueue(std::shared_ptr<infra::Notifier> notifier,
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 AudioPacketPushResult AudioPacketQueue::try_push(AudioPacketQueueItem&& item) {
+    bool should_notify_not_empty = false;
     {
         std::lock_guard lock(mutex_);
         if (packets_.size() >= capacity_) {
             return AudioPacketPushResult::Full;
         }
 
+        should_notify_not_empty = packets_.empty();
         packets_.push_back(std::move(item));
     }
 
-    notify_not_empty();
+    if (should_notify_not_empty) {
+        notify_not_empty();
+    }
     return AudioPacketPushResult::Accepted;
 }
 

@@ -1,5 +1,6 @@
 #include "domain/worker/audio_resampler/default_audio_resampler.hpp"
 
+#include "domain/resource/generation/generation_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler_events.hpp"
 
 #include <cassert>
@@ -64,12 +65,17 @@ DefaultAudioResampler::DefaultAudioResampler(
             }
             cv_.notify_one();
         });
+    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
+        [this](const GenerationChanged&) {
+            cv_.notify_one();
+        });
 }
 
 DefaultAudioResampler::~DefaultAudioResampler() {
     shutdown_worker();
     audio_frame_store_not_empty_subscription_.reset();
     audio_frame_store_not_full_subscription_.reset();
+    generation_changed_subscription_.reset();
 }
 
 std::expected<void, AudioResamplerError> DefaultAudioResampler::configure(
@@ -123,6 +129,7 @@ void DefaultAudioResampler::worker_main() noexcept {
         }
         if (should_process_data_locked()) {
             lock.unlock();
+            adopt_generation_if_needed(generation_ ? generation_->current() : 0);
             if (try_push_pending_output() == PendingOutputPushResult::NoPending) {
                 read_next_input_to_pending();
             }
@@ -234,6 +241,10 @@ bool DefaultAudioResampler::should_process_data_locked() const noexcept {
         return false;
     }
 
+    if (generation_ && active_generation_ != generation_->current()) {
+        return true;
+    }
+
     if (!pending_outputs_.empty()) {
         return output_not_full_hint_;
     }
@@ -244,6 +255,28 @@ bool DefaultAudioResampler::should_process_data_locked() const noexcept {
     }
 
     return input_not_empty_hint_;
+}
+
+void DefaultAudioResampler::adopt_generation_if_needed(
+    Generation::Value current_generation) noexcept {
+    bool generation_changed = false;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+            return;
+        }
+
+        pending_outputs_.clear();
+        input_exhausted_ = false;
+        active_generation_ = current_generation;
+        input_not_empty_hint_ = true;
+        output_not_full_hint_ = false;
+        generation_changed = true;
+    }
+
+    if (generation_changed && backend_) {
+        backend_->reset();
+    }
 }
 
 DefaultAudioResampler::PendingOutputPushResult
@@ -320,22 +353,13 @@ void DefaultAudioResampler::read_next_input_to_pending() noexcept {
 
 void DefaultAudioResampler::handle_input_item(AudioFrameStoreItem item) noexcept {
     const Generation::Value current_generation = generation_ ? generation_->current() : 0;
-    bool generation_changed = false;
+    adopt_generation_if_needed(current_generation);
+
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured) {
             return;
         }
-        if (current_generation != active_generation_) {
-            pending_outputs_.clear();
-            input_exhausted_ = false;
-            active_generation_ = current_generation;
-            generation_changed = true;
-        }
-    }
-
-    if (generation_changed && backend_) {
-        backend_->reset();
     }
 
     if (audio_frame_store_item_generation(item) != current_generation) {

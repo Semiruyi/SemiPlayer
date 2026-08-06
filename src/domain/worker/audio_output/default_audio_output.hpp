@@ -150,6 +150,7 @@ private:
     ProgressSink progress_sink_;
 
     std::shared_ptr<infra::Notifier::Subscription> audio_frame_store_not_empty_subscription_;
+    std::shared_ptr<infra::Notifier::Subscription> generation_changed_subscription_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -162,6 +163,7 @@ private:
     std::optional<AudioFrame> pending_frame_;
     Generation::Value active_generation_ = 0;
     bool playback_enabled_ = false;
+    bool discarding_stale_generation_ = false;
     bool input_not_empty_hint_ = false;
     std::atomic_bool backend_progress_hint_ = false;
 };

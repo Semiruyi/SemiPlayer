@@ -96,6 +96,7 @@ private:
     void shutdown_worker() noexcept;
 
     [[nodiscard]] bool should_process_data_locked() const noexcept;
+    void adopt_generation_if_needed(Generation::Value current_generation) noexcept;
     [[nodiscard]] PendingOutputPushResult try_push_pending_output() noexcept;
     void read_next_input_to_pending() noexcept;
     void handle_input_item(AudioPacketQueueItem item) noexcept;
@@ -118,6 +119,7 @@ private:
 
     std::shared_ptr<infra::Notifier::Subscription> audio_queue_not_empty_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> audio_frame_store_not_full_subscription_;
+    std::shared_ptr<infra::Notifier::Subscription> generation_changed_subscription_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

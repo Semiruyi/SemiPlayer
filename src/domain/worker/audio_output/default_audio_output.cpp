@@ -1,5 +1,6 @@
 #include "domain/worker/audio_output/default_audio_output.hpp"
 
+#include "domain/resource/generation/generation_events.hpp"
 #include "domain/worker/audio_output/audio_output_events.hpp"
 
 #include <cassert>
@@ -73,11 +74,16 @@ DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_f
             }
             cv_.notify_one();
         });
+    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
+        [this](const GenerationChanged&) {
+            cv_.notify_one();
+        });
 }
 
 DefaultAudioOutput::~DefaultAudioOutput() {
     shutdown_worker();
     audio_frame_store_not_empty_subscription_.reset();
+    generation_changed_subscription_.reset();
     if (backend_) {
         backend_->unconfigure();
     }
@@ -253,6 +259,7 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
     pending_frame_.reset();
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
+    discarding_stale_generation_ = false;
     input_not_empty_hint_ = true;
     backend_progress_hint_ = true;
     const bool succeeded = transition_session_locked(SessionEvent::ConfigureSucceeded);
@@ -283,6 +290,7 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
     active_generation_ = 0;
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
+    discarding_stale_generation_ = false;
     input_not_empty_hint_ = false;
     backend_progress_hint_ = false;
     const bool succeeded = transition_session_locked(SessionEvent::UnconfigureSucceeded);
@@ -357,6 +365,10 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
         return true;
     }
 
+    if (discarding_stale_generation_ && input_not_empty_hint_) {
+        return true;
+    }
+
     if (!playback_enabled_) {
         return false;
     }
@@ -390,6 +402,7 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
             active_generation_ = current_generation;
             input_not_empty_hint_ = true;
             backend_progress_hint_ = true;
+            discarding_stale_generation_ = true;
             generation_changed = true;
         }
     }
@@ -534,7 +547,8 @@ void DefaultAudioOutput::read_next_input_to_pending() noexcept {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured ||
             phase_ != PlaybackPhase::Running ||
-            pending_frame_.has_value()) {
+            pending_frame_.has_value() ||
+            (!playback_enabled_ && !discarding_stale_generation_)) {
             return;
         }
         if (!input_not_empty_hint_) {
@@ -566,6 +580,7 @@ void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
             pending_frame_.reset();
             phase_ = PlaybackPhase::Running;
             active_generation_ = current_generation;
+            discarding_stale_generation_ = true;
             generation_changed = true;
         }
     }
@@ -581,6 +596,11 @@ void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
             input_not_empty_hint_ = true;
         }
         return;
+    }
+
+    {
+        std::lock_guard lock(mutex_);
+        discarding_stale_generation_ = false;
     }
 
     if (auto* frame = std::get_if<AudioFrame>(&item)) {
@@ -631,6 +651,7 @@ void DefaultAudioOutput::handle_backend_failure(AudioOutputBackendError error) n
             pending_frame_.reset();
             input_not_empty_hint_ = false;
             backend_progress_hint_ = false;
+            discarding_stale_generation_ = false;
             const bool failed = transition_session_locked(SessionEvent::BackendFailed);
             assert(failed);
             should_notify = true;

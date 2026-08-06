@@ -35,7 +35,7 @@ bool IoCContainer::assemble() noexcept {
         auto notifier = std::make_shared<infra::DefaultNotifier>();
         auto audio_realtime_notifier =
             std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
-        auto generation = std::make_shared<domain::Generation>();
+        auto generation = std::make_shared<domain::Generation>(notifier);
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);

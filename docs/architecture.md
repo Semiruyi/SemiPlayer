@@ -180,12 +180,12 @@ ApiLayer 命令线程串行取 Command:
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
 | VideoSync | FinalFrameStore, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady 等）|
-| AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock |
-| Generation | 无 | — |
+| AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock；GenerationChanged 唤醒 stale 维护 |
+| Generation | Notifier | `bump()` 原子递增后发送一次 GenerationChanged；通知只是唤醒 hint，消费者仍比较 current() |
 | ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
 | IoCContainer | 无（持有所有人） | — |
 
-> **资源队列无 cv，全靠 Notifier**：资源队列（PacketQueue/FrameStore）状态变化（满→非满、空→非空）时，通过 Notifier 发送通知；注册该通知的工作模块（生产者/消费者）被回调唤醒自己的 cv。控制命令不经过 Notifier，而是由 ApiLayer 私有队列串行处理。
+> **资源队列无 cv，全靠 Notifier**：资源队列（PacketQueue/FrameStore）状态变化（满→非满、空→非空）时，通过 Notifier 发送边界通知；generation 改变时由 Generation 额外发送一次 GenerationChanged。通知只负责唤醒，worker 必须通过状态谓词确认实际条件。控制命令不经过 Notifier，而是由 ApiLayer 私有队列串行处理。
 
 ### 数据流
 
