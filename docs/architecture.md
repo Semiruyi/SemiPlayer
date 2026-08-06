@@ -106,7 +106,7 @@ ApiLayer 命令线程串行取 Command:
 | 模块 | 类型 | 职责 |
 |------|------|------|
 | **IoCContainer** | 装配器（无线程） | init 时按 DAG 拓扑顺序构造所有模块、构造时注入 `std::shared_ptr<依赖>`；shutdown 时逆序释放。装配完成后持有各模块 shared_ptr 供 ApiLayer 取用。纯装配，不提供运行时服务定位 |
-| **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/ClockJumped/Error 等），状态变化方发送通知。**取代资源队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担状态通知职责；有序输入结束通过队列数据项传递；控制命令仍由 ApiLayer 私有队列处理 |
+| **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/Error 等），状态变化方发送通知。**取代资源队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担状态通知职责；有序输入结束通过队列数据项传递；控制命令仍由 ApiLayer 私有队列处理 |
 | **Generation** | 共享原子标量（无线程） | IoC 创建一个 `std::shared_ptr<Generation>` 并注入各工作模块；新媒体会话和成功 seek 后推进，所有数据携带、所有消费者检查 |
 | **GpuDevice** | GPU 设备契约（无线程） | 抽象"一个 GPU 设备"的共性(设备 + 内存)，屏蔽 D3D11/Vulkan/OpenGL 等 API 差异。**纯契约不依赖 FFmpeg、不感知业务**。IoC 装配期按平台选实现(MVP: D3D11GpuDevice)。提供 api_type/device_handle/acquire_buffer 三个接口。copy-back 路下仅 FfmpegVideoDecoder 消费(硬解+download) |
 
@@ -119,11 +119,11 @@ ApiLayer 命令线程串行取 Command:
 | **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
 | **VideoFrameStore** | 视频帧（硬解 download 后的 CPU 原生格式 NV12/P010 + PTS + generation） | VideoDecoder | VideoRenderer |
 | **AudioFrameStore** | 音频 PCM / EndOfInput（有界 SPSC FIFO + mutex，每项带 generation，PCM 带 pts） | AudioDecoder | AudioResampler |
-| **AudioResampledStore** | 重采样后音频 PCM（无锁 SPSC ，miniaudio 目标格式，每块带 pts + generation） | AudioResampler | AudioSink |
+| **AudioFrameStore（playback）** | 重采样后音频 PCM（miniaudio 目标格式，每块带 pts + generation） | AudioResampler | AudioOutput |
 | **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，CPU buffer + PTS + generation） | VideoRenderer | Compositor |
 | **SubtitleFrameStore** | 渲染好的字幕位图（带 alpha 的 RGBA + 有效时间窗 + generation） | SubtitleRenderer | Compositor |
 | **FinalFrameStore** | 合成后的最终画面（宿主格式 + PTS + generation） | Compositor | VideoSync |
-| **AudioClock** | pts↔Instant 映射 | AudioSink（写） | VideoSync（读）；seek 时 ApiLayer 直接调 clock.jump_to 跳点 |
+| **PlaybackClock** | AudioOutput 内部的 pts↔Instant 映射 | AudioOutput（写） | VideoSync（只读）；不是独立 IoC 资源，seek 后由新音频消费事件重建 |
 
 ### ⚙️ 工作模块层（有线程，各自管状态）
 
@@ -132,13 +132,13 @@ ApiLayer 命令线程串行取 Command:
 | **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；新会话和**成功 seek 在此推进 generation**，再读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
 | **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解（GPU）→ download 到 CPU → 喂 VideoFrameStore（CPU 原生格式帧）。硬解用注入的 GpuDevice，FFmpeg hwcontext 由 decoder 自构 |
 | **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
-| **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 miniaudio 目标格式 → 喂 AudioResampledStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
+| **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 miniaudio 目标格式 → 喂 playback AudioFrameStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
 | **SubtitleDecoder** | 1 个 loop 线程 | 取字幕 packet → 解析成字幕事件（SRT/ASS/PGS…）→ 维护当前 PTS 该显示的事件。**只解析+时间轴匹配，不出像素** |
 | **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取 CPU 原生格式帧（NV12/P010）→ `sws_scale` 转 RGBA（CPU）→ 喂 VideoRenderedStore。**纯 CPU 转换，不碰 GPU、不碰字幕** |
 | **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
 | **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
-| **VideoSync** | 1 个 loop 线程 | 读 AudioClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付 Flutter。**回归纯粹末端消费者，不再驱动渲染/合成** |
-| **AudioSink** | **复用 miniaudio 实时线程** | 取 AudioResampledStore（丢弃旧 generation）→ 送声卡 → 写 AudioClock |
+| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付 Flutter。**回归纯粹末端消费者，不再驱动渲染/合成** |
+| **AudioOutput** | 1 个 worker + miniaudio 实时回调 | 取重采样 PCM（丢弃旧 generation）→ 送声卡；内部维护 PlaybackClock |
 
 ### 🚪 接口层
 
@@ -155,12 +155,12 @@ ApiLayer 命令线程串行取 Command:
 ```
 第0层(无依赖, 先构造): Generation, Notifier, GpuDevice,
         VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue,
-        VideoFrameStore, AudioFrameStore, AudioResampledStore,
-        VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, AudioClock
+        VideoFrameStore, AudioFrameStore（decoded / playback 两个实例）, 
+        VideoRenderedStore, SubtitleFrameStore, FinalFrameStore
 第1层: Demuxer, VideoDecoder, AudioDecoder, AudioResampler, SubtitleDecoder   (注入第0层)
 第2层: VideoRenderer, SubtitleRenderer   (注入第1层产物 Store + 第0层下游 Store)
 第3层: Compositor   (注入 VideoRenderedStore + SubtitleFrameStore + FinalFrameStore)
-第4层: VideoSync, AudioSink   (注入第0层; VideoSync 消费 FinalFrameStore, AudioSink 消费 AudioResampledStore)
+第4层: VideoSync, AudioOutput   (VideoSync 注入只读 PlaybackClock；AudioOutput 消费重采样 PCM)
 接口层: ApiLayer（注入第1-4层模块，内部拥有命令队列和唯一命令线程）
 ```
 
@@ -174,15 +174,14 @@ ApiLayer 命令线程串行取 Command:
 | Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程同步调 open()/seek()/close()；open 成功后自动生产，close 终止当前媒体会话，未入队 pending item 可丢弃，Failed 必须 close/open 恢复；阻塞时在自己的 cv 上等，Notifier 回调唤醒 QueueNotFull |
 | VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；查 generation 自 flush；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
 | AudioDecoder | AudioPacketSource, AudioFrameSink, Generation, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；configure 后自动消费，背压自然等待；generation 变化时自 flush；Notifier 唤醒（QueueNotEmpty/StoreNotFull）|
-| AudioResampler | AudioFrameStore, AudioResampledStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；取 AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 AudioResampledStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|
+| AudioResampler | AudioFrameStore（decoded / playback）, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；取 decoded AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 playback AudioFrameStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|
 | SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；Notifier 唤醒（QueueNotEmpty 等）|
 | VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
-| VideoSync | FinalFrameStore, AudioClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady/ClockJumped 等）|
-| AudioSink | AudioResampledStore, AudioClock, Generation, miniaudio | ApiLayer 命令线程调 setup()/start_playback()/pause_playback()/set_volume()；复用 miniaudio 实时线程（回调驱动，不需 Notifier）|
+| VideoSync | FinalFrameStore, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady 等）|
+| AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock |
 | Generation | 无 | — |
-| AudioClock | 无（被 AudioSink 写 / VideoSync 读 / ApiLayer 控制） | ApiLayer 命令线程调 reset()/freeze()/unfreeze()/jump_to();AudioSink 回调调 calibrate();读端无锁 current_pts() |
 | ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
 | IoCContainer | 无（持有所有人） | — |
 
@@ -207,14 +206,14 @@ ApiLayer 命令线程串行取 Command:
                                                                                     ↓
                                                                             FinalFrameStore(gen)
                                                                                     ↓
-                                                                            [VideoSync](读AudioClock选帧)→ 纹理
+                                                                            [VideoSync](读PlaybackClock选帧)→ 纹理
 
-            └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioResampledStore(gen,miniaudio输出格式) →[AudioSink]→ 声卡
+            └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioFrameStore(gen,输出格式) →[AudioOutput]→ 声卡
        ↑new open / successful seek: gen+1                                       │
        │                                                                        ▼
-    Generation                                                            AudioClock ←── seek: ApiLayer 调 jump_to
+    Generation                                                            AudioOutput 内部 PlaybackClock
                                                                                   ▲
-                                                                        VideoSync 读
+                                                                        VideoSync 只读
 ```
 
 > **字幕位图按 PTS 被动拉取**：Compositor 合成每帧时，按当前视频帧 PTS 从 SubtitleFrameStore 取有效时间窗内的字幕位图。字幕变化频率远低于视频帧率，SubtitleRenderer 仅在事件变化时渲染一次并缓存。
@@ -246,9 +245,9 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 
 4. **依赖注入（DI）**：模块构造期由 IoCContainer 注入 `std::shared_ptr<依赖>`，依赖关系写在构造函数签名里显式可见、可单测 mock。依赖图是 DAG 无真环，全部 `std::shared_ptr` 注入，无 `std::weak_ptr`、无运行时服务定位。
 
-5. **seek 无专门协调者**：世代号消除假依赖后，seek 只剩 Demuxer 内部两三步 + AudioClock 跳 PTS，收进 Demuxer 自洽完成。无 SeekCoordinator，无握手死锁。
+5. **seek 无专门协调者**：世代号消除假依赖后，seek 不直接操作播放时钟；AudioOutput 在观察到新 generation 后预读首块 PCM 建立暂停态 Prepared 锚点，实际消费时再建立运行时 PlaybackClock。无 SeekCoordinator，无握手死锁。
 
-6. **AudioSink 特殊性**：复用 miniaudio 实时线程（不自建），遵守实时约束——零阻塞、try 取、空则静音。
+6. **AudioOutput 特殊性**：拥有 worker，并复用 miniaudio 实时回调；回调遵守实时约束——零阻塞、try 取、空则静音。
 
 ---
 

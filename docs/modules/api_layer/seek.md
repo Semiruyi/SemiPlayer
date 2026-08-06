@@ -2,7 +2,7 @@
 
 > 属于 ApiLayer 模块。描述 `seek` 命令在 ApiLoop 中如何编排执行。
 > 总体原则（世代号机制）见 `docs/architecture.md`。
-> 各模块内部 seek 响应细节见各自模块文档（demuxer.md / video_decoder.md / audio_resampler.md / audio_clock.md，待设计）。
+> 各模块内部 seek 响应细节见各自模块文档（demuxer.md / video_decoder.md / audio_resampler.md / audio_output.md，待设计）。
 
 ## Context
 
@@ -21,7 +21,6 @@ void handle_seek(pos):
     demuxer.seek(pos)            // ① 解封装定位 + 推进世代号
     video_decoder.seek(pos)      // ② 视频解码器 seek
     audio_resampler.seek(pos)    // ③ 音频重采样器 seek (flush 内部残留)
-    audio_clock.jump_to(pos)     // ④ 时钟跳到目标 PTS
     handle.resolve(Ok(()))
 ```
 
@@ -72,7 +71,6 @@ seek 要解决三个**不同层面**的正确性问题，分属不同机制。�
 | ① | `demuxer.seek(pos)` | 停旧读 + `av_seek_frame` 定位 + `generation+1` + 读新数据 | demuxer.md（待设计）|
 | ② | `video_decoder.seek(pos)` | flush 内部状态 + 记 target_pts + 后续丢弃 < target 的帧 | video_decoder.md（待设计）|
 | ③ | `audio_resampler.seek(pos)` | flush 重采样器内部残留样本（防跨 seek 串音）+ gen 丢旧 | audio_resampler.md（待设计）|
-| ④ | `audio_clock.jump_to(pos)` | 时钟跳到目标 PTS（连续标量，不能靠丢弃识别） | audio_clock.md（待设计）|
 
 ---
 
@@ -90,8 +88,11 @@ flush 只清内部参考帧（第①层）。视频还需 PTS 过滤丢目标前
 video decoder 读 `(generation, target_pts)` 时不能撕裂（否则读到新 generation 配旧 target）。
 内部用原子整体快照保证一致。→ 内部实现细节，归 video_decoder.md。
 
-### 时钟单独 jump_to
-时钟是连续标量，世代号的"丢弃识别"对它无效，必须显式跳到目标 PTS。
+### 播放时钟不由 ApiLayer 跳点
+
+`AudioOutput` 拥有内部 `AudioPlaybackClockState`，ApiLayer 不直接设置 PTS。seek 成功后，
+AudioOutput 观察新 generation、reset backend，并预读保留首块新 PCM。在暂停态，这块 PCM 的
+PTS 作为 Prepared 锚点立即由只读 `PlaybackClock` 提供；运行态仍等待实际消费事件建立时钟。
 
 ### 不需要 SeekCoordinator
 线性 4 步顺序调用，无分阶段等待、无死锁。简单调用不该包协调器。

@@ -9,7 +9,7 @@
 |------|------|
 | 层 | 基础设施层 |
 | 是否模块 | ✅ 是（基础设施模块）|
-| **业务语义** | ❌ **无**——不认识 VideoQueueNotFull / DemuxerReadError / ClockJumped 是什么意思 |
+| **业务语义** | ❌ **无**——不认识 VideoQueueNotFull / DemuxerReadError 是什么意思 |
 | 线程 | 无（被各线程调用）|
 | 职责 | 提供通知中心机制：按**通知类型**注册回调、按**通知类型**分发通知 |
 | 实例 | 一个全局实例，`std::shared_ptr<Notifier>` 注入给所有需要发/收通知的模块 |
@@ -52,8 +52,8 @@ Notifier:
 VideoPacketQueue (第0层) 定义 VideoQueueNotEmpty / VideoQueueNotFull
 VideoDecoder (第1层): 依赖 VideoPacketQueue (消费包 + 引用通知类型注册)  ← 顺向 第1→第0 ✓
 
-AudioClock (第0层) 定义 ClockJumped
-VideoSync (第1层): 依赖 AudioClock (读时钟 + 引用 ClockJumped 注册)  ← 顺向 第1→第0 ✓
+AudioOutput 导出只读 PlaybackClock
+VideoSync (第1层): 依赖 PlaybackClock（读时钟）；seek 后由新的音频消费事件自然重建，无额外时钟跳点通知
 
 Demuxer (第1层) 定义 DemuxerReadError
 ApiLayer (第3层): 依赖 Demuxer (调方法 + 引用 DemuxerReadError 注册)  ← 顺向 第3→第1 ✓
@@ -79,9 +79,6 @@ struct AudioQueueNotFull {};
 // 在 Demuxer 模块里：输入结束走队列中的有序结束项，不是 Notifier 通知
 struct DemuxerReadError { std::string msg; };  // ★ 通知可携带数据
 
-// 在 AudioClock 模块里
-struct ClockJumped { int64_t pts; };   // ★ 通知可携带数据
-
 // 在 VideoFrameStore 模块里
 struct VideoFrameReady {};
 ```
@@ -96,15 +93,14 @@ struct VideoFrameReady {};
 
 ```cpp
 // 通知携带数据
-struct ClockJumped { int64_t pts; };
 struct DemuxerReadError { std::string msg; };
 
 // 回调能读数据
-notifier.register<ClockJumped>([](const ClockJumped& event) {
-    target_pts.store(event.pts);          // 读 event.pts
+notifier.register<DemuxerReadError>([](const DemuxerReadError& event) {
+    error_seen.store(!event.msg.empty());  // 读 event.msg
     cv.notify_one();                      // 轻量: 设标志 + notify 自己的 cv
 });
-notifier.send(ClockJumped{ 1000 });
+notifier.send(DemuxerReadError{"read failed"});
 ```
 
 通知是 struct，可携带任意数据字段（pts、错误信息、帧信息等），回调通过 `&T` 读取。
@@ -145,7 +141,7 @@ public:
 ## 依赖关系
 
 - **Notifier 依赖谁**：无（纯基础设施，第 0 层）。
-- **谁依赖 Notifier**：所有需要发/收通知的业务模块（VideoPacketQueue / AudioPacketQueue / VideoFrameStore / Demuxer / AudioClock / VideoDecoder / AudioDecoder / VideoSync / ApiLayer ...）。
+- **谁依赖 Notifier**：所有需要发/收通知的业务模块（VideoPacketQueue / AudioPacketQueue / VideoFrameStore / Demuxer / AudioOutput / VideoDecoder / AudioDecoder / VideoSync / ApiLayer ...）。
 - Notifier 是 DAG 里被广泛依赖的第 0 层节点。
 
 ---
@@ -201,6 +197,6 @@ events 模块 (中立数据定义处, 大家都依赖):
 
 ## 边界（本文档不涉及）
 
-- ❌ 各业务通知类型的具体定义（VideoQueueNotEmpty / DemuxerReadError / ClockJumped 等）→ 各业务模块文档
+- ❌ 各业务通知类型的具体定义（VideoQueueNotEmpty / DemuxerReadError 等）→ 各业务模块文档
 - ❌ 工作模块如何用 Notifier 唤醒自己的 cv → 各工作模块文档（如 demuxer.md）
 - ❌ std::type_index 异构存储的具体实现细节 → 实现阶段

@@ -39,7 +39,7 @@ miniaudio callback
   -> AudioFramesConsumed
   -> AudioOutputRealTimeNotifier
   -> DefaultAudioOutput（唤醒填充工作线程）
-  -> AudioClock（预留第二个 sink）
+  -> AudioOutput 内部 AudioPlaybackClockState（预留第二个 sink）
 ```
 
 只有真正从 PCM ring 读到的媒体帧会产生 `AudioFramesConsumed`；补出的静音不会推进时钟。

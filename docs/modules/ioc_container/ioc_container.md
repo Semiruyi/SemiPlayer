@@ -92,7 +92,6 @@ class IoCContainer {
     std::shared_ptr<CommandQueue> command_queue;
     std::shared_ptr<VideoPacketQueue> video_packet_queue;
     // ... 各 PacketQueue / Store
-    std::shared_ptr<AudioClock> audio_clock;
     std::shared_ptr<Demuxer> demuxer;
     std::shared_ptr<VideoDecoder> video_decoder;    // VideoDecoder 抽象基类, 实际是 FfmpegVideoDecoder
     // ... 各工作模块
@@ -109,7 +108,7 @@ public:
         std::shared_ptr<GpuDevice> gpu_device = std::make_shared<D3D11GpuDevice>(); // 按平台 #ifdef 选派生类
         auto command_queue = std::make_shared<CommandQueue>();
         auto video_packet_queue = std::make_shared<VideoPacketQueue>();
-        // ... 各 PacketQueue / Store / AudioClock
+        // ... 各 PacketQueue / Store
 
         // 第1层:注入第0层
         auto demuxer = std::make_shared<Demuxer>(
@@ -141,7 +140,7 @@ public:
 
         // 第4层 -> 第0层 逆序
         video_sync.reset();
-        audio_sink.reset();
+        audio_output.reset();
         compositor.reset();
         video_renderer.reset();
         subtitle_renderer.reset();
@@ -150,8 +149,6 @@ public:
         audio_decoder.reset();
         audio_resampler.reset();
         subtitle_decoder.reset();
-        // 第0层最后
-        audio_clock.reset();
         // ... 各 Store / PacketQueue
         gpu_device.reset();
         command_queue.reset();
@@ -169,12 +166,12 @@ public:
 ```
 第0层: Generation, CommandQueue, Notifier, GpuDevice,
        VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue,
-       VideoFrameStore, AudioFrameStore, AudioResampledStore,
-       VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, AudioClock
+       VideoFrameStore, AudioFrameStore（decoded / playback 两个实例）, 
+       VideoRenderedStore, SubtitleFrameStore, FinalFrameStore
 第1层: Demuxer, VideoDecoder, AudioDecoder, AudioResampler, SubtitleDecoder
 第2层: VideoRenderer, SubtitleRenderer
 第3层: Compositor
-第4层: VideoSync, AudioSink
+第4层: VideoSync, AudioOutput
 第5层: ApiLoop
 接口层: ApiLayer(持有 ApiLoop + 各工作模块 shared_ptr)
 ```
@@ -261,7 +258,7 @@ GpuDevice 的具体实现按平台 #ifdef platform macro 选(Windows → D3D11Gp
 - ❌ GpuDevice 懒加载的具体实现 → GpuDevice 文档 / 实现阶段
 - ❌ IoC 是否需要暴露模块访问器(getter)→ 本设计选"装配后分发自持,运行时不访问 IoC",不需要 getter
         video_sync.reset();
-        audio_sink.reset();
+        audio_output.reset();
         compositor.reset();
         video_renderer.reset();
         subtitle_renderer.reset();
@@ -270,8 +267,6 @@ GpuDevice 的具体实现按平台 #ifdef platform macro 选(Windows → D3D11Gp
         audio_decoder.reset();
         audio_resampler.reset();
         subtitle_decoder.reset();
-        // 第0层最后
-        audio_clock.reset();
         // ... 各 Store / PacketQueue
         gpu_device.reset();
         command_queue.reset();

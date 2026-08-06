@@ -21,7 +21,7 @@ AudioPacketQueue(gen) -> [AudioDecoder] -> AudioFrameStore(gen, raw PCM / EndOfI
 ```
 
 AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备支持的采样率、声道数和
-样本格式是 AudioSink 与 AudioResampler 的职责，不能反向进入 Decoder。
+样本格式是 AudioOutput 与 AudioResampler 的职责，不能反向进入 Decoder。
 
 ## 依赖关系
 
@@ -48,7 +48,7 @@ AudioDecoder 只认识“编码配置、压缩包、原始 PCM”。输出设备
 
 - 不依赖 Demuxer 实例：只消费其写入的队列。输入结束通过队列中的
   `AudioPacketEndOfInput` 表达，不订阅 Demuxer 的运行时事件。
-- 不依赖 AudioSink、miniaudio 或 AudioClock。
+- 不依赖 AudioOutput、miniaudio 或 PlaybackClock。
 - 不依赖 AudioResampler：Decoder 不知道输出设备目标格式。
 
 ## PCM 数据契约
@@ -114,7 +114,7 @@ public:
 | `unconfigure` | `close` 的资源释放阶段 | 投递 UnconfigureCommand 同步等待完成；结束当前媒体会话，释放解码器上下文，回到 Constructed；`noexcept`，重复调用幂等 |
 
 没有 `start()`/`stop()`，也没有 `pause()`。worker 空闲时在条件变量上等待，
-成本可忽略；暂停由 AudioSink 停止消费触发下游 Store 满，再自然背压至
+成本可忽略；暂停由 AudioOutput 停止消费触发下游 Store 满，再自然背压至
 AudioDecoder；恢复播放后，`AudioFrameStore` 变为非满并唤醒 Decoder。Decoder 的线程
 不因 pause、会话切换而销毁或重建。
 
@@ -362,6 +362,6 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 ## 边界
 
 - `AudioFrameStore` 当前采用有界 FIFO + `mutex`；其具体资源实现独立于 AudioDecoder。
-- 不实现 `swr_convert`、输出格式协商或 miniaudio；归 AudioResampler / AudioSink。
+- 不实现 `swr_convert`、输出格式协商或 miniaudio；归 AudioResampler / AudioOutput。
 - 不实现设备音量、音频时钟或 Flutter 回调。
 - 不在本阶段扩展真实 seek 的 DemuxerBackend 契约；Decoder 通过 generation 变化自动响应。

@@ -62,7 +62,7 @@ void handle_pause():
 
 ### 为什么 pause 不停 demuxer/decoder
 
-下游（AudioSink/VideoSync）停消费后，PacketQueue/FrameStore 会填满，demuxer/decoder 在 push 时阻塞在条件变量上——**背压自然停上游**。这正符合"缓冲满自然停"的设计哲学。
+下游（AudioOutput/VideoSync）停消费后，PacketQueue/FrameStore 会填满，demuxer/decoder 在 push 时阻塞在条件变量上——**背压自然停上游**。这正符合"缓冲满自然停"的设计哲学。
 
 好处：resume 时管道是热的，队列里已有缓冲数据，瞬间恢复，无冷启动延迟。
 
@@ -95,8 +95,8 @@ void handle_pause():
 pause 不主动停 demuxer/decoder 线程。下游停消费→队列满→上游阻塞。resume 即热。符合"缓冲满自然停"哲学。
 
 ### 时钟 freeze/unfreeze 的偏移修正
-当前阶段还没有接入 AudioClock；pause/play 已控制 AudioOutput backend 和消费。后续接入 AudioClock 时，
-pause 需要冻结时钟，resume 需要修正暂停偏移，保证 PTS 连续不跳。
+播放时钟是 AudioOutput 的内部状态：`pause_playback()` 在设备停止成功后冻结它，
+`start_playback()` 在恢复设备前重建插值基准。ApiLayer 不直接调用时钟。
 
 ### Ended 态暂不直接 play
 当前 Demuxer 在 `Exhausted` 或 `Failed` 后不能继续生产；播放到结尾或发生错误后，

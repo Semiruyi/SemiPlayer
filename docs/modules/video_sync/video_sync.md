@@ -1,11 +1,11 @@
 # VideoSync 模块设计
 
-> 末端同步模块。音视频同步的最后一环——读 AudioClock 的当前 pts,从 FinalFrameStore 选该显示的帧,交付 Flutter。
+> 末端同步模块。音视频同步的最后一环——读 AudioOutput 导出的只读 PlaybackClock，从 FinalFrameStore 选该显示的帧，交付 Flutter。
 > 对外接口由 ApiLayer 调用(start/pause/stop)。本文件描述其内部设计,核心是 A/V sync 选帧算法。
 
 ## Context
 
-播放器的视频画面要和音频对齐——音频是主时钟(声卡恒定采样率,最稳),视频要"追"音频。VideoSync 就是这个"追"的执行者:它读 AudioClock 的 `current_pts()`,从 FinalFrameStore 里选 PTS 最接近 current 的帧,决定何时交付、何时丢、何时等。
+播放器的视频画面要和音频对齐——音频是主时钟(声卡恒定采样率,最稳),视频要"追"音频。VideoSync 就是这个"追"的执行者:它读 AudioOutput 导出的 `PlaybackClock::current_pts()`,从 FinalFrameStore 里选 PTS 最接近 current 的帧,决定何时交付、何时丢、何时等。
 
 这是 A/V sync 的核心,也是音视频面试的高频考点。VideoSync 的设计本质是"视频帧 PTS 与音频时钟 current_pts 的差值分类决策"。
 
@@ -16,13 +16,13 @@
 ```
 FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
                                          ↑
-                                  AudioClock.current_pts()
+                              PlaybackClock.current_pts()
                                          ↑
                                   ApiLoop 控制: start/pause/stop
 ```
 
 - **工作模块层,1 个 loop 线程**(方案 Y 常驻)。
-- **末端消费者**:读 FinalFrameStore + AudioClock,产出交付 Flutter。不喂任何下游 Store。
+- **末端消费者**:读 FinalFrameStore + PlaybackClock,产出交付 Flutter。不喂任何下游 Store。
 - **copy-back 路下**:FinalFrameStore 是 CPU RGBA buffer,VideoSync 选完帧内部上传成 Flutter texture(这一跳很薄,归 VideoSync 内部,不单独模块)。
 - **seek 零改动**:无 seek() 方法,靠世代号丢弃 FinalFrameStore 旧帧 + 自然保持上一帧自洽(见设计决策)。
 
@@ -37,7 +37,7 @@ FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
 
 **不做**:
 - ❌ 不解码/转换/合成(上游模块的事)。
-- ❌ 不驱动音频(AudioClock 由 AudioSink 驱动,VideoSync 只读)。
+- ❌ 不驱动音频(PlaybackClock 由 AudioOutput 驱动,VideoSync 只读)。
 - ❌ 不决定播什么(只选"现在该显示哪帧",不改变帧内容)。
 - ❌ 不做 configure(不需媒体格式配置,读的接口固定)。
 
@@ -45,7 +45,7 @@ FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
 
 ## 核心算法:四区间选帧决策 + 无数据死等
 
-视频帧 PTS 与 AudioClock `current_pts()` 的差值 `diff = frame.pts - current_pts`。有帧时分四种情况,无帧时单独处理:
+视频帧 PTS 与 PlaybackClock `current_pts()` 的差值 `diff = frame.pts - current_pts`。有帧时分四种情况,无帧时单独处理:
 
 ```
    帧 PTS 远 < current    帧 PTS 略 < current    帧 PTS ≥ current
@@ -112,7 +112,7 @@ VideoSync loop:
             wait(None)                             # 无数据死等通知(不加兜底超时,掩盖bug)
             continue
         
-        diff = final.pts - audio_clock.current_pts()
+        diff = final.pts - playback_clock.current_pts()
         if diff < -T落后 (落后太多):
             FinalFrameStore.pop()                  # 丢帧
             continue                               # 取下一帧看
@@ -149,8 +149,8 @@ Constructed ─start()─▶ Running ⇄ Paused
 
 **Running**:选帧循环活跃(上面的 loop)。被 FinalReady/sleep 超时/控制信号唤醒,按四区间 + 无数据决策。
 
-**Paused**:pause() 设 state=Paused + notify cv。线程醒来发现 Paused,**不选新帧,保持当前纹理**(Flutter 画面停住)。wait 在 cv 直到 play() 的 start() 唤醒。
-- 关键:Paused 时 AudioClock 也冻结(current_pts 不变),即使醒了选帧 diff 也≈0 本就不会换——但显式 Paused 更清晰,避免无意义循环。
+**Paused**:普通 pause 时线程不选新帧，保持当前纹理。暂停 seek 后，新的 FinalFrameStore 数据到达会唤醒线程；若 PlaybackClock 已处于 Prepared 并给出新 generation 的冻结 PTS，VideoSync 选择并交付一次对应的新帧，再继续暂停。
+- 关键:普通 Paused 时 PlaybackClock 冻结(current_pts 不变)；只有 seek 后的 Prepared PTS 允许一次换帧。显式 Paused 仍避免无意义循环。
 
 **Running ⇄ Paused 的纹理保留**:pause 时纹理停在当前帧,resume 从当前帧继续。VideoSync 不主动清纹理,pause/resume 期间 Flutter 持续显示最后一帧(play.md"pause 停在当前帧,纹理保留"的落地)。
 
@@ -174,7 +174,7 @@ Constructed ─start()─▶ Running ⇄ Paused
 | `stop()` | close 命令 | state=Stopping + 唤醒,等线程退出(join) |
 
 **无 seek()**——靠世代号丢弃 FinalFrameStore 旧帧 + 自然保持上一帧自洽(见设计决策)。
-**无 configure**——不需媒体格式配置,读的 AudioClock/FinalFrameStore 接口固定。
+**无 configure**——不需媒体格式配置,读的 PlaybackClock/FinalFrameStore 接口固定。
 **无对外选帧方法**——选帧是内部 loop 的事,外部只控制生命周期。
 
 > 这是所有工作模块里接口最少的之一(只 start/pause/stop),因为 VideoSync 是末端消费者 + seek 零改动。
@@ -188,7 +188,7 @@ Constructed ─start()─▶ Running ⇄ Paused
 | 依赖 | 用途 |
 |------|------|
 | `FinalFrameStore` | 取最新帧(选帧输入) |
-| `AudioClock` | 读 current_pts(同步基准) |
+| `PlaybackClock` | 读 current_pts(同步基准，由 AudioOutput 导出) |
 | `Generation` | 丢弃旧世代帧(取 FinalFrameStore 帧时查 generation) |
 | `Notifier` | 注册 FinalReady 通知(帧就绪被唤醒)+ 发送 VideoSyncStalled 通知 |
 
@@ -221,14 +221,14 @@ VideoSync 不用"每 16ms 醒一次查"的定时器(大多数时候帧没变白�
 ### seek 不清除上一帧缓存(体验 + 正确性)
 seek 后 VideoSync 保留 seek 前的最后一帧。新数据没到时,选不到新帧 → 无数据死等(保持上一帧)。新世代第一帧到达后才切换。
 - **体验好**:seek 时画面停在最后一帧,等新数据无缝切换,不黑屏。
-- **正确**:保持旧帧不是"播错位置"——AudioClock 已 jump_to(pos),VideoSync 醒来算 diff 发现"Store 无新帧"(走无数据死等)或"新帧 PTS 远 > current"(走超前 sleep diff 等待),画面不动。等新帧到(PTS≈pos)切换。世代号管 Store 里的旧帧(丢弃),VideoSync 内部的上一帧不受世代号管(已显示过的),自然保持。
+- **正确**:seek 后首块音频 PCM 尚未预读时，PlaybackClock 返回 `nullopt`，VideoSync 保持旧帧；暂停 seek 的 Prepared 锚点出现后，VideoSync 可选一次新 generation 的目标帧；运行态仍等待实际消费建立时钟后再持续选帧。世代号管 Store 里的旧帧(丢弃)，VideoSync 内部的上一帧不受世代号管(已显示过的)，自然保持。
 - **唯一边界**:seek 跨度大(如 10s→100s)时,保持的是 10s 画面直到 100s 新帧到(<200ms),用户感知"短暂停顿后跳到新位置",可接受,比黑屏好。
 
 ### seek 零改动(无 seek() 方法)
 基于上一条,VideoSync 靠世代号 + 自然保持自洽 seek,不需要显式 seek() 方法。这是 architecture.md"seek 逻辑零改动"原则向工作模块的延伸——只要工作模块内部状态能靠"保持/丢弃"自洽,就不需要显式 seek。对比 decoder 需要 seek()(要 flush 内部参考帧),VideoSync 更简单。接口只有 start/pause/stop。
 
 ### 无 configure
-VideoSync 读 AudioClock + FinalFrameStore,接口固定,不需按媒体格式配置。和 decoder(configure 建解码器)/sink(setup 建 miniaudio 流)区别清晰——末端消费者不需要按媒体特性初始化。
+VideoSync 读 PlaybackClock + FinalFrameStore,接口固定,不需按媒体格式配置。和 decoder(configure 建解码器)/AudioOutput(configure 建设备流)区别清晰——末端消费者不需要按媒体特性初始化。
 
 ---
 
@@ -281,7 +281,7 @@ VideoSync loop:
             wait(None)                             # 无数据死等通知(不加兜底超时,掩盖bug)
             continue
         
-        diff = final.pts - audio_clock.current_pts()
+        diff = final.pts - playback_clock.current_pts()
         if diff < -T落后 (落后太多):
             FinalFrameStore.pop()                  # 丢帧
             continue                               # 取下一帧看

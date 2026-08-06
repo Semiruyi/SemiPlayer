@@ -200,7 +200,7 @@ VideoDecoder 解完硬解帧立刻 download,喂 VideoFrameStore 的是 CPU 帧�
 
 ## 阶段二:GPU 直通升级路径(本阶段不实现)
 
-> **为什么分两阶段**:MVP(阶段一)走 copy-back 快速验证整条管道能跑、能出画面,把可跑成果兜底;阶段二再升级零拷贝 GPU 直通,消除 download 的 GPU→CPU 拷贝。分阶段的理由:① Flutter CPU buffer 接入最通用、跨平台最简单,先保证能跑;② download 开销可接受(1080p 1.3-4ms/帧,硬解收益仍保留一个数量级);③ 直通的复杂度集中在中后段(纹理共享/shader),前置依赖(硬解/AudioClock)和 copy-back 共用,先跑通再升级风险低;④ 做完 copy-back 对"为什么 download"有真实体感,再做直通时设计决策更扎实。
+> **为什么分两阶段**:MVP(阶段一)走 copy-back 快速验证整条管道能跑、能出画面,把可跑成果兜底;阶段二再升级零拷贝 GPU 直通,消除 download 的 GPU→CPU 拷贝。分阶段的理由:① Flutter CPU buffer 接入最通用、跨平台最简单,先保证能跑;② download 开销可接受(1080p 1.3-4ms/帧,硬解收益仍保留一个数量级);③ 直通的复杂度集中在中后段(纹理共享/shader),前置依赖(硬解/PlaybackClock)和 copy-back 共用,先跑通再升级风险低;④ 做完 copy-back 对"为什么 download"有真实体感,再做直通时设计决策更扎实。
 
 ### 直通的完整数据流(阶段二目标)
 

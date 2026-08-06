@@ -1,6 +1,6 @@
 # AudioResampler 模块设计
 
-> 音频重采样模块。位于 AudioDecoder 与 AudioSink/AudioRenderer 之间，把解码得到的原始 PCM
+> 音频重采样模块。位于 AudioDecoder 与 AudioOutput 之间，把解码得到的原始 PCM
 > 转换成播放输出链路希望消费的 PCM 格式。本文描述领域层 worker、契约边界和后端抽象，不涉及
 > FFmpeg `SwrContext` 或 miniaudio 的具体调用细节。
 
@@ -11,10 +11,10 @@
 ## Context
 
 AudioDecoder 只负责把压缩音频包解码成原始 PCM。这个 PCM 的格式由媒体流本身决定，例如采样率、
-声道数、sample format、planar/packed 表示。播放输出侧能稳定消费的格式则由 AudioSink/设备能力
+声道数、sample format、planar/packed 表示。播放输出侧能稳定消费的格式则由 AudioOutput/设备能力
 决定，例如 `48000Hz / f32 / stereo / packed`。
 
-两侧格式不一定一致，所以不能要求 AudioSink 直接支持解码格式，也不应该把输出设备知识塞进
+两侧格式不一定一致，所以不能要求 AudioOutput 直接支持解码格式，也不应该把输出设备知识塞进
 AudioDecoder。AudioResampler 填补这段 gap：
 
 ```text
@@ -23,13 +23,13 @@ AudioPacketQueue(gen)
   -> AudioFrameStore(gen, decoded PCM / EndOfInput)
   -> AudioResampler
   -> AudioFrameStore(gen, playback PCM / EndOfInput)
-  -> AudioSink / AudioRenderer
+  -> AudioOutput
 ```
 
 代码层面可以继续复用 `AudioFrameStore` 类型。文档和 IoC 装配中需要区分两个角色：
 
 - decoded frame store：AudioDecoder 输出，AudioResampler 输入。
-- playback frame store：AudioResampler 输出，AudioSink/AudioRenderer 输入。
+- playback frame store：AudioResampler 输出，AudioOutput 输入。
 
 除非后续两个 Store 的行为真的分化，否则不新增 `AudioResampledStore` 类型，避免为命名复制一套几乎
 相同的资源代码。
@@ -52,7 +52,7 @@ AudioResampler 负责：
 AudioResampler 不负责：
 
 - 不解码压缩音频包，这是 AudioDecoder 的职责。
-- 不播放、不触碰声卡、不驱动 miniaudio 实时回调，这是 AudioSink/AudioRenderer 的职责。
+- 不播放、不触碰声卡、不驱动 miniaudio 实时回调，这是 AudioOutput 的职责。
 - 不决定目标输出格式。目标格式由 open 阶段的输出设备探测/策略决定，然后作为纯数据传给
   `configure()`。
 - 不向宿主声明“播放结束”。EOF 作为有序数据项继续往下游传递，最终播放结束由输出链路确认。
@@ -364,6 +364,6 @@ AudioResampler -> playback frame store -> AudioOutput
 ## 边界
 
 - 不实现 `swr_convert` 的缓冲管理、延迟补偿和声道布局细节；归 FFmpeg backend 实现阶段。
-- 不实现 AudioSink/AudioRenderer 的设备能力探测。
+- 不实现 AudioOutput 的设备能力探测。
 - 不实现变速不变调。
 - 不重命名 `DecodedAudio`；若未来改为 `PcmAudio`，应作为独立契约重构处理。

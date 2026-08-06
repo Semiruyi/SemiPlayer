@@ -25,13 +25,13 @@ void handle_close():
         resolve(Ok(())); return          // 没媒体, 无操作
 
     // ① 停下游消费者
-    audio_sink.stop_playback()           // miniaudio 停止, 切静音
+    audio_output.pause_playback()        // 停设备与音频消费，并冻结内部 PlaybackClock
     video_sync.stop()                    // VideoSync 停贴帧
 
     // ② 停 decoder 线程 (并等退出)
     video_decoder.stop()
     audio_decoder.stop()
-    audio_resampler.stop()               // 停重采样线程 (在 audio_decoder 之后, audio_sink 之前)
+    audio_resampler.stop()               // 停重采样线程 (在 audio_decoder 之后、AudioOutput 之前)
 
     // ③ 关闭 demux 会话并释放媒体相关资源 (模块对象留着)
     // 共享队列不主动 clear；stop 可能丢弃 demuxer 尚未入队的 pending item。
@@ -40,8 +40,7 @@ void handle_close():
     video_decoder.unconfigure()          // 释放解码器实例 (configure 的逆)
     audio_decoder.unconfigure()
     audio_resampler.unconfigure()        // 释放 SwrContext (configure 的逆)
-    audio_sink.teardown()                // 释放 miniaudio 流 (setup 的逆)
-    audio_clock.reset(0)                 // 时钟归零冻结
+    audio_output.unconfigure()           // 释放输出设备；同时失效内部 PlaybackClock
 
     // ⑤ 会话状态
     player_state = Idle
@@ -67,7 +66,7 @@ void handle_close():
 close 后遗留在队列中的旧包和结束项，在新会话中由消费者检查并丢弃。
 
 ### 释放资源的步骤是 configure/setup 的逆
-⑤ 步：`demuxer.close`（open 的逆）、`decoder.unconfigure`（configure 的逆）、`audio_sink.teardown`（setup 的逆）。模块对象本身不销毁（不析构），只释放它持有的媒体相关内部资源。
+⑤ 步：`demuxer.close`（open 的逆）、`decoder.unconfigure`（configure 的逆）、`audio_output.unconfigure`（configure 的逆）。模块对象本身不销毁（不析构），只释放它持有的媒体相关内部资源。
 
 ---
 
@@ -94,7 +93,7 @@ close 不调用队列的 `clear()`。队列项携带 generation，消费者在�
 因此旧媒体数据可以安全留在 FIFO 中，不需要为不参与播放流程的清理动作扩展生产者契约。
 
 ### close 不拆模块对象
-模块对象（Demuxer/Decoder/Sink 实例）在 close 后**仍然存活**——只释放它们持有的媒体资源（解码器、miniaudio流、文件句柄）。模块对象本身到 `shutdown` 才销毁。这样 close→open 可复用模块（尤其硬解 device 等昂贵资源），符合 lifecycle 设计。
+模块对象（Demuxer/Decoder/AudioOutput 实例）在 close 后**仍然存活**——只释放它们持有的媒体资源（解码器、输出设备流、文件句柄）。模块对象本身到 `shutdown` 才销毁。这样 close→open 可复用模块（尤其硬解 device 等昂贵资源），符合 lifecycle 设计。
 
 ---
 
@@ -102,15 +101,14 @@ close 不调用队列的 `clear()`。队列项携带 generation，消费者在�
 
 | 步骤 | 模块方法 | 高层职责 | 内部细节归属 |
 |------|---------|---------|------------|
-| ① | `audio_sink.stop_playback` | miniaudio 停止/切静音，不取音频 | audio_sink.md |
+| ① | `audio_output.pause_playback` | 停设备与音频消费，并冻结内部 PlaybackClock | audio_output.md |
 | ① | `video_sync.stop` | 停止贴帧 | video_sync.md |
 | ② | `video_decoder.stop` | 停视频解码线程，等退出 | video_decoder.md |
 | ② | `audio_decoder.stop` | 停音频解码线程，等退出 | audio_decoder.md |
 | ③ | `demuxer.close` | 停止当前会话，关文件，释放 AVFormatContext（open 的逆）| demuxer.md |
 | ③ | `video_decoder.unconfigure` | 释放解码器实例（configure 的逆）| video_decoder.md |
 | ③ | `audio_decoder.unconfigure` | 同上 | audio_decoder.md |
-| ③ | `audio_sink.teardown` | 释放 miniaudio 流（setup 的逆）| audio_sink.md |
-| ③ | `audio_clock.reset(0)` | 时钟归零冻结 | audio_clock.md |
+| ③ | `audio_output.unconfigure` | 释放输出设备并失效内部 PlaybackClock | audio_output.md |
 
 ---
 
@@ -133,8 +131,7 @@ close 后任何会话状态都回到 Idle，模块可被 open 复用。
 |-----------|--------------|
 | `demuxer.open`（建 AVFormatContext）| `demuxer.close`（释放）|
 | `decoder.configure`（建解码器）| `decoder.unconfigure`（释放）|
-| `audio_sink.setup`（建 miniaudio 流）| `audio_sink.teardown`（释放）|
-| `audio_clock.reset(0)` | `audio_clock.reset(0)`（归零）|
+| `audio_output.configure`（建设备流并初始化内部 PlaybackClock）| `audio_output.unconfigure`（释放设备流并失效内部 PlaybackClock）|
 | play 启动的工作线程 | close 的 stop（停线程）|
 | play 填的队列数据 | 保留在队列中，由下一会话的 generation 检查自动丢弃 |
 

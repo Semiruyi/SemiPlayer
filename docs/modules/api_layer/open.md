@@ -34,7 +34,7 @@ void handle_open(src):
         // 探测/选择系统输出支持的 playback PCM format
     audio_resampler.configure(input=decoded.format, output=output.playback_format)
         // 按 input(解码后 PCM) → output(设备播放 PCM) 建 SwrContext; 自包含, 不感知"流"概念
-    audio_clock.reset(0)                     // 时钟基准归 0, 冻结
+        // AudioOutput 同时初始化内部 PlaybackClock，初始为无有效 PTS
 
     // ④ 会话状态
     player_state = Ready                // 就绪、未播放
@@ -57,7 +57,6 @@ void handle_open(src):
 | ③ | `audio_decoder.configure(config)` | 用 codec config 自己建音频解码器，并返回实际 decoded PCM format | audio_decoder.md |
 | ③ | `audio_output.configure(options)` | 探测/选择输出设备支持的播放格式，建输出后端上下文，返回 `playback_format` | audio_output.md |
 | ③ | `audio_resampler.configure(input, output)` | 用 decoded PCM → playback PCM 建 SwrContext；自包含，不感知流概念 | audio_resampler.md |
-| ③ | `audio_clock.reset(0)` | 时钟基准 PTS=0，冻结 | audio_clock.md |
 | ④ | 会话状态 | `player_state=Ready`、`target_start_pts=0`、记 current_media/duration | ApiLayer 内部 |
 
 ---
