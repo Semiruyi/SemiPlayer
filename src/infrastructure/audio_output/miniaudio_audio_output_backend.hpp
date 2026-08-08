@@ -29,7 +29,7 @@ public:
 
     [[nodiscard]] std::expected<contracts::audio_output::AudioOutputSubmitStatus,
                                 contracts::audio_output::AudioOutputBackendError>
-    try_submit(const contracts::media::DecodedAudio& audio) override;
+    try_submit(const contracts::audio_output::AudioOutputSubmission& submission) override;
 
     [[nodiscard]] std::expected<contracts::audio_output::AudioOutputDrainStatus,
                                 contracts::audio_output::AudioOutputBackendError>

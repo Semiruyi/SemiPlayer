@@ -142,7 +142,8 @@ std::expected<void, AudioOutputError> DefaultAudioOutput::pause_playback() {
 }
 
 void DefaultAudioOutput::on_audio_frames_consumed(
-    const contracts::audio_output::AudioFramesConsumed&) noexcept {
+    const contracts::audio_output::AudioFramesConsumed& event) noexcept {
+    playback_clock_.on_audio_frames_consumed(event);
     backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
@@ -256,7 +257,9 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
 
     std::lock_guard lock(mutex_);
     active_generation_ = generation_->current();
+    playback_clock_.configure(configured->playback_format.sample_rate);
     pending_frame_.reset();
+    playback_clock_.reset();
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
     discarding_stale_generation_ = false;
@@ -285,6 +288,7 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
         (void)realtime_notifier_->unseal();
     }
 
+    playback_clock_.reset();
     std::lock_guard lock(mutex_);
     pending_frame_.reset();
     active_generation_ = 0;
@@ -321,6 +325,7 @@ void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept
         return;
     }
 
+    playback_clock_.resume();
     std::lock_guard lock(mutex_);
     playback_enabled_ = true;
     input_not_empty_hint_ = true;
@@ -352,6 +357,7 @@ void DefaultAudioOutput::process_command(PausePlaybackCommand& command) noexcept
     }
 
     std::lock_guard lock(mutex_);
+    playback_clock_.pause();
     playback_enabled_ = false;
     command.completion.set_value({});
 }
@@ -398,6 +404,7 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
         }
         if (current_generation != active_generation_) {
             pending_frame_.reset();
+            playback_clock_.reset();
             phase_ = PlaybackPhase::Running;
             active_generation_ = current_generation;
             input_not_empty_hint_ = true;
@@ -452,7 +459,10 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_submit_pending_frame(
     assert(backend);
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError> submitted;
     try {
-        submitted = backend->try_submit(pending_frame->decoded());
+        submitted = backend->try_submit({
+            .audio = pending_frame->decoded(),
+            .generation = pending_frame->generation(),
+        });
     } catch (...) {
         submitted = std::unexpected(backend_exception(
             AudioOutputBackendOperation::Submit,
@@ -536,6 +546,10 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
     }
 
     if (should_notify_finished) {
+        playback_clock_.finish();
+    }
+
+    if (should_notify_finished) {
         notify_playback_finished(generation);
     }
     return DataStepResult::Handled;
@@ -578,6 +592,7 @@ void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
         }
         if (current_generation != active_generation_) {
             pending_frame_.reset();
+            playback_clock_.reset();
             phase_ = PlaybackPhase::Running;
             active_generation_ = current_generation;
             discarding_stale_generation_ = true;
@@ -623,6 +638,9 @@ void DefaultAudioOutput::handle_audio_frame(
     }
 
     pending_frame_.emplace(std::move(frame));
+    if (pending_frame_->decoded().pts_us) {
+        (void)playback_clock_.prepare_pcm(current_generation, *pending_frame_->decoded().pts_us);
+    }
     backend_progress_hint_ = true;
 }
 

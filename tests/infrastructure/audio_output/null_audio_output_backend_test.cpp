@@ -56,7 +56,7 @@ TEST(NullAudioOutputBackendTest, AcceptsMatchingPcmAndDrainsImmediately) {
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
 
-    const auto submitted = backend.try_submit(make_audio(configured->playback_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(configured->playback_format), .generation = 1});
     const auto drained = backend.try_drain();
 
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
@@ -88,7 +88,7 @@ TEST(NullAudioOutputBackendTest, RejectsPauseAndResumeBeforeConfiguration) {
 TEST(NullAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
     NullAudioOutputBackend backend{nullptr};
 
-    const auto submitted = backend.try_submit(make_audio({}));
+    const auto submitted = backend.try_submit({.audio = make_audio({}), .generation = 1});
     const auto drained = backend.try_drain();
 
     ASSERT_FALSE(submitted.has_value());
@@ -104,7 +104,7 @@ TEST(NullAudioOutputBackendTest, RejectsUnexpectedPcmFormat) {
 
     auto wrong_format = configured->playback_format;
     wrong_format.sample_rate = 44100;
-    const auto submitted = backend.try_submit(make_audio(wrong_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(wrong_format), .generation = 1});
 
     ASSERT_FALSE(submitted.has_value());
     EXPECT_EQ(submitted.error().operation, AudioOutputBackendOperation::Submit);
@@ -117,7 +117,7 @@ TEST(NullAudioOutputBackendTest, ResetKeepsConfigurationReusable) {
 
     const auto reset = backend.reset();
     ASSERT_TRUE(reset.has_value()) << reset.error().message;
-    const auto submitted = backend.try_submit(make_audio(configured->playback_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(configured->playback_format), .generation = 1});
 
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
     EXPECT_EQ(*submitted, AudioOutputSubmitStatus::Accepted);
@@ -133,7 +133,7 @@ TEST(NullAudioOutputBackendTest, PublishesConsumedFramesThroughTheRealtimeNotifi
 
     const auto configured = backend.configure({});
     ASSERT_TRUE(configured.has_value()) << configured.error().message;
-    const auto submitted = backend.try_submit(make_audio(configured->playback_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(configured->playback_format), .generation = 1});
 
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
     EXPECT_EQ(sink.total_frames, 1U);
@@ -148,7 +148,7 @@ TEST(NullAudioOutputBackendTest, UnconfigureReleasesTheSession) {
     ASSERT_TRUE(backend.configure({}).has_value());
 
     backend.unconfigure();
-    const auto submitted = backend.try_submit(make_audio({}));
+    const auto submitted = backend.try_submit({.audio = make_audio({}), .generation = 1});
 
     ASSERT_FALSE(submitted.has_value());
     EXPECT_EQ(submitted.error().operation, AudioOutputBackendOperation::Submit);

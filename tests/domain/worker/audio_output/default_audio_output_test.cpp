@@ -123,7 +123,8 @@ public:
     }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const contracts::media::DecodedAudio& audio) override {
+    try_submit(const contracts::audio_output::AudioOutputSubmission& submission) override {
+        const auto& audio = submission.audio;
         ++submit_calls;
         std::lock_guard lock(mutex_);
         if (submit_error_) {
@@ -263,7 +264,7 @@ public:
     std::expected<void, AudioOutputBackendError> resume() override { return {}; }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const contracts::media::DecodedAudio&) override {
+    try_submit(const contracts::audio_output::AudioOutputSubmission&) override {
         return AudioOutputSubmitStatus::Accepted;
     }
 

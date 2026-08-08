@@ -5,6 +5,7 @@
 #include "domain/resource/audio_frame_store/audio_frame_store_events.hpp"
 #include "domain/resource/generation/generation.hpp"
 #include "domain/worker/audio_output/audio_output.hpp"
+#include "domain/worker/audio_output/audio_playback_clock.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <condition_variable>
@@ -166,6 +167,7 @@ private:
     bool discarding_stale_generation_ = false;
     bool input_not_empty_hint_ = false;
     std::atomic_bool backend_progress_hint_ = false;
+    AudioPlaybackClockState playback_clock_;
 };
 
 } // namespace semi::domain

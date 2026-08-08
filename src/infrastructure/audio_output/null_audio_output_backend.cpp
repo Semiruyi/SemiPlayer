@@ -66,7 +66,9 @@ NullAudioOutputBackend::resume() {
 
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
-NullAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
+NullAudioOutputBackend::try_submit(
+    const contracts::audio_output::AudioOutputSubmission& submission) {
+    const auto& audio = submission.audio;
     if (!configured_) {
         return std::unexpected(state_error(
             contracts::audio_output::AudioOutputBackendOperation::Submit,
@@ -80,7 +82,10 @@ NullAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) 
 
     if (realtime_notifier_) {
         realtime_notifier_->notify(contracts::audio_output::AudioFramesConsumed{
+            .generation = submission.generation,
+            .first_pts_us = audio.pts_us,
             .frames = audio.samples_per_channel,
+            .sample_rate = audio.format.sample_rate,
         });
     }
     return contracts::audio_output::AudioOutputSubmitStatus::Accepted;

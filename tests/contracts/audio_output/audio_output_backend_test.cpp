@@ -29,7 +29,7 @@ public:
     std::expected<void, AudioOutputBackendError> resume() override { return {}; }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const media::DecodedAudio&) override {
+    try_submit(const AudioOutputSubmission&) override {
         return submit_status;
     }
 
@@ -66,7 +66,7 @@ TEST(AudioOutputBackendContract, RepresentsSubmitAndDrainBackpressure) {
     backend.submit_status = AudioOutputSubmitStatus::WouldBlock;
     backend.drain_status = AudioOutputDrainStatus::WouldBlock;
 
-    const auto submitted = backend.try_submit({});
+    const auto submitted = backend.try_submit({.audio = {}, .generation = 1});
     const auto drained = backend.try_drain();
 
     ASSERT_TRUE(submitted.has_value());

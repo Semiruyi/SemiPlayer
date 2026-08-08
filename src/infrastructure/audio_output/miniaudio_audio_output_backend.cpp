@@ -170,7 +170,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const DecodedAudio& audio) {
+    try_submit(const contracts::audio_output::AudioOutputSubmission& submission) {
+        const auto& audio = submission.audio;
         std::lock_guard lock(mutex);
         if (!configured) {
             return std::unexpected(make_error(
@@ -324,8 +325,9 @@ MiniaudioAudioOutputBackend::resume() {
 
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
-MiniaudioAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
-    return impl_->try_submit(audio);
+MiniaudioAudioOutputBackend::try_submit(
+    const contracts::audio_output::AudioOutputSubmission& submission) {
+    return impl_->try_submit(submission);
 }
 
 std::expected<contracts::audio_output::AudioOutputDrainStatus,

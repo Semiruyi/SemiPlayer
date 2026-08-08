@@ -32,7 +32,7 @@ DecodedAudio make_audio(AudioPcmFormat format, std::uint32_t samples_per_channel
 TEST(MiniaudioAudioOutputBackendTest, RejectsSubmitAndDrainBeforeConfiguration) {
     MiniaudioAudioOutputBackend backend{nullptr};
 
-    const auto submitted = backend.try_submit(make_audio({}));
+    const auto submitted = backend.try_submit({.audio = make_audio({}), .generation = 1});
     const auto drained = backend.try_drain();
 
     ASSERT_FALSE(submitted.has_value());
@@ -74,7 +74,7 @@ TEST(MiniaudioAudioOutputBackendTest, ConfigureSubmitDrainWhenDeviceIsAvailable)
     EXPECT_EQ(configured->playback_format.sample_format, AudioSampleFormat::F32);
     EXPECT_FALSE(configured->playback_format.planar);
 
-    const auto submitted = backend.try_submit(make_audio(configured->playback_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(configured->playback_format), .generation = 1});
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
     EXPECT_EQ(*submitted, AudioOutputSubmitStatus::Accepted);
 
@@ -85,7 +85,7 @@ TEST(MiniaudioAudioOutputBackendTest, ConfigureSubmitDrainWhenDeviceIsAvailable)
     EXPECT_EQ(*drained, AudioOutputDrainStatus::Drained);
 
     backend.unconfigure();
-    const auto after_unconfigure = backend.try_submit(make_audio(configured->playback_format));
+    const auto after_unconfigure = backend.try_submit({.audio = make_audio(configured->playback_format), .generation = 1});
     ASSERT_FALSE(after_unconfigure.has_value());
     EXPECT_EQ(after_unconfigure.error().operation, AudioOutputBackendOperation::Submit);
 }
@@ -98,7 +98,7 @@ TEST(MiniaudioAudioOutputBackendTest, PausePreservesBufferedSamplesUntilResume) 
     }
 
     ASSERT_TRUE(backend.resume().has_value());
-    const auto submitted = backend.try_submit(make_audio(configured->playback_format, 48'000));
+    const auto submitted = backend.try_submit({.audio = make_audio(configured->playback_format, 48'000), .generation = 1});
     ASSERT_TRUE(submitted.has_value()) << submitted.error().message;
 
     ASSERT_TRUE(backend.pause().has_value());
@@ -126,7 +126,7 @@ TEST(MiniaudioAudioOutputBackendTest, RejectsUnexpectedFormatWhenDeviceIsAvailab
 
     auto wrong_format = configured->playback_format;
     wrong_format.sample_rate = 44100;
-    const auto submitted = backend.try_submit(make_audio(wrong_format));
+    const auto submitted = backend.try_submit({.audio = make_audio(wrong_format), .generation = 1});
 
     ASSERT_FALSE(submitted.has_value());
     EXPECT_EQ(submitted.error().operation, AudioOutputBackendOperation::Submit);

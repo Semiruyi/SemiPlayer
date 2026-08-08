@@ -9,6 +9,11 @@
 
 namespace semi::domain {
 
+struct PlaybackPosition {
+    std::uint64_t generation = 0;
+    std::int64_t pts_us = 0;
+};
+
 // Realtime-safe playback position state owned by DefaultAudioOutput.
 class AudioPlaybackClockState final {
 public:
@@ -17,15 +22,19 @@ public:
     void pause() noexcept;
     void resume() noexcept;
     void finish() noexcept;
-    void prepare_pcm(std::uint64_t generation, std::int64_t pts_us) noexcept;
+    [[nodiscard]] bool prepare_pcm(std::uint64_t generation, std::int64_t pts_us) noexcept;
     void on_audio_frames_consumed(
         const contracts::audio_output::AudioFramesConsumed& event) noexcept;
 
-    [[nodiscard]] std::optional<std::int64_t> current_pts() const noexcept;
+    [[nodiscard]] std::optional<PlaybackPosition> current_position() const noexcept;
 
 private:
     using Clock = std::chrono::steady_clock;
 
+    void begin_write() noexcept;
+    void end_write() noexcept;
+
+    std::atomic<std::uint64_t> sequence_{0};
     std::atomic<std::uint64_t> generation_{0};
     std::atomic<std::int64_t> anchor_pts_us_{0};
     std::atomic<std::int64_t> anchor_ns_{0};
