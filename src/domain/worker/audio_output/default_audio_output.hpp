@@ -161,7 +161,7 @@ private:
     std::deque<ControlCommand> commands_;
 
     std::optional<AudioFrame> pending_frame_;
-    Generation::Value active_generation_ = 0;
+    std::atomic<Generation::Value> active_generation_{0};
     bool playback_enabled_ = false;
     bool discarding_stale_generation_ = false;
     bool input_not_empty_hint_ = false;

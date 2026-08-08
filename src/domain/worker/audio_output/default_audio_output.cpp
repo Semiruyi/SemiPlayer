@@ -143,7 +143,8 @@ std::expected<void, AudioOutputError> DefaultAudioOutput::pause_playback() {
 
 void DefaultAudioOutput::on_audio_frames_consumed(
     std::uint32_t confirmed_frames) noexcept {
-    playback_clock_.on_audio_frames_consumed(confirmed_frames);
+    const auto generation = active_generation_.load(std::memory_order_acquire);
+    playback_clock_.on_audio_frames_consumed(generation, confirmed_frames);
     backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
@@ -255,11 +256,11 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
         return;
     }
 
+    const auto current_generation = generation_->current();
     std::lock_guard lock(mutex_);
-    active_generation_ = generation_->current();
-    playback_clock_.configure(configured->playback_format.sample_rate);
+    active_generation_.store(current_generation, std::memory_order_release);
+    playback_clock_.configure(configured->playback_format.sample_rate, current_generation);
     pending_frame_.reset();
-    playback_clock_.reset();
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
     discarding_stale_generation_ = false;
@@ -288,10 +289,10 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
         (void)realtime_notifier_->unseal();
     }
 
-    playback_clock_.reset();
+    playback_clock_.reset(0);
     std::lock_guard lock(mutex_);
     pending_frame_.reset();
-    active_generation_ = 0;
+    active_generation_.store(0, std::memory_order_release);
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
     discarding_stale_generation_ = false;
@@ -325,7 +326,8 @@ void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept
         return;
     }
 
-    playback_clock_.resume();
+    const auto generation = active_generation_.load(std::memory_order_acquire);
+    playback_clock_.resume(generation);
     std::lock_guard lock(mutex_);
     playback_enabled_ = true;
     input_not_empty_hint_ = true;
@@ -356,8 +358,9 @@ void DefaultAudioOutput::process_command(PausePlaybackCommand& command) noexcept
         return;
     }
 
+    const auto generation = active_generation_.load(std::memory_order_acquire);
     std::lock_guard lock(mutex_);
-    playback_clock_.pause();
+    playback_clock_.pause(generation);
     playback_enabled_ = false;
     command.completion.set_value({});
 }
@@ -367,7 +370,8 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
         return false;
     }
 
-    if (generation_ && generation_->current() != active_generation_) {
+    if (generation_ && generation_->current() !=
+                          active_generation_.load(std::memory_order_acquire)) {
         return true;
     }
 
@@ -401,7 +405,7 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
         if (session_state_ != SessionState::Configured) {
             return;
         }
-        if (observed_generation == active_generation_) {
+        if (observed_generation == active_generation_.load(std::memory_order_acquire)) {
             return;
         }
     }
@@ -416,9 +420,9 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
         return;
     }
     pending_frame_.reset();
-    playback_clock_.reset();
+    playback_clock_.reset(current_generation);
     phase_ = PlaybackPhase::Running;
-    active_generation_ = current_generation;
+    active_generation_.store(current_generation, std::memory_order_release);
     input_not_empty_hint_ = true;
     backend_progress_hint_ = true;
     discarding_stale_generation_ = true;
@@ -513,7 +517,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
 
         backend_progress_hint_ = false;
         backend = backend_;
-        generation = active_generation_;
+        generation = active_generation_.load(std::memory_order_acquire);
     }
 
     assert(backend);
@@ -536,7 +540,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
         std::lock_guard lock(mutex_);
         if (worker_state_ == WorkerState::ShuttingDown ||
             session_state_ != SessionState::Configured ||
-            active_generation_ != generation) {
+        active_generation_.load(std::memory_order_acquire) != generation) {
             return DataStepResult::Handled;
         }
 
@@ -549,7 +553,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
     }
 
     if (should_notify_finished) {
-        playback_clock_.finish();
+        playback_clock_.finish(generation);
     }
 
     if (should_notify_finished) {
@@ -617,7 +621,7 @@ void DefaultAudioOutput::handle_audio_frame(
     std::lock_guard lock(mutex_);
     if (worker_state_ == WorkerState::ShuttingDown ||
         session_state_ != SessionState::Configured ||
-        active_generation_ != current_generation ||
+        active_generation_.load(std::memory_order_acquire) != current_generation ||
         phase_ != PlaybackPhase::Running ||
         pending_frame_.has_value()) {
         return;
@@ -634,7 +638,7 @@ void DefaultAudioOutput::handle_end_of_input(Generation::Value generation) noexc
     std::lock_guard lock(mutex_);
     if (worker_state_ == WorkerState::ShuttingDown ||
         session_state_ != SessionState::Configured ||
-        active_generation_ != generation ||
+        active_generation_.load(std::memory_order_acquire) != generation ||
         phase_ != PlaybackPhase::Running ||
         pending_frame_.has_value()) {
         return;
@@ -653,7 +657,8 @@ void DefaultAudioOutput::handle_backend_failure(
         std::lock_guard lock(mutex_);
         if (worker_state_ != WorkerState::ShuttingDown &&
             session_state_ == SessionState::Configured) {
-            generation = generation_override.value_or(active_generation_);
+            generation = generation_override.value_or(
+                active_generation_.load(std::memory_order_acquire));
             pending_frame_.reset();
             input_not_empty_hint_ = false;
             backend_progress_hint_ = false;

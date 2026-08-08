@@ -17,13 +17,14 @@ struct PlaybackPosition {
 // Realtime-safe playback position state owned by DefaultAudioOutput.
 class AudioPlaybackClockState final {
 public:
-    void configure(std::uint32_t sample_rate) noexcept;
-    void reset() noexcept;
-    void pause() noexcept;
-    void resume() noexcept;
-    void finish() noexcept;
+    void configure(std::uint32_t sample_rate, std::uint64_t generation) noexcept;
+    void reset(std::uint64_t generation) noexcept;
+    void pause(std::uint64_t generation) noexcept;
+    void resume(std::uint64_t generation) noexcept;
+    void finish(std::uint64_t generation) noexcept;
     [[nodiscard]] bool prepare_pcm(std::uint64_t generation, std::int64_t pts_us) noexcept;
-    void on_audio_frames_consumed(std::uint32_t frames) noexcept;
+    void on_audio_frames_consumed(std::uint64_t generation,
+                                  std::uint32_t frames) noexcept;
 
     [[nodiscard]] std::optional<PlaybackPosition> current_position() const noexcept;
 

@@ -19,23 +19,29 @@ void AudioPlaybackClockState::end_write() noexcept {
     sequence_.fetch_add(1, std::memory_order_release);
 }
 
-void AudioPlaybackClockState::configure(std::uint32_t sample_rate) noexcept {
+void AudioPlaybackClockState::configure(std::uint32_t sample_rate,
+                                        std::uint64_t generation) noexcept {
     sample_rate_.store(sample_rate, std::memory_order_relaxed);
-    reset();
+    reset(generation);
 }
 
-void AudioPlaybackClockState::reset() noexcept {
+void AudioPlaybackClockState::reset(std::uint64_t generation) noexcept {
     begin_write();
+    generation_.store(generation, std::memory_order_relaxed);
     valid_.store(false, std::memory_order_release);
     prepared_.store(false, std::memory_order_release);
     finished_.store(false, std::memory_order_release);
     paused_.store(false, std::memory_order_release);
     anchor_pts_us_.store(0, std::memory_order_relaxed);
     anchor_ns_.store(0, std::memory_order_relaxed);
+    prepared_pts_us_.store(0, std::memory_order_relaxed);
     end_write();
 }
 
-void AudioPlaybackClockState::pause() noexcept {
+void AudioPlaybackClockState::pause(std::uint64_t generation) noexcept {
+    if (generation_.load(std::memory_order_acquire) != generation) {
+        return;
+    }
     if (!paused_.exchange(true, std::memory_order_acq_rel)) {
         const auto current = current_position();
         begin_write();
@@ -47,7 +53,10 @@ void AudioPlaybackClockState::pause() noexcept {
     }
 }
 
-void AudioPlaybackClockState::resume() noexcept {
+void AudioPlaybackClockState::resume(std::uint64_t generation) noexcept {
+    if (generation_.load(std::memory_order_acquire) != generation) {
+        return;
+    }
     begin_write();
     paused_.store(false, std::memory_order_release);
     if (valid_.load(std::memory_order_acquire)) {
@@ -56,7 +65,10 @@ void AudioPlaybackClockState::resume() noexcept {
     end_write();
 }
 
-void AudioPlaybackClockState::finish() noexcept {
+void AudioPlaybackClockState::finish(std::uint64_t generation) noexcept {
+    if (generation_.load(std::memory_order_acquire) != generation) {
+        return;
+    }
     if (const auto current = current_position()) {
         begin_write();
         anchor_pts_us_.store(current->pts_us, std::memory_order_relaxed);
@@ -73,13 +85,13 @@ bool AudioPlaybackClockState::prepare_pcm(std::uint64_t generation,
                                            std::int64_t pts_us) noexcept {
     // Prepared is a one-shot anchor for a fresh time line. A later PCM frame
     // must not replace a running clock's callback-derived position.
-    if (valid_.load(std::memory_order_acquire) ||
+    if (generation_.load(std::memory_order_acquire) != generation ||
+        valid_.load(std::memory_order_acquire) ||
         prepared_.load(std::memory_order_acquire) ||
         finished_.load(std::memory_order_acquire)) {
         return false;
     }
     begin_write();
-    generation_.store(generation, std::memory_order_relaxed);
     prepared_pts_us_.store(pts_us, std::memory_order_relaxed);
     prepared_.store(true, std::memory_order_release);
     valid_.store(false, std::memory_order_release);
@@ -89,9 +101,10 @@ bool AudioPlaybackClockState::prepare_pcm(std::uint64_t generation,
 }
 
 void AudioPlaybackClockState::on_audio_frames_consumed(
-    std::uint32_t frames) noexcept {
+    std::uint64_t generation, std::uint32_t frames) noexcept {
     const auto sample_rate = sample_rate_.load(std::memory_order_acquire);
-    if (frames == 0 || sample_rate == 0) {
+    if (frames == 0 || sample_rate == 0 ||
+        generation_.load(std::memory_order_acquire) != generation) {
         return;
     }
     begin_write();
