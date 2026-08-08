@@ -23,8 +23,7 @@ public:
     void resume() noexcept;
     void finish() noexcept;
     [[nodiscard]] bool prepare_pcm(std::uint64_t generation, std::int64_t pts_us) noexcept;
-    void on_audio_frames_consumed(
-        const contracts::audio_output::AudioFramesConsumed& event) noexcept;
+    void on_audio_frames_consumed(std::uint32_t frames) noexcept;
 
     [[nodiscard]] std::optional<PlaybackPosition> current_position() const noexcept;
 

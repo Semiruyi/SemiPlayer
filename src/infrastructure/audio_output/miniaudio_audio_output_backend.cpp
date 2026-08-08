@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstring>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -170,8 +171,7 @@ struct MiniaudioAudioOutputBackend::Impl {
     }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const contracts::audio_output::AudioOutputSubmission& submission) {
-        const auto& audio = submission.audio;
+    try_submit(const DecodedAudio& audio) {
         std::lock_guard lock(mutex);
         if (!configured) {
             return std::unexpected(make_error(
@@ -234,6 +234,7 @@ struct MiniaudioAudioOutputBackend::Impl {
             device_running = false;
         }
         buffer.reset();
+        previous_callback_copied_frames.store(0, std::memory_order_release);
         if (device_initialized && was_running) {
             const ma_result started = ma_device_start(&device);
             if (started != MA_SUCCESS) {
@@ -261,6 +262,7 @@ struct MiniaudioAudioOutputBackend::Impl {
         configured = false;
         playback_format = {};
         buffer.clear();
+        previous_callback_copied_frames.store(0, std::memory_order_release);
     }
 
     static void data_callback(ma_device* device,
@@ -275,6 +277,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     }
 
     void write_to_device(void* output, ma_uint32 frame_count) noexcept {
+        const auto confirmed_frames = previous_callback_copied_frames.load(
+            std::memory_order_acquire);
         const std::size_t requested_bytes =
             static_cast<std::size_t>(frame_count) * kPlaybackChannels * kBytesPerSample;
         auto* bytes = static_cast<std::byte*>(output);
@@ -283,11 +287,12 @@ struct MiniaudioAudioOutputBackend::Impl {
         if (copied < requested_bytes) {
             std::memset(bytes + copied, 0, requested_bytes - copied);
         }
-        if (copied > 0 && realtime_notifier) {
-            const std::size_t bytes_per_frame = kPlaybackChannels * kBytesPerSample;
-            realtime_notifier->notify(contracts::audio_output::AudioFramesConsumed{
-                .frames = static_cast<std::uint32_t>(copied / bytes_per_frame),
-            });
+        const std::size_t bytes_per_frame = kPlaybackChannels * kBytesPerSample;
+        previous_callback_copied_frames.store(
+            static_cast<std::uint32_t>(copied / bytes_per_frame),
+            std::memory_order_release);
+        if (confirmed_frames > 0 && realtime_notifier) {
+            realtime_notifier->notify(confirmed_frames);
         }
     }
 
@@ -295,6 +300,7 @@ struct MiniaudioAudioOutputBackend::Impl {
     std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier;
     AudioPcmFormat playback_format{};
     ByteSpscRing buffer;
+    std::atomic<std::uint32_t> previous_callback_copied_frames{0};
     ma_device device{};
     bool device_initialized = false;
     bool device_running = false;
@@ -326,8 +332,8 @@ MiniaudioAudioOutputBackend::resume() {
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
 MiniaudioAudioOutputBackend::try_submit(
-    const contracts::audio_output::AudioOutputSubmission& submission) {
-    return impl_->try_submit(submission);
+    const contracts::media::DecodedAudio& audio) {
+    return impl_->try_submit(audio);
 }
 
 std::expected<contracts::audio_output::AudioOutputDrainStatus,

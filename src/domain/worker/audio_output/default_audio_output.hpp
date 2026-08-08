@@ -47,13 +47,11 @@ public:
     void unconfigure() noexcept override;
 
 private:
-    class ProgressSink final : public infra::RealTimeNotificationSink<
-                                   contracts::audio_output::AudioFramesConsumed> {
+    class ProgressSink final : public infra::RealTimeNotificationSink<std::uint32_t> {
     public:
         explicit ProgressSink(DefaultAudioOutput& owner) noexcept : owner_(owner) {}
 
-        void on_realtime_notification(
-            const contracts::audio_output::AudioFramesConsumed& event) noexcept override;
+        void on_realtime_notification(const std::uint32_t& confirmed_frames) noexcept override;
 
     private:
         DefaultAudioOutput& owner_;
@@ -137,8 +135,7 @@ private:
     void handle_backend_failure(AudioOutputBackendError error) noexcept;
     void notify_backend_failure(AudioOutputBackendError error, Generation::Value generation) noexcept;
     void notify_playback_finished(Generation::Value generation) noexcept;
-    void on_audio_frames_consumed(
-        const contracts::audio_output::AudioFramesConsumed& event) noexcept;
+    void on_audio_frames_consumed(std::uint32_t confirmed_frames) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;

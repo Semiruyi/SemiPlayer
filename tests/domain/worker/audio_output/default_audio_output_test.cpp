@@ -123,8 +123,7 @@ public:
     }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const contracts::audio_output::AudioOutputSubmission& submission) override {
-        const auto& audio = submission.audio;
+    try_submit(const contracts::media::DecodedAudio& audio) override {
         ++submit_calls;
         std::lock_guard lock(mutex_);
         if (submit_error_) {
@@ -214,7 +213,7 @@ public:
 
     void notify_progress() {
         if (realtime_notifier) {
-            realtime_notifier->notify(contracts::audio_output::AudioFramesConsumed{.frames = 1});
+            realtime_notifier->notify(std::uint32_t{1});
         }
     }
 
@@ -264,7 +263,7 @@ public:
     std::expected<void, AudioOutputBackendError> resume() override { return {}; }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const contracts::audio_output::AudioOutputSubmission&) override {
+    try_submit(const contracts::media::DecodedAudio&) override {
         return AudioOutputSubmitStatus::Accepted;
     }
 

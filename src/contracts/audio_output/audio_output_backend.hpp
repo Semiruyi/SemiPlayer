@@ -18,11 +18,6 @@ struct AudioOutputConfigureResult {
     media::AudioPcmFormat playback_format;
 };
 
-struct AudioOutputSubmission {
-    const media::DecodedAudio& audio;
-    std::uint64_t generation = 0;
-};
-
 // The operation that failed in an output implementation. Native error codes
 // are backend-specific (for example, an OS audio API error code).
 enum class AudioOutputBackendOperation : std::uint8_t {
@@ -69,7 +64,7 @@ public:
     [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> resume() = 0;
 
     [[nodiscard]] virtual std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
-    try_submit(const AudioOutputSubmission& submission) = 0;
+    try_submit(const media::DecodedAudio& audio) = 0;
 
     [[nodiscard]] virtual std::expected<AudioOutputDrainStatus, AudioOutputBackendError>
     try_drain() = 0;

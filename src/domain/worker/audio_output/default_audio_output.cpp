@@ -40,8 +40,8 @@ AudioOutputError backend_failure(AudioOutputBackendError error) {
 } // namespace
 
 void DefaultAudioOutput::ProgressSink::on_realtime_notification(
-    const contracts::audio_output::AudioFramesConsumed& event) noexcept {
-    owner_.on_audio_frames_consumed(event);
+    const std::uint32_t& confirmed_frames) noexcept {
+    owner_.on_audio_frames_consumed(confirmed_frames);
 }
 
 DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_frame_source,
@@ -142,8 +142,8 @@ std::expected<void, AudioOutputError> DefaultAudioOutput::pause_playback() {
 }
 
 void DefaultAudioOutput::on_audio_frames_consumed(
-    const contracts::audio_output::AudioFramesConsumed& event) noexcept {
-    playback_clock_.on_audio_frames_consumed(event);
+    std::uint32_t confirmed_frames) noexcept {
+    playback_clock_.on_audio_frames_consumed(confirmed_frames);
     backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
@@ -459,10 +459,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_submit_pending_frame(
     assert(backend);
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError> submitted;
     try {
-        submitted = backend->try_submit({
-            .audio = pending_frame->decoded(),
-            .generation = pending_frame->generation(),
-        });
+        submitted = backend->try_submit(pending_frame->decoded());
     } catch (...) {
         submitted = std::unexpected(backend_exception(
             AudioOutputBackendOperation::Submit,

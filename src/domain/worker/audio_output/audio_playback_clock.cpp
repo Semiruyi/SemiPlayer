@@ -89,17 +89,24 @@ bool AudioPlaybackClockState::prepare_pcm(std::uint64_t generation,
 }
 
 void AudioPlaybackClockState::on_audio_frames_consumed(
-    const contracts::audio_output::AudioFramesConsumed& event) noexcept {
-    if (!event.first_pts_us || event.frames == 0 || event.sample_rate == 0) {
+    std::uint32_t frames) noexcept {
+    const auto sample_rate = sample_rate_.load(std::memory_order_acquire);
+    if (frames == 0 || sample_rate == 0) {
         return;
     }
     begin_write();
-    generation_.store(event.generation, std::memory_order_relaxed);
-    sample_rate_.store(event.sample_rate, std::memory_order_relaxed);
-    anchor_pts_us_.store(*event.first_pts_us +
-                             static_cast<std::int64_t>(event.frames) * 1'000'000 /
-                                 static_cast<std::int64_t>(event.sample_rate),
-                         std::memory_order_relaxed);
+    const auto duration_us = static_cast<std::int64_t>(frames) * 1'000'000 /
+                             static_cast<std::int64_t>(sample_rate);
+    if (valid_.load(std::memory_order_relaxed)) {
+        anchor_pts_us_.store(anchor_pts_us_.load(std::memory_order_relaxed) + duration_us,
+                             std::memory_order_relaxed);
+    } else if (prepared_.load(std::memory_order_relaxed)) {
+        anchor_pts_us_.store(prepared_pts_us_.load(std::memory_order_relaxed) + duration_us,
+                             std::memory_order_relaxed);
+    } else {
+        end_write();
+        return;
+    }
     anchor_ns_.store(now_ns(), std::memory_order_relaxed);
     prepared_.store(false, std::memory_order_release);
     valid_.store(true, std::memory_order_release);
