@@ -224,6 +224,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     std::expected<void, AudioOutputBackendError> reset() {
         const bool was_running = device_running;
         if (device_initialized && was_running) {
+            // ma_device_stop() waits for the device callback thread, so no
+            // pre-reset callback can notify after the old buffer is cleared.
             const ma_result stopped = ma_device_stop(&device);
             if (stopped != MA_SUCCESS) {
                 return std::unexpected(make_error(

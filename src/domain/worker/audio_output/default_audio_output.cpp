@@ -395,31 +395,37 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
 }
 
 void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
-    const Generation::Value current_generation = generation_ ? generation_->current() : 0;
-    bool generation_changed = false;
+    const Generation::Value observed_generation = generation_ ? generation_->current() : 0;
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured) {
             return;
         }
-        if (current_generation != active_generation_) {
-            pending_frame_.reset();
-            playback_clock_.reset();
-            phase_ = PlaybackPhase::Running;
-            active_generation_ = current_generation;
-            input_not_empty_hint_ = true;
-            backend_progress_hint_ = true;
-            discarding_stale_generation_ = true;
-            generation_changed = true;
+        if (observed_generation == active_generation_) {
+            return;
         }
     }
 
-    if (generation_changed && backend_ && !reset_backend_for_generation()) {
+    if (backend_ && !reset_backend_for_generation(observed_generation)) {
         return;
     }
+
+    const Generation::Value current_generation = generation_ ? generation_->current() : 0;
+    std::lock_guard lock(mutex_);
+    if (session_state_ != SessionState::Configured) {
+        return;
+    }
+    pending_frame_.reset();
+    playback_clock_.reset();
+    phase_ = PlaybackPhase::Running;
+    active_generation_ = current_generation;
+    input_not_empty_hint_ = true;
+    backend_progress_hint_ = true;
+    discarding_stale_generation_ = true;
 }
 
-bool DefaultAudioOutput::reset_backend_for_generation() noexcept {
+bool DefaultAudioOutput::reset_backend_for_generation(
+    Generation::Value generation) noexcept {
     std::expected<void, AudioOutputBackendError> reset;
     try {
         reset = backend_->reset();
@@ -429,7 +435,7 @@ bool DefaultAudioOutput::reset_backend_for_generation() noexcept {
             "audio output backend reset threw an exception"));
     }
     if (!reset) {
-        handle_backend_failure(std::move(reset.error()));
+        handle_backend_failure(std::move(reset.error()), generation);
         return false;
     }
     return true;
@@ -580,38 +586,21 @@ void DefaultAudioOutput::read_next_input_to_pending() noexcept {
 }
 
 void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
+    // try_pop() is destructive; resynchronize before accepting the item.
+    handle_generation_change_if_needed();
     const Generation::Value current_generation = generation_ ? generation_->current() : 0;
-    bool generation_changed = false;
+    const auto item_generation = audio_frame_store_item_generation(item);
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured) {
             return;
         }
-        if (current_generation != active_generation_) {
-            pending_frame_.reset();
-            playback_clock_.reset();
-            phase_ = PlaybackPhase::Running;
-            active_generation_ = current_generation;
-            discarding_stale_generation_ = true;
-            generation_changed = true;
+        if (item_generation != current_generation) {
+            if (phase_ == PlaybackPhase::Running) {
+                input_not_empty_hint_ = true;
+            }
+            return;
         }
-    }
-
-    if (generation_changed && backend_ && !reset_backend_for_generation()) {
-        return;
-    }
-
-    if (audio_frame_store_item_generation(item) != current_generation) {
-        std::lock_guard lock(mutex_);
-        if (session_state_ == SessionState::Configured &&
-            phase_ == PlaybackPhase::Running) {
-            input_not_empty_hint_ = true;
-        }
-        return;
-    }
-
-    {
-        std::lock_guard lock(mutex_);
         discarding_stale_generation_ = false;
     }
 
@@ -655,14 +644,16 @@ void DefaultAudioOutput::handle_end_of_input(Generation::Value generation) noexc
     backend_progress_hint_ = true;
 }
 
-void DefaultAudioOutput::handle_backend_failure(AudioOutputBackendError error) noexcept {
+void DefaultAudioOutput::handle_backend_failure(
+    AudioOutputBackendError error,
+    std::optional<Generation::Value> generation_override) noexcept {
     bool should_notify = false;
     Generation::Value generation = 0;
     {
         std::lock_guard lock(mutex_);
         if (worker_state_ != WorkerState::ShuttingDown &&
             session_state_ == SessionState::Configured) {
-            generation = active_generation_;
+            generation = generation_override.value_or(active_generation_);
             pending_frame_.reset();
             input_not_empty_hint_ = false;
             backend_progress_hint_ = false;

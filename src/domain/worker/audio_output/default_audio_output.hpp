@@ -125,14 +125,16 @@ private:
 
     [[nodiscard]] bool should_process_data_locked() const noexcept;
     void handle_generation_change_if_needed() noexcept;
-    [[nodiscard]] bool reset_backend_for_generation() noexcept;
+    [[nodiscard]] bool reset_backend_for_generation(Generation::Value generation) noexcept;
     [[nodiscard]] DataStepResult try_submit_pending_frame() noexcept;
     [[nodiscard]] DataStepResult try_drain_backend() noexcept;
     void read_next_input_to_pending() noexcept;
     void handle_input_item(AudioFrameStoreItem item) noexcept;
     void handle_audio_frame(AudioFrame frame, Generation::Value current_generation) noexcept;
     void handle_end_of_input(Generation::Value generation) noexcept;
-    void handle_backend_failure(AudioOutputBackendError error) noexcept;
+    void handle_backend_failure(
+        AudioOutputBackendError error,
+        std::optional<Generation::Value> generation_override = std::nullopt) noexcept;
     void notify_backend_failure(AudioOutputBackendError error, Generation::Value generation) noexcept;
     void notify_playback_finished(Generation::Value generation) noexcept;
     void on_audio_frames_consumed(std::uint32_t confirmed_frames) noexcept;

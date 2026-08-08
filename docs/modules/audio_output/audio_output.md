@@ -198,7 +198,7 @@ public:
 - backend 在构造时注入并持有 `shared_ptr<AudioOutputRealTimeNotifier>`；通知目标在整个 backend 生命周期内保持不变。
 - `try_submit(audio)`：尝试提交一段 PCM；成功返回 `Accepted`，设备缓冲暂不可写返回 `WouldBlock`。
 - `try_drain()`：EOF 后尝试确认设备侧缓冲已经播放/排空；未完成返回 `WouldBlock`，完成返回 `Drained`。
-- `reset()`：generation 变化时丢弃后端内部待播放旧数据，回到可接收当前 generation 的状态；必须保持 reset 前的 paused/running 状态。
+- `reset()`：generation 变化时停止并等待可能报告旧缓冲消费量的 callback 完成，再丢弃后端内部待播放旧数据；reset 返回后 worker 才提交新的 active generation，并保持 reset 前的 paused/running 状态。
 - `unconfigure()`：释放设备资源。
 
 不建议第一版使用阻塞式 `write()`。阻塞式接口虽然简单，但会让 `unconfigure()`、析构和错误恢复被设备阻塞影响，测试背压也不如非阻塞契约清晰。
@@ -312,14 +312,14 @@ worker 醒来后优先处理控制命令，再处理数据：
   wait
 
 否则如果 generation 改变:
-  清空 pending frame
-  active_generation = current_generation
-  phase = Running
   reset = backend.reset()
   如果 reset 失败:
     发送 AudioOutputBackendFailure
     session = Failed
     等待 unconfigure()
+  清空 pending frame
+  active_generation = current_generation
+  phase = Running
 
 否则如果 phase == Finished:
   wait
@@ -392,8 +392,8 @@ AudioOutput 不提供公开 `seek()`，但必须正确响应 generation 变化�
 
 worker 发现 `generation.current()` 与 `active_generation_` 不一致时：
 
-1. 丢弃 pending frame。
-2. 调用 backend `reset()`，停止播放旧 generation 的设备缓冲。
+1. 调用 backend `reset()`，停止并等待旧 generation 的设备 callback，再清空设备缓冲。
+2. 丢弃 pending frame。
 3. 更新 `active_generation_`。
 4. 将 phase 重置为 `Running`。
 5. 只处理当前 generation 的 frame 和 EOF。

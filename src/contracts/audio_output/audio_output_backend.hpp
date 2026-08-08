@@ -70,6 +70,8 @@ public:
     try_drain() = 0;
 
     // Drops backend-buffered samples after the worker has observed a new generation.
+    // If the backend has a real-time callback, this must not return until any
+    // callback that can report consumption from the pre-reset buffer has stopped.
     [[nodiscard]] virtual std::expected<void, AudioOutputBackendError> reset() = 0;
     virtual void unconfigure() noexcept = 0;
 

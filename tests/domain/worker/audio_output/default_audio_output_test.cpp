@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <deque>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -66,6 +67,9 @@ public:
         std::optional<AudioFrameStoreItem> item;
         item.emplace(std::move(items_.front()));
         items_.pop_front();
+        if (before_pop) {
+            before_pop();
+        }
         return item;
     }
 
@@ -75,6 +79,7 @@ public:
     }
 
     std::atomic_int pop_calls = 0;
+    std::function<void()> before_pop;
 
 private:
     std::mutex mutex_;
@@ -635,6 +640,24 @@ TEST(DefaultAudioOutputTest, ResetsBackendAndDropsPendingFrameWhenGenerationChan
     ASSERT_TRUE(eventually([&] { return backend->submit_calls.load() == 2; }));
     ASSERT_EQ(backend->submitted_marker_count(), 1U);
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x04});
+}
+
+TEST(DefaultAudioOutputTest, ResynchronizesGenerationAfterPoppingCurrentFrame) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+
+    const auto next_generation = dependencies.generation->current() + 1;
+    dependencies.source->before_pop = [&] { dependencies.generation->bump(); };
+    dependencies.source->push(make_frame_item(11, next_generation));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+    EXPECT_EQ(backend->reset_calls, 1);
+    EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x0B});
 }
 
 TEST(DefaultAudioOutputTest, ReportsResetFailureAndRequiresUnconfigureForRecovery) {
