@@ -21,3 +21,13 @@ add_subdirectory(infrastructure)
 
 include(GoogleTest)
 gtest_discover_tests(semi_player_tests)
+
+if(TARGET semi_player)
+    add_executable(semi_player_abi_tests abi_player_test.cpp)
+    target_compile_features(semi_player_abi_tests PRIVATE cxx_std_23)
+    target_link_libraries(semi_player_abi_tests PRIVATE semi_player GTest::gtest_main)
+    target_include_directories(semi_player_abi_tests PRIVATE ${CMAKE_SOURCE_DIR}/include)
+    target_compile_definitions(semi_player_abi_tests PRIVATE
+        "SEMI_PLAYER_TEST_MEDIA_PATH=\"${SEMI_PLAYER_TEST_MEDIA_PATH}\"")
+    gtest_discover_tests(semi_player_abi_tests)
+endif()
