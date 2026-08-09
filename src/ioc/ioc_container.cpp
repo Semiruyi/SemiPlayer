@@ -4,6 +4,7 @@
 #include "domain/resource/audio_frame_store/audio_frame_store.hpp"
 #include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
 #include "domain/resource/generation/generation.hpp"
+#include "domain/resource/video_packet_queue/video_packet_sink.hpp"
 #include "domain/worker/audio_decoder/default_audio_decoder.hpp"
 #include "domain/worker/audio_output/default_audio_output.hpp"
 #include "domain/worker/audio_resampler/default_audio_resampler.hpp"
@@ -18,6 +19,17 @@
 #define SEMI_LOG_TAG "ioc"
 
 namespace semi::ioc {
+namespace {
+
+class DiscardingVideoPacketSink final : public domain::VideoPacketSink {
+public:
+    [[nodiscard]] domain::VideoPacketPushResult
+    try_push(domain::VideoPacketQueueItem&&) override {
+        return domain::VideoPacketPushResult::Accepted;
+    }
+};
+
+} // namespace
 
 IoCContainer& IoCContainer::instance() {
     static IoCContainer container;
@@ -37,6 +49,7 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
         auto generation = std::make_shared<domain::Generation>(notifier);
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
+        auto video_packet_sink = std::make_shared<DiscardingVideoPacketSink>();
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
@@ -50,7 +63,7 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(audio_realtime_notifier);
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
-            demuxer_backend, audio_packet_queue, notifier, generation);
+            demuxer_backend, audio_packet_queue, notifier, generation, video_packet_sink);
         auto audio_decoder = std::make_shared<domain::DefaultAudioDecoder>(
             audio_packet_queue, decoded_audio_frame_store, audio_decoder_backend, notifier, generation);
         auto audio_resampler = std::make_shared<domain::DefaultAudioResampler>(

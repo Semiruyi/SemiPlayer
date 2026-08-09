@@ -1,6 +1,7 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 
 #include "domain/resource/audio_packet_queue/audio_packet_queue_events.hpp"
+#include "domain/resource/video_packet_queue/video_packet_queue_events.hpp"
 #include "domain/worker/demuxer/demuxer_events.hpp"
 
 #include <cassert>
@@ -70,9 +71,11 @@ DemuxerOpenResult select_default_streams(BackendProbeResult probe) {
 DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
                                std::shared_ptr<AudioPacketSink> audio_packet_sink,
                                std::shared_ptr<infra::Notifier> notifier,
-                               std::shared_ptr<Generation> generation)
+                               std::shared_ptr<Generation> generation,
+                               std::shared_ptr<VideoPacketSink> video_packet_sink)
     : backend_(std::move(backend)),
       audio_packet_sink_(std::move(audio_packet_sink)),
+      video_packet_sink_(std::move(video_packet_sink)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
       worker_([this] {
@@ -87,11 +90,17 @@ DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
             audio_queue_not_full_hint_.store(true, std::memory_order_release);
             cv_.notify_one();
         });
+    video_queue_not_full_subscription_ = notifier_->subscribe<VideoQueueNotFull>(
+        [this](const VideoQueueNotFull&) {
+            video_queue_not_full_hint_.store(true, std::memory_order_release);
+            cv_.notify_one();
+        });
 }
 
 DefaultDemuxer::~DefaultDemuxer() {
     shutdown_worker();
     audio_queue_not_full_subscription_.reset();
+    video_queue_not_full_subscription_.reset();
 }
 
 std::expected<DemuxerOpenResult, DemuxerError>
@@ -155,8 +164,8 @@ void DefaultDemuxer::worker_main() noexcept {
         }
         if (should_process_data_locked()) {
             lock.unlock();
-            if (try_push_pending_audio_output() == PendingAudioOutputPushResult::NoPending) {
-                read_next_audio_output_to_pending();
+            if (try_push_pending_output() == PendingOutputPushResult::NoPending) {
+                read_next_output_to_pending();
             }
             lock.lock();
         }
@@ -232,15 +241,22 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
         }));
         return;
     }
-
     generation_->bump();
     const auto session_generation = generation_->current();
     {
         std::lock_guard lock(mutex_);
         audio_stream_id_ = result.audio ? std::optional{result.audio->id} : std::nullopt;
-        pending_audio_output_.reset();
+        video_stream_id_ = result.video && video_packet_sink_
+                               ? std::optional{result.video->id}
+                               : std::nullopt;
+        pending_output_.reset();
         session_generation_ = session_generation;
+        pending_output_generation_ = session_generation;
+        end_of_input_observed_ = false;
+        audio_end_of_input_accepted_ = false;
+        video_end_of_input_accepted_ = false;
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
+        video_queue_not_full_hint_.store(false, std::memory_order_release);
         const bool opened = transition_session_locked(SessionEvent::OpenSucceeded);
         assert(opened);
     }
@@ -279,9 +295,14 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
     const auto session_generation = generation_->current();
     {
         std::lock_guard lock(mutex_);
-        pending_audio_output_.reset();
+        pending_output_.reset();
         session_generation_ = session_generation;
+        pending_output_generation_ = session_generation;
+        end_of_input_observed_ = false;
+        audio_end_of_input_accepted_ = false;
+        video_end_of_input_accepted_ = false;
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
+        video_queue_not_full_hint_.store(false, std::memory_order_release);
         const bool resumed = transition_session_locked(SessionEvent::SeekSucceeded);
         assert(resumed);
     }
@@ -304,9 +325,15 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
     {
         std::lock_guard lock(mutex_);
         audio_stream_id_.reset();
-        pending_audio_output_.reset();
+        video_stream_id_.reset();
+        pending_output_.reset();
         session_generation_ = 0;
+        pending_output_generation_ = 0;
+        end_of_input_observed_ = false;
+        audio_end_of_input_accepted_ = false;
+        video_end_of_input_accepted_ = false;
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
+        video_queue_not_full_hint_.store(false, std::memory_order_release);
         if (session_state_ == SessionState::Closing) {
             const bool closed = transition_session_locked(SessionEvent::Closed);
             assert(closed);
@@ -316,70 +343,134 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
 }
 
 bool DefaultDemuxer::should_process_data_locked() const noexcept {
-    if (session_state_ != SessionState::Running || !audio_stream_id_) {
+    if (session_state_ != SessionState::Running ||
+        (!audio_stream_id_ && !video_stream_id_)) {
         return false;
     }
 
-    if (!pending_audio_output_) {
+    if (!end_of_input_observed_ && !pending_output_) {
         return true;
     }
 
-    return audio_queue_not_full_hint_.load(std::memory_order_acquire);
+    return pending_output_can_be_pushed_locked();
 }
 
-DefaultDemuxer::PendingAudioOutputPushResult
-DefaultDemuxer::try_push_pending_audio_output() noexcept {
-    std::shared_ptr<AudioPacketSink> audio_packet_sink;
-    std::optional<AudioPacketQueueItem> pending_audio_output;
-    bool pending_is_end_of_input = false;
+bool DefaultDemuxer::pending_output_can_be_pushed_locked() const noexcept {
+    if (!pending_output_) {
+        return false;
+    }
+    if (std::holds_alternative<AudioPacketQueueItem>(*pending_output_)) {
+        return audio_queue_not_full_hint_.load(std::memory_order_acquire);
+    }
+    return video_queue_not_full_hint_.load(std::memory_order_acquire);
+}
 
-    {
-        std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Running || !audio_stream_id_) {
-            return PendingAudioOutputPushResult::Handled;
-        }
-        if (!pending_audio_output_) {
-            return PendingAudioOutputPushResult::NoPending;
-        }
-        if (!audio_queue_not_full_hint_.exchange(false, std::memory_order_acq_rel)) {
-            return PendingAudioOutputPushResult::Handled;
-        }
-        pending_is_end_of_input =
-            std::holds_alternative<AudioPacketEndOfInput>(*pending_audio_output_);
-        pending_audio_output.emplace(std::move(*pending_audio_output_));
-        pending_audio_output_.reset();
-        audio_packet_sink = audio_packet_sink_;
+DefaultDemuxer::PendingOutputPushResult
+DefaultDemuxer::take_pending_output_for_push(
+    std::optional<PendingOutput>& output) noexcept {
+    std::lock_guard lock(mutex_);
+    if (session_state_ != SessionState::Running) {
+        return PendingOutputPushResult::Handled;
+    }
+    if (!pending_output_) {
+        return PendingOutputPushResult::NoPending;
     }
 
-    assert(audio_packet_sink);
-    const auto pushed = audio_packet_sink->try_push(std::move(*pending_audio_output));
+    const bool ready = std::visit(
+        Overloaded{
+            [this](AudioPacketQueueItem&) {
+                return audio_queue_not_full_hint_.exchange(false, std::memory_order_acq_rel);
+            },
+            [this](VideoPacketQueueItem&) {
+                return video_queue_not_full_hint_.exchange(false, std::memory_order_acq_rel);
+            },
+        },
+        *pending_output_);
+    if (!ready) {
+        return PendingOutputPushResult::Handled;
+    }
+
+    output.emplace(std::move(*pending_output_));
+    pending_output_.reset();
+    return PendingOutputPushResult::Handled;
+}
+
+bool DefaultDemuxer::push_pending_output(PendingOutput& output) noexcept {
+    return std::visit(
+        Overloaded{
+            [this](AudioPacketQueueItem& item) {
+                assert(audio_packet_sink_);
+                return audio_packet_sink_->try_push(std::move(item)) ==
+                       AudioPacketPushResult::Full;
+            },
+            [this](VideoPacketQueueItem& item) {
+                assert(video_packet_sink_);
+                return video_packet_sink_->try_push(std::move(item)) ==
+                       VideoPacketPushResult::Full;
+            },
+        },
+        output);
+}
+
+void DefaultDemuxer::complete_pending_output_push(PendingOutput& output,
+                                                  bool was_full) noexcept {
     std::lock_guard lock(mutex_);
     if (worker_state_ == WorkerState::ShuttingDown ||
         session_state_ != SessionState::Running) {
-        return PendingAudioOutputPushResult::Handled;
+        return;
     }
-    if (pushed == AudioPacketPushResult::Full) {
-        pending_audio_output_.emplace(std::move(*pending_audio_output));
-        return PendingAudioOutputPushResult::Handled;
+
+    if (was_full) {
+        pending_output_.emplace(std::move(output));
+        return;
     }
-    if (pending_is_end_of_input) {
-        const bool exhausted = transition_session_locked(SessionEvent::InputExhausted);
-        assert(exhausted);
-    }
-    return PendingAudioOutputPushResult::Handled;
+
+    std::visit(
+        Overloaded{
+            [this](AudioPacketQueueItem& item) {
+                if (std::holds_alternative<AudioPacketEndOfInput>(item)) {
+                    audio_end_of_input_accepted_ = true;
+                }
+            },
+            [this](VideoPacketQueueItem& item) {
+                if (std::holds_alternative<VideoPacketEndOfInput>(item)) {
+                    video_end_of_input_accepted_ = true;
+                }
+            },
+        },
+        output);
+    prepare_next_end_of_input_locked();
+    maybe_transition_to_exhausted_locked();
 }
 
-void DefaultDemuxer::read_next_audio_output_to_pending() noexcept {
+DefaultDemuxer::PendingOutputPushResult
+DefaultDemuxer::try_push_pending_output() noexcept {
+    std::optional<PendingOutput> output;
+    const auto take_result = take_pending_output_for_push(output);
+    if (take_result == PendingOutputPushResult::NoPending || !output) {
+        return take_result;
+    }
+
+    const bool was_full = push_pending_output(*output);
+    complete_pending_output_push(*output, was_full);
+    return PendingOutputPushResult::Handled;
+}
+
+void DefaultDemuxer::read_next_output_to_pending() noexcept {
     std::shared_ptr<DemuxerBackend> backend;
-    contracts::media::DemuxerStreamId audio_stream_id;
+    std::optional<contracts::media::DemuxerStreamId> audio_stream_id;
+    std::optional<contracts::media::DemuxerStreamId> video_stream_id;
     Generation::Value session_generation = 0;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Running || !audio_stream_id_) {
+        if (session_state_ != SessionState::Running || end_of_input_observed_ ||
+            pending_output_ ||
+            (!audio_stream_id_ && !video_stream_id_)) {
             return;
         }
         backend = backend_;
-        audio_stream_id = *audio_stream_id_;
+        audio_stream_id = audio_stream_id_;
+        video_stream_id = video_stream_id_;
         session_generation = session_generation_;
     }
 
@@ -390,43 +481,103 @@ void DefaultDemuxer::read_next_audio_output_to_pending() noexcept {
         return;
     }
 
-    handle_backend_read_result(*read, audio_stream_id, session_generation);
+    handle_backend_read_result(*read, audio_stream_id, video_stream_id, session_generation);
 }
 
 void DefaultDemuxer::handle_backend_read_result(
     contracts::demuxer::BackendReadResult& result,
-    contracts::media::DemuxerStreamId audio_stream_id,
+    std::optional<contracts::media::DemuxerStreamId> audio_stream_id,
+    std::optional<contracts::media::DemuxerStreamId> video_stream_id,
     Generation::Value session_generation) noexcept {
     std::visit(
         Overloaded{
-            [this, audio_stream_id, session_generation](BackendPacket& packet) {
-                if (packet.stream_id.value != audio_stream_id.value) {
-                    return;
+            [this, audio_stream_id, video_stream_id, session_generation](BackendPacket& packet) {
+                if (audio_stream_id && packet.stream_id.value == audio_stream_id->value) {
+                    store_pending_output(AudioPacketQueueItem{
+                        std::in_place_type<AudioPacket>,
+                        std::move(packet.packet),
+                        session_generation,
+                    });
+                } else if (video_stream_id && packet.stream_id.value == video_stream_id->value) {
+                    store_pending_output(VideoPacketQueueItem{
+                        std::in_place_type<VideoPacket>,
+                        std::move(packet.packet),
+                        session_generation,
+                    });
                 }
-
-                store_pending_audio_output(AudioPacketQueueItem{
-                    std::in_place_type<AudioPacket>,
-                    std::move(packet.packet),
-                    session_generation,
-                });
             },
             [this, session_generation](BackendEndOfStream) {
-                store_pending_audio_output(AudioPacketEndOfInput{
-                    .generation = session_generation,
-                });
+                store_pending_end_of_input(session_generation);
             },
         },
         result);
 }
 
-void DefaultDemuxer::store_pending_audio_output(AudioPacketQueueItem output) noexcept {
+void DefaultDemuxer::store_pending_output(PendingOutput output) noexcept {
     std::lock_guard lock(mutex_);
     if (worker_state_ == WorkerState::ShuttingDown ||
         session_state_ != SessionState::Running) {
         return;
     }
-    pending_audio_output_.emplace(std::move(output));
-    audio_queue_not_full_hint_.store(true, std::memory_order_release);
+    assert(!pending_output_);
+    const bool audio = std::holds_alternative<AudioPacketQueueItem>(output);
+    pending_output_.emplace(std::move(output));
+    if (audio) {
+        audio_queue_not_full_hint_.store(true, std::memory_order_release);
+    } else {
+        video_queue_not_full_hint_.store(true, std::memory_order_release);
+    }
+}
+
+void DefaultDemuxer::store_pending_end_of_input(Generation::Value generation) noexcept {
+    std::lock_guard lock(mutex_);
+    if (worker_state_ == WorkerState::ShuttingDown ||
+        session_state_ != SessionState::Running) {
+        return;
+    }
+
+    end_of_input_observed_ = true;
+    if (audio_stream_id_) {
+        audio_end_of_input_accepted_ = false;
+    }
+    if (video_stream_id_) {
+        video_end_of_input_accepted_ = false;
+    }
+    pending_output_generation_ = generation;
+    prepare_next_end_of_input_locked();
+    maybe_transition_to_exhausted_locked();
+}
+
+void DefaultDemuxer::prepare_next_end_of_input_locked() noexcept {
+    if (!end_of_input_observed_ || pending_output_) {
+        return;
+    }
+
+    if (audio_stream_id_ && !audio_end_of_input_accepted_) {
+        pending_output_.emplace(AudioPacketEndOfInput{
+            .generation = pending_output_generation_,
+        });
+        audio_queue_not_full_hint_.store(true, std::memory_order_release);
+        return;
+    }
+
+    if (video_stream_id_ && !video_end_of_input_accepted_) {
+        pending_output_.emplace(VideoPacketEndOfInput{
+            .generation = pending_output_generation_,
+        });
+        video_queue_not_full_hint_.store(true, std::memory_order_release);
+    }
+}
+
+void DefaultDemuxer::maybe_transition_to_exhausted_locked() noexcept {
+    if (!end_of_input_observed_ || pending_output_ ||
+        (audio_stream_id_ && !audio_end_of_input_accepted_) ||
+        (video_stream_id_ && !video_end_of_input_accepted_)) {
+        return;
+    }
+
+    const bool exhausted = transition_session_locked(SessionEvent::InputExhausted);
+    assert(exhausted);
 }
 
 void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
@@ -435,7 +586,7 @@ void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
         std::lock_guard lock(mutex_);
         if (worker_state_ != WorkerState::ShuttingDown &&
             session_state_ == SessionState::Running) {
-            pending_audio_output_.reset();
+            pending_output_.reset();
             const bool failed = transition_session_locked(SessionEvent::BackendFailed);
             assert(failed);
             should_notify = true;

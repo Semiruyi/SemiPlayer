@@ -2,10 +2,12 @@
 
 #include "domain/resource/audio_packet_queue/audio_packet_sink.hpp"
 #include "domain/resource/generation/generation.hpp"
+#include "domain/resource/video_packet_queue/video_packet_sink.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <atomic>
+#include <cstddef>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -26,7 +28,8 @@ public:
     DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
                    std::shared_ptr<AudioPacketSink> audio_packet_sink,
                    std::shared_ptr<infra::Notifier> notifier,
-                   std::shared_ptr<Generation> generation);
+                   std::shared_ptr<Generation> generation,
+                   std::shared_ptr<VideoPacketSink> video_packet_sink = nullptr);
     ~DefaultDemuxer() override;
 
     [[nodiscard]] std::expected<DemuxerOpenResult, DemuxerError>
@@ -72,10 +75,12 @@ private:
         BackendFailed,
     };
 
-    enum class PendingAudioOutputPushResult : std::uint8_t {
+    enum class PendingOutputPushResult : std::uint8_t {
         NoPending,
         Handled,
     };
+
+    using PendingOutput = std::variant<AudioPacketQueueItem, VideoPacketQueueItem>;
 
     struct OpenCommand {
         std::string source;
@@ -99,12 +104,21 @@ private:
     void process_command(SeekCommand& command) noexcept;
     void process_command(CloseCommand& command) noexcept;
     [[nodiscard]] bool should_process_data_locked() const noexcept;
-    [[nodiscard]] PendingAudioOutputPushResult try_push_pending_audio_output() noexcept;
-    void read_next_audio_output_to_pending() noexcept;
+    [[nodiscard]] bool pending_output_can_be_pushed_locked() const noexcept;
+    [[nodiscard]] PendingOutputPushResult take_pending_output_for_push(
+        std::optional<PendingOutput>& output) noexcept;
+    [[nodiscard]] bool push_pending_output(PendingOutput& output) noexcept;
+    void complete_pending_output_push(PendingOutput& output, bool was_full) noexcept;
+    [[nodiscard]] PendingOutputPushResult try_push_pending_output() noexcept;
+    void read_next_output_to_pending() noexcept;
     void handle_backend_read_result(contracts::demuxer::BackendReadResult& result,
-                                    contracts::media::DemuxerStreamId audio_stream_id,
+                                    std::optional<contracts::media::DemuxerStreamId> audio_stream_id,
+                                    std::optional<contracts::media::DemuxerStreamId> video_stream_id,
                                     Generation::Value session_generation) noexcept;
-    void store_pending_audio_output(AudioPacketQueueItem output) noexcept;
+    void store_pending_output(PendingOutput output) noexcept;
+    void store_pending_end_of_input(Generation::Value generation) noexcept;
+    void prepare_next_end_of_input_locked() noexcept;
+    void maybe_transition_to_exhausted_locked() noexcept;
     void handle_read_error(DemuxerBackendError error) noexcept;
     void notify_read_error(DemuxerBackendError error) noexcept;
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
@@ -112,9 +126,11 @@ private:
 
     std::shared_ptr<DemuxerBackend> backend_;
     std::shared_ptr<AudioPacketSink> audio_packet_sink_;
+    std::shared_ptr<VideoPacketSink> video_packet_sink_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<Generation> generation_;
     std::shared_ptr<infra::Notifier::Subscription> audio_queue_not_full_subscription_;
+    std::shared_ptr<infra::Notifier::Subscription> video_queue_not_full_subscription_;
 
     std::mutex mutex_;
     std::condition_variable cv_;
@@ -123,9 +139,15 @@ private:
     WorkerState worker_state_ = WorkerState::Starting;
     SessionState session_state_ = SessionState::Closed;
     std::optional<contracts::media::DemuxerStreamId> audio_stream_id_;
-    std::optional<AudioPacketQueueItem> pending_audio_output_;
+    std::optional<contracts::media::DemuxerStreamId> video_stream_id_;
+    std::optional<PendingOutput> pending_output_;
     Generation::Value session_generation_ = 0;
+    Generation::Value pending_output_generation_ = 0;
+    bool end_of_input_observed_ = false;
+    bool audio_end_of_input_accepted_ = false;
+    bool video_end_of_input_accepted_ = false;
     std::atomic_bool audio_queue_not_full_hint_{false};
+    std::atomic_bool video_queue_not_full_hint_{false};
 };
 
 } // namespace semi::domain

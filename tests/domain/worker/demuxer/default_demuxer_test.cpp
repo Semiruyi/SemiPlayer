@@ -1,6 +1,7 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 #include "contracts/demuxer/demuxer_backend.hpp"
 #include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
+#include "domain/resource/video_packet_queue/video_packet_queue.hpp"
 #include "domain/worker/demuxer/demuxer_events.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
@@ -130,6 +131,14 @@ std::optional<std::uint8_t> audio_packet_marker(const AudioPacketQueueItem& item
     return std::to_integer<std::uint8_t>(packet->encoded().payload.front());
 }
 
+std::optional<std::uint8_t> video_packet_marker(const VideoPacketQueueItem& item) {
+    const auto* packet = std::get_if<VideoPacket>(&item);
+    if (!packet || packet->encoded().payload.empty()) {
+        return std::nullopt;
+    }
+    return std::to_integer<std::uint8_t>(packet->encoded().payload.front());
+}
+
 template <typename Predicate>
 bool wait_until(Predicate predicate) {
     using namespace std::chrono_literals;
@@ -183,7 +192,7 @@ TEST(DefaultDemuxerTest, OpensAndClosesBackendThroughTheWorker) {
     EXPECT_EQ(backend->close_calls, 1);
 }
 
-TEST(DefaultDemuxerTest, ReadsSelectedAudioPacketsAndSkipsOtherStreams) {
+TEST(DefaultDemuxerTest, ReadsSelectedAudioAndVideoPacketsAndSkipsOtherStreams) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     auto backend = std::make_shared<FakeBackend>();
     backend->probe.streams.push_back(video_stream(3));
@@ -192,23 +201,36 @@ TEST(DefaultDemuxerTest, ReadsSelectedAudioPacketsAndSkipsOtherStreams) {
     backend->push_read_result(backend_packet(7, 42));
     backend->push_read_result(BackendEndOfStream{});
     auto generation = std::make_shared<Generation>();
-    auto queue = std::make_shared<AudioPacketQueue>(notifier, 4);
-    DefaultDemuxer demuxer(backend, queue, notifier, generation);
+    auto audio_queue = std::make_shared<AudioPacketQueue>(notifier, 4);
+    auto video_queue = std::make_shared<VideoPacketQueue>(notifier, 4);
+    DefaultDemuxer demuxer(backend, audio_queue, notifier, generation, video_queue);
 
     const auto opened = demuxer.open("movie.mp4");
 
     ASSERT_TRUE(opened.has_value());
-    ASSERT_TRUE(wait_until([&queue] { return queue->size() == 2; }));
-    auto packet = queue->try_pop();
+    ASSERT_TRUE(wait_until([&audio_queue] { return audio_queue->size() == 2; }));
+    auto packet = audio_queue->try_pop();
     ASSERT_TRUE(packet.has_value());
     EXPECT_EQ(audio_packet_marker(*packet), 42);
     EXPECT_EQ(audio_packet_queue_item_generation(*packet), 1U);
 
-    auto end = queue->try_pop();
+    auto end = audio_queue->try_pop();
     ASSERT_TRUE(end.has_value());
     const auto* end_of_input = std::get_if<AudioPacketEndOfInput>(&*end);
     ASSERT_NE(end_of_input, nullptr);
     EXPECT_EQ(end_of_input->generation, 1U);
+
+    ASSERT_TRUE(wait_until([&video_queue] { return video_queue->size() == 2; }));
+    auto video_packet = video_queue->try_pop();
+    ASSERT_TRUE(video_packet.has_value());
+    EXPECT_EQ(video_packet_marker(*video_packet), 1);
+    EXPECT_EQ(video_packet_queue_item_generation(*video_packet), 1U);
+
+    auto video_end = video_queue->try_pop();
+    ASSERT_TRUE(video_end.has_value());
+    const auto* video_end_of_input = std::get_if<VideoPacketEndOfInput>(&*video_end);
+    ASSERT_NE(video_end_of_input, nullptr);
+    EXPECT_EQ(video_end_of_input->generation, 1U);
 
     demuxer.close();
 }
@@ -267,6 +289,34 @@ TEST(DefaultDemuxerTest, QueuesEndOfInputWhenAudioHasNoPackets) {
     demuxer.close();
 }
 
+TEST(DefaultDemuxerTest, ProcessesVideoOnlySessions) {
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto backend = std::make_shared<FakeBackend>();
+    backend->probe.streams.push_back(video_stream(3));
+    backend->push_read_result(backend_packet(3, 17));
+    backend->push_read_result(BackendEndOfStream{});
+    auto generation = std::make_shared<Generation>();
+    auto video_queue = std::make_shared<VideoPacketQueue>(notifier, 4);
+    DefaultDemuxer demuxer(backend, nullptr, notifier, generation, video_queue);
+
+    const auto opened = demuxer.open("movie.mp4");
+
+    ASSERT_TRUE(opened.has_value());
+    ASSERT_TRUE(opened->video.has_value());
+    ASSERT_TRUE(wait_until([&video_queue] { return video_queue->size() == 2; }));
+
+    auto packet = video_queue->try_pop();
+    ASSERT_TRUE(packet.has_value());
+    EXPECT_EQ(video_packet_marker(*packet), 17);
+    EXPECT_EQ(video_packet_queue_item_generation(*packet), 1U);
+
+    auto end = video_queue->try_pop();
+    ASSERT_TRUE(end.has_value());
+    ASSERT_NE(std::get_if<VideoPacketEndOfInput>(&*end), nullptr);
+
+    demuxer.close();
+}
+
 TEST(DefaultDemuxerTest, RetriesEndOfInputAfterAudioQueueBackpressure) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     auto backend = std::make_shared<FakeBackend>();
@@ -290,6 +340,33 @@ TEST(DefaultDemuxerTest, RetriesEndOfInputAfterAudioQueueBackpressure) {
     auto end = queue->try_pop();
     ASSERT_TRUE(end.has_value());
     ASSERT_NE(std::get_if<AudioPacketEndOfInput>(&*end), nullptr);
+
+    demuxer.close();
+}
+
+TEST(DefaultDemuxerTest, RetriesEndOfInputAfterVideoQueueBackpressure) {
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto backend = std::make_shared<FakeBackend>();
+    backend->probe.streams.push_back(video_stream(3));
+    backend->push_read_result(backend_packet(3, 11));
+    backend->push_read_result(BackendEndOfStream{});
+    auto generation = std::make_shared<Generation>();
+    auto video_queue = std::make_shared<VideoPacketQueue>(notifier, 1);
+    DefaultDemuxer demuxer(backend, nullptr, notifier, generation, video_queue);
+
+    const auto opened = demuxer.open("movie.mp4");
+
+    ASSERT_TRUE(opened.has_value());
+    ASSERT_TRUE(wait_until([&backend] { return backend->read_calls.load() >= 2; }));
+    ASSERT_EQ(video_queue->size(), 1U);
+    auto packet = video_queue->try_pop();
+    ASSERT_TRUE(packet.has_value());
+    EXPECT_EQ(video_packet_marker(*packet), 11);
+
+    ASSERT_TRUE(wait_until([&video_queue] { return video_queue->size() == 1; }));
+    auto end = video_queue->try_pop();
+    ASSERT_TRUE(end.has_value());
+    ASSERT_NE(std::get_if<VideoPacketEndOfInput>(&*end), nullptr);
 
     demuxer.close();
 }
