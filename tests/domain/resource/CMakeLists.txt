@@ -1,3 +1,5 @@
 add_subdirectory(generation)
 add_subdirectory(audio_packet_queue)
 add_subdirectory(audio_frame_store)
+add_subdirectory(video_packet_queue)
+add_subdirectory(video_frame_store)

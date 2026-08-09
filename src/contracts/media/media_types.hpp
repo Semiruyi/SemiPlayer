@@ -37,6 +37,27 @@ struct VideoCodecConfig {
     std::optional<std::int32_t> level;
 };
 
+enum class VideoPixelFormat : std::uint8_t {
+    Unknown,
+    Rgba8,
+};
+
+struct VideoPlane {
+    std::vector<std::byte> bytes;
+    std::uint32_t stride_bytes = 0;
+};
+
+// Ownership-transferred decoded video. The MVP currently produces one Rgba8
+// plane, but the plane-based representation leaves room for native formats
+// such as NV12 and P010 later.
+struct DecodedVideo {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    VideoPixelFormat pixel_format = VideoPixelFormat::Unknown;
+    std::vector<VideoPlane> planes;
+    std::optional<std::int64_t> pts_us;
+};
+
 struct AudioCodecConfig {
     CodecCommon common;
     std::uint32_t sample_rate = 0;

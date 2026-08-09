@@ -50,5 +50,40 @@ TEST(DecodedAudioTest, DefaultsToAnUnknownEmptyFormatWithoutTimestamp) {
     EXPECT_FALSE(decoded.pts_us.has_value());
 }
 
+TEST(DecodedVideoTest, RepresentsRgbaFrameWithStrideAndTimestamp) {
+    DecodedVideo decoded{
+        .width = 2,
+        .height = 1,
+        .pixel_format = VideoPixelFormat::Rgba8,
+        .planes = {
+            VideoPlane{
+                .bytes = {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+                          std::byte{0x05}, std::byte{0x06}, std::byte{0x07}, std::byte{0x08}},
+                .stride_bytes = 8,
+            },
+        },
+        .pts_us = 123'456,
+    };
+
+    EXPECT_EQ(decoded.width, 2U);
+    EXPECT_EQ(decoded.height, 1U);
+    EXPECT_EQ(decoded.pixel_format, VideoPixelFormat::Rgba8);
+    ASSERT_EQ(decoded.planes.size(), 1U);
+    EXPECT_EQ(decoded.planes.front().bytes.size(), 8U);
+    EXPECT_EQ(decoded.planes.front().stride_bytes, 8U);
+    ASSERT_TRUE(decoded.pts_us.has_value());
+    EXPECT_EQ(*decoded.pts_us, 123'456);
+}
+
+TEST(DecodedVideoTest, DefaultsToAnUnknownEmptyFormatWithoutTimestamp) {
+    DecodedVideo decoded;
+
+    EXPECT_EQ(decoded.width, 0U);
+    EXPECT_EQ(decoded.height, 0U);
+    EXPECT_EQ(decoded.pixel_format, VideoPixelFormat::Unknown);
+    EXPECT_TRUE(decoded.planes.empty());
+    EXPECT_FALSE(decoded.pts_us.has_value());
+}
+
 } // namespace
 } // namespace semi::contracts::media
