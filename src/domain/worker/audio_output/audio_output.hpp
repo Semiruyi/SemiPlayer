@@ -1,6 +1,7 @@
 #pragma once
 
 #include "contracts/audio_output/audio_output_backend.hpp"
+#include "domain/worker/audio_output/audio_playback_clock.hpp"
 
 #include <cstdint>
 #include <expected>
@@ -46,6 +47,11 @@ public:
     [[nodiscard]] virtual std::expected<void, AudioOutputError> start_playback() = 0;
 
     [[nodiscard]] virtual std::expected<void, AudioOutputError> pause_playback() = 0;
+
+    // Read-only, realtime-safe playback position. The value is absent until
+    // the current generation has produced its first confirmed audio frame.
+    [[nodiscard]] virtual std::optional<PlaybackPosition>
+    current_position() const noexcept = 0;
 
     virtual void unconfigure() noexcept = 0;
 

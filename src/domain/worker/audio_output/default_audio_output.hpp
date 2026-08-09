@@ -44,6 +44,9 @@ public:
 
     [[nodiscard]] std::expected<void, AudioOutputError> pause_playback() override;
 
+    [[nodiscard]] std::optional<PlaybackPosition>
+    current_position() const noexcept override;
+
     void unconfigure() noexcept override;
 
 private:

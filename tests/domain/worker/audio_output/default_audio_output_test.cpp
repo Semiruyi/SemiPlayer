@@ -408,6 +408,25 @@ TEST(DefaultAudioOutputTest, SubmitsPlaybackFramesToBackend) {
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x01});
 }
 
+TEST(DefaultAudioOutputTest, ExposesConfirmedPlaybackPosition) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
+    auto output = make_output(dependencies);
+
+    ASSERT_TRUE(output->configure({}).has_value());
+    ASSERT_TRUE(output->start_playback().has_value());
+    dependencies.source->push(make_frame_item(1, dependencies.generation->current()));
+    ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
+    ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
+
+    EXPECT_FALSE(output->current_position());
+    backend->notify_progress();
+    const auto position = output->current_position();
+    ASSERT_TRUE(position);
+    EXPECT_EQ(position->generation, dependencies.generation->current());
+    EXPECT_GE(position->pts_us, 1);
+}
+
 TEST(DefaultAudioOutputTest, WaitsForStartPlaybackBeforeConsumingFrames) {
     auto dependencies = complete_dependencies();
     auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);

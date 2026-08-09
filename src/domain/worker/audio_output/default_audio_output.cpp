@@ -141,6 +141,10 @@ std::expected<void, AudioOutputError> DefaultAudioOutput::pause_playback() {
     return completion.get();
 }
 
+std::optional<PlaybackPosition> DefaultAudioOutput::current_position() const noexcept {
+    return playback_clock_.current_position();
+}
+
 void DefaultAudioOutput::on_audio_frames_consumed(
     std::uint32_t confirmed_frames) noexcept {
     const auto generation = active_generation_.load(std::memory_order_acquire);

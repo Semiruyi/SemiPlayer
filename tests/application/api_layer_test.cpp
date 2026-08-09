@@ -179,6 +179,10 @@ public:
         return {};
     }
 
+    std::optional<domain::PlaybackPosition> current_position() const noexcept override {
+        return std::nullopt;
+    }
+
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
 
