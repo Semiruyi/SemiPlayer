@@ -134,7 +134,7 @@ public:
 | `Generation` | 与 Demuxer、AudioDecoder、AudioResampler 共享；用于丢弃旧媒体会话或旧 seek 数据 |
 | `Notifier` | 接收输入 Store 非空、backend 可推进通知；发送 AudioOutput 自身事件 |
 | `AudioOutputBackend` | 纯设备输出后端抽象；当前预期可由 miniaudio、WASAPI、SDL 或 fake backend 实现 |
-| 内部 `AudioPlaybackClockState` | AudioOutput 拥有并在实际播放进度处更新；仅向 VideoSync 暴露只读 `PlaybackClock` |
+| 内部 `AudioPlaybackClockState` | AudioOutput 拥有并在实际播放进度处更新；通过 `current_position()` 向 VideoSync 暴露只读位置 |
 
 ### configure 注入/返回的纯数据
 
@@ -208,17 +208,16 @@ public:
 backend 在设备回调中发布统一的实时事件，而不是持有 AudioOutput 的专用回调接口：
 
 ```cpp
-struct AudioFramesConsumed {
-    std::uint32_t frames;
-};
-
 using AudioOutputRealTimeNotifier = RealTimeNotifier<
-    RealTimeEventSpec<AudioFramesConsumed, 2>>;
+    RealTimeEventSpec<std::uint32_t, 1>>;
 ```
 
-`DefaultAudioOutput` 是第一个 sink：收到事件后只设置原子进度提示并唤醒自己的 worker，worker 再根据 phase 决定推进 `try_submit()` 还是 `try_drain()`。第二个 slot 由其内部的 `AudioPlaybackClockState` 使用。
+`AudioOutputRealTimeNotifier` 的事件类型当前为 `std::uint32_t`，表示确认消费的 PCM frame 数，且只注册一个
+sink：`DefaultAudioOutput::ProgressSink`。它读取 `active_generation`，更新内部的
+`AudioPlaybackClockState`，设置原子进度提示并唤醒自己的 worker；worker 再根据 phase 决定推进
+`try_submit()` 还是 `try_drain()`。`AudioPlaybackClockState` 不直接订阅 realtime notifier。
 
-只有设备回调真正从 PCM ring 读出的媒体帧会发布 `AudioFramesConsumed`；欠载时补出的静音不会发布事件，因此不会错误推进音频时钟。通知器的注册、冻结和解绑规则见 `notifier/realtime_notifier.md`。
+只有设备回调真正从 PCM ring 读出的媒体帧会发布确认消费帧数通知；欠载时补出的静音不会发布事件，因此不会错误推进音频时钟。通知器的注册、冻结和解绑规则见 `notifier/realtime_notifier.md`。
 
 ## 事件通知
 
@@ -400,7 +399,7 @@ worker 发现 `generation.current()` 与 `active_generation_` 不一致时：
 
 旧 generation frame 直接丢弃。旧 generation EOF 也直接丢弃，不得触发 `AudioPlaybackFinished`。
 
-这和内部 PlaybackClock 的约束配套：AudioOutput 丢弃旧 generation 数据时不应校准时钟；只有当前 generation 且实际提交/播放的数据才能参与时钟校准。
+这和内部 `AudioPlaybackClockState` 的约束配套：AudioOutput 丢弃旧 generation 数据时不应校准时钟；只有当前 generation 且实际提交/播放的数据才能参与时钟校准。
 
 ## EOF 与播放结束
 
@@ -416,12 +415,12 @@ AudioOutput 消费到当前 generation 的 EOF 时：
 
 收到 EOF 不等于播放完成。播放完成必须等设备后端确认内部缓冲已经播放/排空。
 
-## 内部 PlaybackClock
+## 内部 AudioPlaybackClockState
 
 AudioOutput 拥有 `AudioPlaybackClockState`，因为它是唯一同时掌握 PCM 时间线、backend reset、
 设备暂停和实际消费 callback 的边界。它不作为独立 IoC 资源，也不接受 ApiLayer 的直接调用。
 
-- AudioOutput 只用当前 generation 的真实播放数据更新内部时钟，并把只读 `PlaybackClock` 句柄提供给 VideoSync。
+- AudioOutput 只用当前 generation 的真实播放数据更新内部时钟，并通过 `current_position()` 提供只读播放位置给 VideoSync。
 - 丢弃旧 generation 数据或 reset backend 时，内部时钟失效旧锚点。
 - seek 不调用独立时钟 API：AudioOutput 预读并保留新 generation 首块 PCM 后建立 Prepared 锚点；实际消费事件再建立运行锚点。
 - pause/resume 由 `pause_playback()` / `start_playback()` 在控制 backend 的同一顺序内冻结或恢复内部时钟。
@@ -487,8 +486,8 @@ pause/resume 不拆管道，也不清空 backend 缓冲。它同时控制设备 
 
 pause 后设备不再从 ring 消费，已经提交但尚未播放的 PCM 会保留；下游停止拉取后，
 playback store 会逐渐填满并通过背压让上游自然停住。唯一例外是 seek 后：AudioOutput 在
-观察到新 generation 后可预读并保留一块首个有效 PCM，用于内部 PlaybackClock 的 Prepared
-锚点；它不得在暂停时持续填充 backend。内部 PlaybackClock 与该顺序一起冻结或恢复。
+观察到新 generation 后可预读并保留一块首个有效 PCM，用于内部 `AudioPlaybackClockState` 的 Prepared
+锚点；它不得在暂停时持续填充 backend。内部 `AudioPlaybackClockState` 与该顺序一起冻结或恢复。
 
 ## 当前实现范围
 
@@ -521,7 +520,6 @@ playback store 会逐渐填满并通过背压让上游自然停住。唯一例�
 - 设备枚举和设备选择。
 - 音量控制。
 - latency 统计。
-- 内部 PlaybackClock 校准。
 - 多输出设备。
 
 ## 测试范围

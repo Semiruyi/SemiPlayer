@@ -5,8 +5,8 @@
 #include <cstdint>
 namespace semi::contracts::audio_output {
 
-// One slot is used by AudioOutput. The second is reserved for AudioClock.
+// AudioOutput owns the clock, so backend progress has one sink: AudioOutput.
 using AudioOutputRealTimeNotifier = infra::RealTimeNotifier<
-    infra::RealTimeEventSpec<std::uint32_t, 2>>;
+    infra::RealTimeEventSpec<std::uint32_t, 1>>;
 
 } // namespace semi::contracts::audio_output

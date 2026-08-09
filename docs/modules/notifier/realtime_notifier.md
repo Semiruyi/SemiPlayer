@@ -8,7 +8,7 @@
 - `RealTimeNotifier`：事件类型、每类最大 sink 数在编译期声明；运行期拓扑固定，适合实时数据面。
 
 它不感知任何业务事件语义。播放器在装配处定义具体实例，例如
-`AudioOutputRealTimeNotifier`，再把 `AudioFramesConsumed` 等事件加入其中。
+`AudioOutputRealTimeNotifier`，再把确认消费帧数等事件加入其中。
 
 ## 发布路径
 
@@ -36,10 +36,12 @@ Idle -- register_sink --> Idle -- seal --> Sealed -- notify --> Sealed
 
 ```text
 miniaudio callback
-  -> AudioFramesConsumed
+  -> 确认消费帧数（`std::uint32_t`）
   -> AudioOutputRealTimeNotifier
-  -> DefaultAudioOutput（唤醒填充工作线程）
-  -> AudioOutput 内部 AudioPlaybackClockState（预留第二个 sink）
+  -> DefaultAudioOutput::ProgressSink
+  -> active_generation
+  -> AudioOutput 内部 AudioPlaybackClockState
+  -> 唤醒填充工作线程
 ```
 
-只有真正从 PCM ring 读到的媒体帧会产生 `AudioFramesConsumed`；补出的静音不会推进时钟。
+只有真正从 PCM ring 读到的媒体帧会产生确认消费帧数通知；补出的静音不会推进时钟。
