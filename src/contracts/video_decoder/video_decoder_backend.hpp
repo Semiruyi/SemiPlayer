@@ -27,8 +27,10 @@ struct VideoDecoderBackendError {
 using DecodedVideoBatch = std::vector<media::DecodedVideo>;
 
 // Backend boundary for compressed video decoding. Implementations own all
-// native codec state; returned frames own their pixel storage and have no
-// native lifetime dependency. Calls are made exclusively by the domain worker.
+// native codec state; returned frames expose a backend-neutral owner that may
+// retain native reference-counted storage. The domain has no native type
+// dependency, and the owner keeps frame planes alive for consumers. Calls are
+// made exclusively by the domain worker.
 class VideoDecoderBackend {
 public:
     virtual ~VideoDecoderBackend() = default;

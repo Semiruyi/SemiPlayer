@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -35,6 +36,45 @@ using contracts::video_decoder::VideoDecoderBackend;
 using contracts::video_decoder::VideoDecoderBackendError;
 using contracts::video_decoder::VideoDecoderBackendOperation;
 using contracts::demuxer::packet::EncodedPacket;
+
+class TestVideoFrameBuffer final : public contracts::media::VideoFrameBuffer {
+public:
+    explicit TestVideoFrameBuffer(std::uint8_t marker)
+        : bytes_{std::byte{marker}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04}} {}
+
+    [[nodiscard]] contracts::media::VideoPixelFormat pixel_format() const noexcept override {
+        return contracts::media::VideoPixelFormat::Rgba8;
+    }
+
+    [[nodiscard]] std::uint32_t width() const noexcept override {
+        return 2;
+    }
+
+    [[nodiscard]] std::uint32_t height() const noexcept override {
+        return 1;
+    }
+
+    [[nodiscard]] std::size_t plane_count() const noexcept override {
+        return 1;
+    }
+
+    [[nodiscard]] contracts::media::VideoPlaneView
+    plane(std::size_t index) const noexcept override {
+        if (index != 0) {
+            return {};
+        }
+        return contracts::media::VideoPlaneView{
+            .data = bytes_.data(),
+            .size_bytes = bytes_.size(),
+            .stride_bytes = 8,
+        };
+    }
+
+private:
+    std::array<std::byte, 4> bytes_;
+};
+
+contracts::media::DecodedVideo make_decoded_video(std::uint8_t marker);
 
 class FakeVideoDecoderBackend final : public VideoDecoderBackend {
 public:
@@ -59,7 +99,12 @@ public:
             decode_error_.reset();
             return std::unexpected(std::move(error));
         }
-        return decode_output_;
+        if (!decode_marker_) {
+            return DecodedVideoBatch{};
+        }
+        DecodedVideoBatch output;
+        output.emplace_back(make_decoded_video(*decode_marker_));
+        return output;
     }
 
     std::expected<DecodedVideoBatch, VideoDecoderBackendError> drain() override {
@@ -70,7 +115,12 @@ public:
             drain_error_.reset();
             return std::unexpected(std::move(error));
         }
-        return drain_output_;
+        if (!drain_marker_) {
+            return DecodedVideoBatch{};
+        }
+        DecodedVideoBatch output;
+        output.emplace_back(make_decoded_video(*drain_marker_));
+        return output;
     }
 
     void reset() noexcept override { ++reset_calls; }
@@ -82,14 +132,14 @@ public:
         configure_error_ = std::move(error);
     }
 
-    void set_decode_output(DecodedVideoBatch output) {
+    void set_decode_output(std::uint8_t marker) {
         std::lock_guard lock(mutex_);
-        decode_output_ = std::move(output);
+        decode_marker_ = marker;
     }
 
-    void set_drain_output(DecodedVideoBatch output) {
+    void set_drain_output(std::uint8_t marker) {
         std::lock_guard lock(mutex_);
-        drain_output_ = std::move(output);
+        drain_marker_ = marker;
     }
 
     void set_decode_error(VideoDecoderBackendError error) {
@@ -108,8 +158,8 @@ private:
     std::optional<VideoDecoderBackendError> configure_error_;
     std::optional<VideoDecoderBackendError> decode_error_;
     std::optional<VideoDecoderBackendError> drain_error_;
-    DecodedVideoBatch decode_output_;
-    DecodedVideoBatch drain_output_;
+    std::optional<std::uint8_t> decode_marker_;
+    std::optional<std::uint8_t> drain_marker_;
 };
 
 class ThrowingVideoDecoderBackend final : public VideoDecoderBackend {
@@ -247,13 +297,7 @@ VideoPacketQueueItem make_packet_item(std::uint8_t marker, Generation::Value gen
 
 contracts::media::DecodedVideo make_decoded_video(std::uint8_t marker) {
     return contracts::media::DecodedVideo{
-        .width = 2,
-        .height = 1,
-        .pixel_format = contracts::media::VideoPixelFormat::Rgba8,
-        .planes = {contracts::media::VideoPlane{
-            .bytes = {std::byte{marker}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04}},
-            .stride_bytes = 8,
-        }},
+        .buffer = std::make_unique<TestVideoFrameBuffer>(marker),
         .pts_us = 123,
     };
 }
@@ -367,7 +411,7 @@ TEST(DefaultVideoDecoderTest, DecodesVideoPacketsIntoFrameSink) {
     auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
     auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
     auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
-    backend->set_decode_output(DecodedVideoBatch{make_decoded_video(1)});
+    backend->set_decode_output(1);
     source->push(make_packet_item(1, dependencies.generation->current()));
     auto decoder = make_decoder(std::move(dependencies));
 
@@ -380,8 +424,9 @@ TEST(DefaultVideoDecoderTest, DecodesVideoPacketsIntoFrameSink) {
     const auto* frame = std::get_if<VideoFrame>(&*item);
     ASSERT_NE(frame, nullptr);
     EXPECT_EQ(frame->generation(), 0);
-    EXPECT_EQ(frame->decoded().width, 2U);
-    EXPECT_EQ(frame->decoded().height, 1U);
+    ASSERT_NE(frame->decoded().buffer, nullptr);
+    EXPECT_EQ(frame->decoded().buffer->width(), 2U);
+    EXPECT_EQ(frame->decoded().buffer->height(), 1U);
 }
 
 TEST(DefaultVideoDecoderTest, ContinuesReadingAlreadyQueuedPacketsAfterPushingPendingOutput) {
@@ -389,7 +434,7 @@ TEST(DefaultVideoDecoderTest, ContinuesReadingAlreadyQueuedPacketsAfterPushingPe
     auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
     auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
     auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
-    backend->set_decode_output(DecodedVideoBatch{make_decoded_video(1)});
+    backend->set_decode_output(1);
     source->push(make_packet_item(1, dependencies.generation->current()));
     source->push(make_packet_item(2, dependencies.generation->current()));
     auto decoder = make_decoder(std::move(dependencies));
@@ -404,7 +449,7 @@ TEST(DefaultVideoDecoderTest, DrainsAndPublishesEndOfInput) {
     auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
     auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
     auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
-    backend->set_drain_output(DecodedVideoBatch{make_decoded_video(2)});
+    backend->set_drain_output(2);
     source->push(VideoPacketEndOfInput{.generation = dependencies.generation->current()});
     auto decoder = make_decoder(std::move(dependencies));
 
@@ -428,7 +473,7 @@ TEST(DefaultVideoDecoderTest, WaitsForOutputNotFullBeforePushingPendingFrame) {
     auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
     auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
     auto notifier = dependencies.notifier;
-    backend->set_decode_output(DecodedVideoBatch{make_decoded_video(1)});
+    backend->set_decode_output(1);
     sink->set_full(true);
     source->push(make_packet_item(1, dependencies.generation->current()));
     auto decoder = make_decoder(std::move(dependencies));
@@ -451,7 +496,7 @@ TEST(DefaultVideoDecoderTest, ResetsBackendAndDropsStalePacketsWhenGenerationCha
     auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
     auto generation = dependencies.generation;
     auto notifier = dependencies.notifier;
-    backend->set_decode_output(DecodedVideoBatch{make_decoded_video(1)});
+    backend->set_decode_output(1);
     auto decoder = make_decoder(std::move(dependencies));
 
     ASSERT_TRUE(decoder->configure({}).has_value());

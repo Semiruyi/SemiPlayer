@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <variant>
 #include <vector>
@@ -39,22 +41,47 @@ struct VideoCodecConfig {
 
 enum class VideoPixelFormat : std::uint8_t {
     Unknown,
+    Yuv420p,
+    Yuv422p,
+    Yuv444p,
+    Nv12,
+    P010,
     Rgba8,
 };
 
-struct VideoPlane {
-    std::vector<std::byte> bytes;
+// A read-only view into one decoded video plane. The view does not own the
+// memory; the VideoFrameBuffer that returned it must outlive the view.
+struct VideoPlaneView {
+    const std::byte* data = nullptr;
+    std::size_t size_bytes = 0;
     std::uint32_t stride_bytes = 0;
+
+    [[nodiscard]] std::span<const std::byte> bytes() const noexcept {
+        return std::span<const std::byte>(data, size_bytes);
+    }
 };
 
-// Ownership-transferred decoded video. The MVP currently produces one Rgba8
-// plane, but the plane-based representation leaves room for native formats
-// such as NV12 and P010 later.
+// Backend-neutral ownership and access boundary for one decoded video frame.
+// Implementations may own copied memory or retain a reference-counted native
+// buffer. The domain only observes immutable frame metadata and plane views.
+class VideoFrameBuffer {
+public:
+    virtual ~VideoFrameBuffer() = default;
+
+    [[nodiscard]] virtual VideoPixelFormat pixel_format() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
+    [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
+    [[nodiscard]] virtual std::size_t plane_count() const noexcept = 0;
+    [[nodiscard]] virtual VideoPlaneView plane(std::size_t index) const noexcept = 0;
+
+protected:
+    VideoFrameBuffer() = default;
+};
+
+// Ownership-transferred decoded video. The unique buffer owner keeps all plane
+// data alive while the consumer uses the immutable views exposed by the buffer.
 struct DecodedVideo {
-    std::uint32_t width = 0;
-    std::uint32_t height = 0;
-    VideoPixelFormat pixel_format = VideoPixelFormat::Unknown;
-    std::vector<VideoPlane> planes;
+    std::unique_ptr<const VideoFrameBuffer> buffer;
     std::optional<std::int64_t> pts_us;
 };
 

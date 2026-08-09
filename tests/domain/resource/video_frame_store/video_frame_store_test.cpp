@@ -1,6 +1,7 @@
 #include "domain/resource/video_frame_store/video_frame_store.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -11,21 +12,53 @@
 namespace semi::domain {
 namespace {
 
+class TestVideoFrameBuffer final : public contracts::media::VideoFrameBuffer {
+public:
+    explicit TestVideoFrameBuffer(std::uint8_t marker)
+        : bytes_{std::byte{marker}, std::byte{0}, std::byte{0}, std::byte{255}} {}
+
+    [[nodiscard]] contracts::media::VideoPixelFormat pixel_format() const noexcept override {
+        return contracts::media::VideoPixelFormat::Rgba8;
+    }
+
+    [[nodiscard]] std::uint32_t width() const noexcept override {
+        return 1;
+    }
+
+    [[nodiscard]] std::uint32_t height() const noexcept override {
+        return 1;
+    }
+
+    [[nodiscard]] std::size_t plane_count() const noexcept override {
+        return 1;
+    }
+
+    [[nodiscard]] contracts::media::VideoPlaneView
+    plane(std::size_t index) const noexcept override {
+        if (index != 0) {
+            return {};
+        }
+        return contracts::media::VideoPlaneView{
+            .data = bytes_.data(),
+            .size_bytes = bytes_.size(),
+            .stride_bytes = 4,
+        };
+    }
+
+private:
+    std::array<std::byte, 4> bytes_;
+};
+
 VideoFrame make_frame(std::uint8_t marker, Generation::Value generation) {
     contracts::media::DecodedVideo decoded;
-    decoded.width = 1;
-    decoded.height = 1;
-    decoded.pixel_format = contracts::media::VideoPixelFormat::Rgba8;
-    decoded.planes.push_back({
-        .bytes = {std::byte{marker}, std::byte{0}, std::byte{0}, std::byte{255}},
-        .stride_bytes = 4,
-    });
+    decoded.buffer = std::make_unique<TestVideoFrameBuffer>(marker);
     decoded.pts_us = marker;
     return VideoFrame(std::move(decoded), generation);
 }
 
 std::uint8_t frame_marker(const VideoFrame& frame) {
-    return std::to_integer<std::uint8_t>(frame.decoded().planes.front().bytes.front());
+    const auto plane = frame.decoded().buffer->plane(0);
+    return std::to_integer<std::uint8_t>(plane.bytes().front());
 }
 
 TEST(VideoFrameStore, PreservesFifoOrderAndGeneration) {
