@@ -259,7 +259,8 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
     const auto current_generation = generation_->current();
     std::lock_guard lock(mutex_);
     active_generation_.store(current_generation, std::memory_order_release);
-    playback_clock_.configure(configured->playback_format.sample_rate, current_generation);
+    playback_sample_rate_ = configured->playback_format.sample_rate;
+    playback_clock_.reset(current_generation, playback_sample_rate_);
     pending_frame_.reset();
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
@@ -289,10 +290,11 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
         (void)realtime_notifier_->unseal();
     }
 
-    playback_clock_.reset(0);
+    playback_clock_.reset(0, 0);
     std::lock_guard lock(mutex_);
     pending_frame_.reset();
     active_generation_.store(0, std::memory_order_release);
+    playback_sample_rate_ = 0;
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
     discarding_stale_generation_ = false;
@@ -420,7 +422,7 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
         return;
     }
     pending_frame_.reset();
-    playback_clock_.reset(current_generation);
+    playback_clock_.reset(current_generation, playback_sample_rate_);
     phase_ = PlaybackPhase::Running;
     active_generation_.store(current_generation, std::memory_order_release);
     input_not_empty_hint_ = true;
@@ -629,7 +631,8 @@ void DefaultAudioOutput::handle_audio_frame(
 
     pending_frame_.emplace(std::move(frame));
     if (pending_frame_->decoded().pts_us) {
-        (void)playback_clock_.prepare_pcm(current_generation, *pending_frame_->decoded().pts_us);
+        (void)playback_clock_.set_first_pts(current_generation,
+                                            *pending_frame_->decoded().pts_us);
     }
     backend_progress_hint_ = true;
 }

@@ -17,12 +17,12 @@ struct PlaybackPosition {
 // Realtime-safe playback position state owned by DefaultAudioOutput.
 class AudioPlaybackClockState final {
 public:
-    void configure(std::uint32_t sample_rate, std::uint64_t generation) noexcept;
-    void reset(std::uint64_t generation) noexcept;
+    void reset(std::uint64_t generation, std::uint32_t sample_rate) noexcept;
     void pause(std::uint64_t generation) noexcept;
     void resume(std::uint64_t generation) noexcept;
     void finish(std::uint64_t generation) noexcept;
-    [[nodiscard]] bool prepare_pcm(std::uint64_t generation, std::int64_t pts_us) noexcept;
+    [[nodiscard]] bool set_first_pts(std::uint64_t generation,
+                                     std::int64_t pts_us) noexcept;
     void on_audio_frames_consumed(std::uint64_t generation,
                                   std::uint32_t frames) noexcept;
 
@@ -36,12 +36,13 @@ private:
 
     std::atomic<std::uint64_t> sequence_{0};
     std::atomic<std::uint64_t> generation_{0};
-    std::atomic<std::int64_t> anchor_pts_us_{0};
-    std::atomic<std::int64_t> anchor_ns_{0};
+    std::atomic<std::uint64_t> consumed_frames_{0};
+    std::atomic<std::int64_t> first_pts_us_{0};
+    std::atomic<std::int64_t> last_consumed_ns_{0};
+    std::atomic<std::int64_t> frozen_pts_us_{0};
     std::atomic<std::uint32_t> sample_rate_{0};
-    std::atomic<std::int64_t> prepared_pts_us_{0};
-    std::atomic<bool> valid_{false};
-    std::atomic<bool> prepared_{false};
+    std::atomic<bool> has_first_pts_{false};
+    std::atomic<bool> has_frozen_position_{false};
     std::atomic<bool> paused_{false};
     std::atomic<bool> finished_{false};
 };

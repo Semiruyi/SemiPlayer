@@ -162,6 +162,7 @@ private:
 
     std::optional<AudioFrame> pending_frame_;
     std::atomic<Generation::Value> active_generation_{0};
+    std::uint32_t playback_sample_rate_ = 0;
     bool playback_enabled_ = false;
     bool discarding_stale_generation_ = false;
     bool input_not_empty_hint_ = false;

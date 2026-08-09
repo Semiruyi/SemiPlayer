@@ -9,6 +9,15 @@ std::int64_t now_ns() noexcept {
                std::chrono::steady_clock::now().time_since_epoch())
         .count();
 }
+
+std::int64_t frames_to_duration_us(std::uint64_t frames,
+                                   std::uint32_t sample_rate) noexcept {
+    const auto whole_seconds = frames / sample_rate;
+    const auto remainder = frames % sample_rate;
+    return static_cast<std::int64_t>(whole_seconds) * 1'000'000 +
+           static_cast<std::int64_t>(remainder) * 1'000'000 /
+               static_cast<std::int64_t>(sample_rate);
+}
 } // namespace
 
 void AudioPlaybackClockState::begin_write() noexcept {
@@ -19,22 +28,19 @@ void AudioPlaybackClockState::end_write() noexcept {
     sequence_.fetch_add(1, std::memory_order_release);
 }
 
-void AudioPlaybackClockState::configure(std::uint32_t sample_rate,
-                                        std::uint64_t generation) noexcept {
-    sample_rate_.store(sample_rate, std::memory_order_relaxed);
-    reset(generation);
-}
-
-void AudioPlaybackClockState::reset(std::uint64_t generation) noexcept {
+void AudioPlaybackClockState::reset(std::uint64_t generation,
+                                    std::uint32_t sample_rate) noexcept {
     begin_write();
+    sample_rate_.store(sample_rate, std::memory_order_relaxed);
     generation_.store(generation, std::memory_order_relaxed);
-    valid_.store(false, std::memory_order_release);
-    prepared_.store(false, std::memory_order_release);
+    consumed_frames_.store(0, std::memory_order_relaxed);
+    first_pts_us_.store(0, std::memory_order_relaxed);
+    last_consumed_ns_.store(0, std::memory_order_relaxed);
+    frozen_pts_us_.store(0, std::memory_order_relaxed);
+    has_first_pts_.store(false, std::memory_order_release);
+    has_frozen_position_.store(false, std::memory_order_release);
     finished_.store(false, std::memory_order_release);
     paused_.store(false, std::memory_order_release);
-    anchor_pts_us_.store(0, std::memory_order_relaxed);
-    anchor_ns_.store(0, std::memory_order_relaxed);
-    prepared_pts_us_.store(0, std::memory_order_relaxed);
     end_write();
 }
 
@@ -42,15 +48,22 @@ void AudioPlaybackClockState::pause(std::uint64_t generation) noexcept {
     if (generation_.load(std::memory_order_acquire) != generation) {
         return;
     }
-    if (!paused_.exchange(true, std::memory_order_acq_rel)) {
-        const auto current = current_position();
-        begin_write();
-        if (current) {
-            anchor_pts_us_.store(current->pts_us, std::memory_order_relaxed);
-            anchor_ns_.store(now_ns(), std::memory_order_relaxed);
-        }
-        end_write();
+    if (paused_.load(std::memory_order_acquire)) {
+        return;
     }
+
+    const auto current = current_position();
+    begin_write();
+    if (generation_.load(std::memory_order_relaxed) != generation) {
+        end_write();
+        return;
+    }
+    if (current) {
+        frozen_pts_us_.store(current->pts_us, std::memory_order_relaxed);
+        has_frozen_position_.store(true, std::memory_order_release);
+    }
+    paused_.store(true, std::memory_order_release);
+    end_write();
 }
 
 void AudioPlaybackClockState::resume(std::uint64_t generation) noexcept {
@@ -58,9 +71,14 @@ void AudioPlaybackClockState::resume(std::uint64_t generation) noexcept {
         return;
     }
     begin_write();
+    if (generation_.load(std::memory_order_relaxed) != generation) {
+        end_write();
+        return;
+    }
     paused_.store(false, std::memory_order_release);
-    if (valid_.load(std::memory_order_acquire)) {
-        anchor_ns_.store(now_ns(), std::memory_order_relaxed);
+    has_frozen_position_.store(false, std::memory_order_release);
+    if (consumed_frames_.load(std::memory_order_relaxed) > 0) {
+        last_consumed_ns_.store(now_ns(), std::memory_order_relaxed);
     }
     end_write();
 }
@@ -71,30 +89,44 @@ void AudioPlaybackClockState::finish(std::uint64_t generation) noexcept {
     }
     if (const auto current = current_position()) {
         begin_write();
-        anchor_pts_us_.store(current->pts_us, std::memory_order_relaxed);
+        if (generation_.load(std::memory_order_relaxed) != generation) {
+            end_write();
+            return;
+        }
+        frozen_pts_us_.store(current->pts_us, std::memory_order_relaxed);
+        has_frozen_position_.store(true, std::memory_order_release);
         finished_.store(true, std::memory_order_release);
         end_write();
         return;
     }
     begin_write();
+    if (generation_.load(std::memory_order_relaxed) != generation) {
+        end_write();
+        return;
+    }
     finished_.store(true, std::memory_order_release);
     end_write();
 }
 
-bool AudioPlaybackClockState::prepare_pcm(std::uint64_t generation,
-                                           std::int64_t pts_us) noexcept {
-    // Prepared is a one-shot anchor for a fresh time line. A later PCM frame
-    // must not replace a running clock's callback-derived position.
+bool AudioPlaybackClockState::set_first_pts(std::uint64_t generation,
+                                            std::int64_t pts_us) noexcept {
+    // The first PTS is a one-shot anchor for a fresh time line. A later PCM
+    // frame must not replace a running clock's callback-derived position.
     if (generation_.load(std::memory_order_acquire) != generation ||
-        valid_.load(std::memory_order_acquire) ||
-        prepared_.load(std::memory_order_acquire) ||
+        has_first_pts_.load(std::memory_order_acquire) ||
         finished_.load(std::memory_order_acquire)) {
         return false;
     }
     begin_write();
-    prepared_pts_us_.store(pts_us, std::memory_order_relaxed);
-    prepared_.store(true, std::memory_order_release);
-    valid_.store(false, std::memory_order_release);
+    if (generation_.load(std::memory_order_relaxed) != generation ||
+        has_first_pts_.load(std::memory_order_relaxed) ||
+        finished_.load(std::memory_order_relaxed)) {
+        end_write();
+        return false;
+    }
+    first_pts_us_.store(pts_us, std::memory_order_relaxed);
+    has_first_pts_.store(true, std::memory_order_release);
+    has_frozen_position_.store(false, std::memory_order_release);
     finished_.store(false, std::memory_order_release);
     end_write();
     return true;
@@ -108,21 +140,25 @@ void AudioPlaybackClockState::on_audio_frames_consumed(
         return;
     }
     begin_write();
-    const auto duration_us = static_cast<std::int64_t>(frames) * 1'000'000 /
-                             static_cast<std::int64_t>(sample_rate);
-    if (valid_.load(std::memory_order_relaxed)) {
-        anchor_pts_us_.store(anchor_pts_us_.load(std::memory_order_relaxed) + duration_us,
-                             std::memory_order_relaxed);
-    } else if (prepared_.load(std::memory_order_relaxed)) {
-        anchor_pts_us_.store(prepared_pts_us_.load(std::memory_order_relaxed) + duration_us,
-                             std::memory_order_relaxed);
-    } else {
+    if (generation_.load(std::memory_order_relaxed) != generation ||
+        !has_first_pts_.load(std::memory_order_relaxed) ||
+        sample_rate_.load(std::memory_order_relaxed) == 0) {
         end_write();
         return;
     }
-    anchor_ns_.store(now_ns(), std::memory_order_relaxed);
-    prepared_.store(false, std::memory_order_release);
-    valid_.store(true, std::memory_order_release);
+
+    const auto consumed_frames =
+        consumed_frames_.fetch_add(frames, std::memory_order_relaxed) + frames;
+    last_consumed_ns_.store(now_ns(), std::memory_order_relaxed);
+    if (paused_.load(std::memory_order_relaxed)) {
+        frozen_pts_us_.store(
+            first_pts_us_.load(std::memory_order_relaxed) +
+                frames_to_duration_us(consumed_frames, sample_rate),
+            std::memory_order_relaxed);
+        has_frozen_position_.store(true, std::memory_order_release);
+    } else {
+        has_frozen_position_.store(false, std::memory_order_release);
+    }
     finished_.store(false, std::memory_order_release);
     end_write();
 }
@@ -133,29 +169,32 @@ std::optional<PlaybackPosition> AudioPlaybackClockState::current_position() cons
         if (sequence & 1U) continue;
         const bool paused = paused_.load(std::memory_order_acquire);
         const bool finished = finished_.load(std::memory_order_acquire);
+        const bool has_first_pts = has_first_pts_.load(std::memory_order_acquire);
+        const auto sample_rate = sample_rate_.load(std::memory_order_relaxed);
+        const auto consumed_frames = consumed_frames_.load(std::memory_order_relaxed);
         std::optional<PlaybackPosition> result;
-        if (paused || finished) {
-        if (valid_.load(std::memory_order_acquire)) {
-            result = PlaybackPosition{
-                .generation = generation_.load(std::memory_order_relaxed),
-                .pts_us = anchor_pts_us_.load(std::memory_order_relaxed),
-            };
-        } else if (paused && prepared_.load(std::memory_order_relaxed)) {
-            result = PlaybackPosition{
-                .generation = generation_.load(std::memory_order_relaxed),
-                .pts_us = prepared_pts_us_.load(std::memory_order_relaxed),
-            };
-        }
-        } else if (valid_.load(std::memory_order_acquire)) {
-            const auto rate = sample_rate_.load(std::memory_order_relaxed);
-            if (rate != 0) {
-                const auto elapsed = std::max<std::int64_t>(
-                    0, now_ns() - anchor_ns_.load(std::memory_order_relaxed));
+        if (has_first_pts && sample_rate != 0 && (paused || finished)) {
+            if (has_frozen_position_.load(std::memory_order_acquire)) {
                 result = PlaybackPosition{
                     .generation = generation_.load(std::memory_order_relaxed),
-                    .pts_us = anchor_pts_us_.load(std::memory_order_relaxed) + elapsed / 1'000,
+                    .pts_us = frozen_pts_us_.load(std::memory_order_relaxed),
+                };
+            } else if (paused || consumed_frames > 0) {
+                result = PlaybackPosition{
+                    .generation = generation_.load(std::memory_order_relaxed),
+                    .pts_us = first_pts_us_.load(std::memory_order_relaxed) +
+                              frames_to_duration_us(consumed_frames, sample_rate),
                 };
             }
+        } else if (has_first_pts && sample_rate != 0 && consumed_frames > 0) {
+            const auto elapsed = std::max<std::int64_t>(
+                0, now_ns() - last_consumed_ns_.load(std::memory_order_relaxed));
+            result = PlaybackPosition{
+                .generation = generation_.load(std::memory_order_relaxed),
+                .pts_us = first_pts_us_.load(std::memory_order_relaxed) +
+                          frames_to_duration_us(consumed_frames, sample_rate) +
+                          elapsed / 1'000,
+            };
         }
         if (sequence_.load(std::memory_order_acquire) == sequence) return result;
     }
