@@ -6,6 +6,7 @@
 #include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
+#include "domain/worker/video_decoder/video_decoder.hpp"
 #include "infrastructure/log/log.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
@@ -72,13 +73,15 @@ struct ApiLayer::Impl {
          std::shared_ptr<domain::AudioResampler> injected_audio_resampler,
          std::shared_ptr<domain::AudioOutput> injected_audio_output,
          std::shared_ptr<infra::Notifier> injected_notifier,
-         std::shared_ptr<domain::Generation> injected_generation)
+         std::shared_ptr<domain::Generation> injected_generation,
+         std::shared_ptr<domain::VideoDecoder> injected_video_decoder)
         : demuxer(std::move(injected_demuxer)),
           audio_decoder(std::move(injected_audio_decoder)),
           audio_resampler(std::move(injected_audio_resampler)),
           audio_output(std::move(injected_audio_output)),
           notifier(std::move(injected_notifier)),
-          generation(std::move(injected_generation)) {}
+          generation(std::move(injected_generation)),
+          video_decoder(std::move(injected_video_decoder)) {}
 
     struct Task {
         Task(CommandHandle task_handle, Command task_command)
@@ -107,6 +110,7 @@ struct ApiLayer::Impl {
     std::shared_ptr<domain::AudioOutput> audio_output;
     std::shared_ptr<infra::Notifier> notifier;
     std::shared_ptr<domain::Generation> generation;
+    std::shared_ptr<domain::VideoDecoder> video_decoder;
     std::shared_ptr<infra::Notifier::Subscription> playback_finished_subscription;
     PlayerState player_state = PlayerState::Idle;
     domain::Generation::Value active_generation = 0;
@@ -231,9 +235,22 @@ semi_status_t output_status(const domain::AudioOutputError& error) noexcept {
     return SEMI_ERR_INTERNAL;
 }
 
+semi_status_t video_decoder_status(const domain::VideoDecoderError& error) noexcept {
+    switch (error.code) {
+    case domain::VideoDecoderErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::VideoDecoderErrorCode::BackendFailure:
+        return error.backend_error.has_value() ? SEMI_ERR_INVALID_RESOURCE : SEMI_ERR_INTERNAL;
+    }
+    return SEMI_ERR_INTERNAL;
+}
+
 void close_pipeline(ApiLayer::Impl& impl) noexcept {
     if (impl.demuxer) {
         impl.demuxer->close();
+    }
+    if (impl.video_decoder) {
+        impl.video_decoder->unconfigure();
     }
     if (impl.audio_decoder) {
         impl.audio_decoder->unconfigure();
@@ -282,6 +299,29 @@ open_demuxer(ApiLayer::Impl& impl, const std::string& source, bool replaced_medi
     }
     return std::unexpected(make_failure(SEMI_ERR_INTERNAL,
                                         idle_state_if_replaced(replaced_media)));
+}
+
+std::expected<void, CommandExecution>
+configure_video_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& opened) {
+    if (!opened.video.has_value()) {
+        return {};
+    }
+
+    if (!impl.video_decoder) {
+        SEMI_LOG_ERROR("video stream is present but video decoder is not assembled");
+        close_pipeline(impl);
+        return std::unexpected(make_failure(SEMI_ERR_INTERNAL, PlayerState::Idle));
+    }
+
+    auto configured = impl.video_decoder->configure(opened.video->config);
+    if (!configured) {
+        SEMI_LOG_ERROR("video decoder configure failed: {}", configured.error().message);
+        close_pipeline(impl);
+        return std::unexpected(
+            make_failure(video_decoder_status(configured.error()), PlayerState::Idle));
+    }
+
+    return {};
 }
 
 std::expected<void, CommandExecution>
@@ -353,6 +393,11 @@ CommandExecution execute_open(const OpenCommand& command,
     auto opened = open_demuxer(impl, command.source, replaced_media);
     if (!opened) {
         return opened.error();
+    }
+
+    auto video_configured = configure_video_pipeline(impl, *opened);
+    if (!video_configured) {
+        return video_configured.error();
     }
 
     auto audio_configured = configure_audio_pipeline(impl, *opened);
@@ -559,13 +604,15 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                    std::shared_ptr<domain::AudioResampler> audio_resampler,
                    std::shared_ptr<domain::AudioOutput> audio_output,
                    std::shared_ptr<infra::Notifier> notifier,
-                   std::shared_ptr<domain::Generation> generation)
+                   std::shared_ptr<domain::Generation> generation,
+                   std::shared_ptr<domain::VideoDecoder> video_decoder)
     : impl_(std::make_unique<Impl>(std::move(demuxer),
                                    std::move(audio_decoder),
                                    std::move(audio_resampler),
                                    std::move(audio_output),
                                    std::move(notifier),
-                                   std::move(generation))) {
+                                   std::move(generation),
+                                   std::move(video_decoder))) {
     if (impl_->notifier) {
         impl_->playback_finished_subscription =
             impl_->notifier->subscribe<domain::AudioPlaybackFinished>(

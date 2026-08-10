@@ -4,15 +4,18 @@
 #include "domain/resource/audio_frame_store/audio_frame_store.hpp"
 #include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
 #include "domain/resource/generation/generation.hpp"
-#include "domain/resource/video_packet_queue/video_packet_sink.hpp"
+#include "domain/resource/video_frame_store/video_frame_sink.hpp"
+#include "domain/resource/video_packet_queue/video_packet_queue.hpp"
 #include "domain/worker/audio_decoder/default_audio_decoder.hpp"
 #include "domain/worker/audio_output/default_audio_output.hpp"
 #include "domain/worker/audio_resampler/default_audio_resampler.hpp"
 #include "domain/worker/demuxer/default_demuxer.hpp"
+#include "domain/worker/video_decoder/default_video_decoder.hpp"
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.hpp"
 #include "infrastructure/log/log.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
@@ -21,11 +24,11 @@
 namespace semi::ioc {
 namespace {
 
-class DiscardingVideoPacketSink final : public domain::VideoPacketSink {
+class DiscardingVideoFrameSink final : public domain::VideoFrameSink {
 public:
-    [[nodiscard]] domain::VideoPacketPushResult
-    try_push(domain::VideoPacketQueueItem&&) override {
-        return domain::VideoPacketPushResult::Accepted;
+    [[nodiscard]] domain::VideoFramePushResult
+    try_push(domain::VideoFrameStoreItem&&) override {
+        return domain::VideoFramePushResult::Accepted;
     }
 };
 
@@ -49,7 +52,8 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
         auto generation = std::make_shared<domain::Generation>(notifier);
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
-        auto video_packet_sink = std::make_shared<DiscardingVideoPacketSink>();
+        auto video_packet_queue = std::make_shared<domain::VideoPacketQueue>(notifier);
+        auto video_frame_sink = std::make_shared<DiscardingVideoFrameSink>();
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
@@ -59,11 +63,13 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<infra::ffmpeg::audio_decoder::FfmpegAudioDecoderBackend>();
         auto audio_resampler_backend =
             std::make_shared<infra::ffmpeg::audio_resampler::FfmpegAudioResamplerBackend>();
+        auto video_decoder_backend =
+            std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>();
         auto audio_output_backend =
             std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(audio_realtime_notifier);
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
-            demuxer_backend, audio_packet_queue, notifier, generation, video_packet_sink);
+            demuxer_backend, audio_packet_queue, notifier, generation, video_packet_queue);
         auto audio_decoder = std::make_shared<domain::DefaultAudioDecoder>(
             audio_packet_queue, decoded_audio_frame_store, audio_decoder_backend, notifier, generation);
         auto audio_resampler = std::make_shared<domain::DefaultAudioResampler>(
@@ -71,9 +77,17 @@ bool IoCContainer::assemble() noexcept {
             generation);
         auto audio_output = std::make_shared<domain::DefaultAudioOutput>(
             playback_audio_frame_store, audio_output_backend, notifier, audio_realtime_notifier, generation);
+        auto video_decoder = std::make_shared<domain::DefaultVideoDecoder>(
+            video_packet_queue, video_frame_sink, video_decoder_backend, notifier, generation);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
-            demuxer, audio_decoder, audio_resampler, audio_output, notifier, generation);
+            demuxer,
+            audio_decoder,
+            audio_resampler,
+            audio_output,
+            notifier,
+            generation,
+            video_decoder);
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");
             return false;
@@ -83,10 +97,12 @@ bool IoCContainer::assemble() noexcept {
         audio_packet_queue_ = std::move(audio_packet_queue);
         decoded_audio_frame_store_ = std::move(decoded_audio_frame_store);
         playback_audio_frame_store_ = std::move(playback_audio_frame_store);
+        video_packet_queue_ = std::move(video_packet_queue);
         demuxer_ = std::move(demuxer);
         audio_decoder_ = std::move(audio_decoder);
         audio_resampler_ = std::move(audio_resampler);
         audio_output_ = std::move(audio_output);
+        video_decoder_ = std::move(video_decoder);
         api_layer_ = std::move(api_layer);
     } catch (...) {
         SEMI_LOG_ERROR("ApiLayer assemble failed");
@@ -113,7 +129,9 @@ bool IoCContainer::dispose() noexcept {
     audio_output_.reset();
     audio_resampler_.reset();
     audio_decoder_.reset();
+    video_decoder_.reset();
     demuxer_.reset();
+    video_packet_queue_.reset();
     playback_audio_frame_store_.reset();
     decoded_audio_frame_store_.reset();
     audio_packet_queue_.reset();

@@ -12,6 +12,7 @@ class AudioOutput;
 class AudioResampler;
 class Demuxer;
 class Generation;
+class VideoDecoder;
 }
 
 namespace semi::infra {
@@ -65,7 +66,8 @@ public:
                       std::shared_ptr<domain::AudioResampler> audio_resampler = nullptr,
                       std::shared_ptr<domain::AudioOutput> audio_output = nullptr,
                       std::shared_ptr<infra::Notifier> notifier = nullptr,
-                      std::shared_ptr<domain::Generation> generation = nullptr);
+                      std::shared_ptr<domain::Generation> generation = nullptr,
+                      std::shared_ptr<domain::VideoDecoder> video_decoder = nullptr);
     ~ApiLayer();
 
     ApiLayer(const ApiLayer&) = delete;

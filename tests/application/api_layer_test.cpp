@@ -5,6 +5,7 @@
 #include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
+#include "domain/worker/video_decoder/video_decoder.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
@@ -114,6 +115,28 @@ public:
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
 
+class FakeVideoDecoder final : public domain::VideoDecoder {
+public:
+    bool fail_configure = false;
+    int configure_calls = 0;
+    int unconfigure_calls = 0;
+
+    std::expected<void, domain::VideoDecoderError>
+    configure(const contracts::media::VideoCodecConfig&) override {
+        ++configure_calls;
+        if (fail_configure) {
+            return std::unexpected(domain::VideoDecoderError{
+                .code = domain::VideoDecoderErrorCode::BackendFailure,
+                .message = "video decoder configure failed",
+                .backend_error = std::nullopt,
+            });
+        }
+        return {};
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
 class FakeAudioResampler final : public domain::AudioResampler {
 public:
     int configure_calls = 0;
@@ -189,6 +212,7 @@ public:
 struct FakePipeline {
     std::shared_ptr<FakeDemuxer> demuxer = std::make_shared<FakeDemuxer>();
     std::shared_ptr<FakeAudioDecoder> decoder = std::make_shared<FakeAudioDecoder>();
+    std::shared_ptr<FakeVideoDecoder> video_decoder = std::make_shared<FakeVideoDecoder>();
     std::shared_ptr<FakeAudioResampler> resampler = std::make_shared<FakeAudioResampler>();
     std::shared_ptr<FakeAudioOutput> output = std::make_shared<FakeAudioOutput>();
     std::shared_ptr<infra::DefaultNotifier> notifier = std::make_shared<infra::DefaultNotifier>();
@@ -201,7 +225,8 @@ ApiLayer make_layer(const FakePipeline& pipeline) {
                     pipeline.resampler,
                     pipeline.output,
                     pipeline.notifier,
-                    pipeline.generation);
+                    pipeline.generation,
+                    pipeline.video_decoder);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
@@ -222,6 +247,7 @@ TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
     EXPECT_EQ(result.media_info.video_width, 1920U);
     EXPECT_EQ(result.media_info.video_height, 1080U);
     EXPECT_EQ(pipeline.decoder->configure_calls, 1);
+    EXPECT_EQ(pipeline.video_decoder->configure_calls, 1);
     EXPECT_EQ(pipeline.output->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->last_input_format.sample_rate, 48000U);
