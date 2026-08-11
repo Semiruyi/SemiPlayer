@@ -52,6 +52,7 @@ pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
     libavformat
     libavutil
     libswresample
+    libswscale
 )
 
 add_library(semi_player_ffmpeg INTERFACE)

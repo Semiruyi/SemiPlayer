@@ -1,5 +1,6 @@
 add_subdirectory(demuxer)
 add_subdirectory(audio_decoder)
 add_subdirectory(video_decoder)
+add_subdirectory(video_renderer)
 add_subdirectory(audio_resampler)
 add_subdirectory(audio_output)

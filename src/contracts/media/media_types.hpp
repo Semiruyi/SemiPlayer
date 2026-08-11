@@ -85,6 +85,18 @@ struct DecodedVideo {
     std::optional<std::int64_t> pts_us;
 };
 
+// Host-neutral rendered video. The renderer owns a tightly described CPU
+// pixel buffer so downstream presentation code does not depend on FFmpeg
+// native frame lifetime or pixel-plane layout.
+struct RenderedVideo {
+    VideoPixelFormat pixel_format = VideoPixelFormat::Rgba8;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    std::uint32_t stride_bytes = 0;
+    std::vector<std::byte> pixels;
+    std::optional<std::int64_t> pts_us;
+};
+
 struct AudioCodecConfig {
     CodecCommon common;
     std::uint32_t sample_rate = 0;
