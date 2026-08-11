@@ -42,7 +42,7 @@ void handle_open(src):
     current_media = Some(src)
     duration = media_info.duration_us
 
-    handle.resolve(Ok(media_info))      // 返回 MediaInfo 给 Dart
+    handle.resolve(Ok(media_info))      // 返回 MediaInfo 给调用方
 ```
 
 ---
@@ -64,7 +64,7 @@ void handle_open(src):
 ## 关键设计决策
 
 ### open 不管水位
-open 不预填充队列、不启动解封装/解码线程。只做"打开 + 探测 + 配置解码器 + Ready"。数据流动完全交给 play。这样 open 快（只等探测拿 MediaInfo），Dart 能立刻拿到媒体信息显示 UI。
+open 不预填充队列、不启动解封装/解码线程。只做"打开 + 探测 + 配置解码器 + Ready"。数据流动完全交给 play。这样 open 快（只等探测拿 MediaInfo），调用方能立刻拿到媒体信息显示 UI。
 
 ### open 完成 = 探测完成
 open 的 resolve 只等探测阶段（`demuxer.open` 拿到 MediaInfo），不等预填充。MediaInfo 在探测阶段就有，无需等队列填满。

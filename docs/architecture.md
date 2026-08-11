@@ -2,12 +2,12 @@
 
 ## Context
 
-SemiPlayer 是一个 C++ 实现的跨平台播放器：FFmpeg 解封装/解码、miniaudio 播音频、最终导出 C ABI 供 Flutter(Dart) 宿主经 dart:ffi 调用。经多轮讨论，架构演进为：
+SemiPlayer 是一个 C++ 实现的跨平台播放器：FFmpeg 解封装/解码、miniaudio 播音频、最终导出 C ABI 供上层宿主调用。经多轮讨论，架构演进为：
 
 - **单例全局**，对外接口无需 handle
 - **时钟与音频播放都在 C++**：miniaudio 回调里建立音频主时钟，视频同步线程读它
 - **解耦管道**：demux→decode 用 `std::condition_variable`+`std::mutex` 有界队列；decode→声卡用无锁 SPSC 环形队列 + 生产方 sleep 背压 + 回调 try/静音
-- **命令队列 + 句柄（对外控制模型）**：Dart 调用 → 往 ApiLayer 私有命令队列投递命令 → 立即返回句柄（UI 永不阻塞）。ApiLayer 的唯一命令线程串行执行命令；`await` 消费结果和 handle，`cancel` 只请求取消尚未开始的任务。控制信号不走通知中心
+- **命令队列 + 句柄（对外控制模型）**：上层调用 → 往 ApiLayer 私有命令队列投递命令 → 立即返回句柄（UI 永不阻塞）。ApiLayer 的唯一命令线程串行执行命令；`await` 消费结果和 handle，`cancel` 只请求取消尚未开始的任务。控制信号不走通知中心
 - **去中心化状态**：不用上帝模块控制全局状态，每个模块自管状态
 - **依赖注入（DI）**：IoCContainer 作为装配期装配器，按 DAG 拓扑顺序构造所有模块，构造时注入 `std::shared_ptr<依赖>`。依赖图无真循环（资源/基础设施不反向依赖工作模块），故全部 `std::shared_ptr` 注入，无需 `std::weak_ptr` 破环
 - **世代号（generation）机制**：seek/取消进行中的事务靠"数据标记识别"而非"时序协调"，消除主动清理和模块间顺序依赖，规避死锁
@@ -57,25 +57,25 @@ seek 涉及三层数据正确性，世代号只管其中一层：
 
 ## 命令与句柄机制（对外控制模型）
 
-Dart 侧（UI 线程）与 C++ 的交互统一走"投递命令 + 句柄"，保证 UI 永不阻塞、控制权清晰。
+上层宿主（UI 线程）与 C++ 的交互统一走"投递命令 + 句柄"，保证 UI 永不阻塞、控制权清晰。
 
 ### 基准原则
 
-1. **命令模式**：所有 Dart 调用 → 往 ApiLayer 命令队列投递命令 → 立即返回句柄。UI 线程不阻塞。
+1. **命令模式**：所有宿主调用 → 往 ApiLayer 命令队列投递命令 → 立即返回句柄。UI 线程不阻塞。
 2. **串行执行**：ApiLayer 的唯一命令线程串行执行命令队列，一条一条来，天然无跨命令并发竞争。
 3. **句柄能力**：每个句柄可 `await`（拿结果、消费 handle）+ 可 `cancel`。
 4. **忠诚执行**：播放器忠实执行队列里的每条命令，**不擅自跳过/合并**。所有命令一视同仁——进队列、忠实执行、完成才 resolve，无中间态。"聪明"的事（节流、合并、跳过旧 seek）由使用方用 cancel/await 自行控制。seek 是昂贵操作，使用方应清楚其成本并主动管理频率。
 5. **取消语义**：队列里未开始的命令 → `cancel` 标为取消请求，但仍由命令线程取出并完成取消通知；已开始执行的命令 → 让它跑完（FFmpeg 操作不可打断）。**使用方用 cancel 实现"只保留最新 seek"等策略**，而非播放器内建覆盖。
 6. **非法顺序检查**：命令执行前校验状态（未 open 就 play 等），非法则返回错误不执行。
-7. **业务侧自治**：命令数量/节奏/时延由 Dart 业务侧自行控制，C++ 忠实执行不替它决策。
+7. **业务侧自治**：命令数量/节奏/时延由上层业务侧自行控制，C++ 忠实执行不替它决策。
 
 ### 句柄设计
 
 ```
 CommandHandle {
   id: uint64_t,             // 命令唯一 id
-  cancel 标志/通道,         // Dart 调 handle.cancel() → 设标志
-  done: std::promise/std::future,    // Dart 可 await 拿结果(如 open 的 MediaInfo) 或 () 或错误
+  cancel 标志/通道,         // 宿主调 handle.cancel() → 设标志
+  done: std::promise/std::future,    // 宿主可 await 拿结果(如 open 的 MediaInfo) 或 () 或错误
 }
 ```
 
@@ -84,7 +84,7 @@ ApiLayer 命令线程执行每条命令前检查取消标志；执行完写入�
 ### 控制流
 
 ```
-Dart 调用 ──▶ ApiLayer 投递 Command 到队列 ──▶ 立即返回 CommandHandle
+宿主调用 ──▶ ApiLayer 投递 Command 到队列 ──▶ 立即返回 CommandHandle
 ApiLayer 命令线程串行取 Command:
   - 检查 cancel → 取消则跳过
   - 检查状态合法性 → 非法则 done.resolve(Err)
@@ -137,7 +137,7 @@ ApiLayer 命令线程串行取 Command:
 | **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取 CPU 原生格式帧（NV12/P010）→ `sws_scale` 转 RGBA（CPU）→ 喂 VideoRenderedStore。**纯 CPU 转换，不碰 GPU、不碰字幕** |
 | **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
 | **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
-| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付 Flutter。**回归纯粹末端消费者，不再驱动渲染/合成** |
+| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付宿主呈现层。**回归纯粹末端消费者，不再驱动渲染/合成** |
 | **AudioOutput** | 1 个 worker + miniaudio 实时回调 | 取重采样 PCM（丢弃旧 generation）→ 送声卡；内部维护 PlaybackClock |
 
 ### 🚪 接口层
@@ -179,7 +179,7 @@ ApiLayer 命令线程串行取 Command:
 | VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
-| VideoSync | FinalFrameStore, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付 Flutter；Notifier 唤醒（FinalReady 等）|
+| VideoSync | FinalFrameStore, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付宿主呈现层；Notifier 唤醒（FinalReady 等）|
 | AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock；GenerationChanged 唤醒 stale 维护 |
 | Generation | Notifier | `bump()` 原子递增后发送一次 GenerationChanged；通知只是唤醒 hint，消费者仍比较 current() |
 | ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
@@ -222,7 +222,7 @@ ApiLayer 命令线程串行取 Command:
 ### 控制流（命令串行派发）
 
 ```
-Dart 调用 ──▶ ApiLayer 投递 Command ──▶ 返回 CommandHandle (UI 不阻塞)
+宿主调用 ──▶ ApiLayer 投递 Command ──▶ 返回 CommandHandle (UI 不阻塞)
 ApiLoop 串行执行 (忠实执行, 不跳过/合并):
   play/pause → 调对应模块 set_paused(); 模块自洽(时钟冻结/miniaudio设备暂停); 队列满背压自然停上游
   seek(pos)  → ApiLoop 顺序调各模块编排 (demuxer/视频decoder/音频decoder/字幕decoder/clock); 完成才 resolve
@@ -241,7 +241,7 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 
 2. **数据标记 > 时序协调**：跨模块数据正确性靠 generation 标记识别，不靠"在正确时刻清空"。这是规避死锁、实现"资源持有者零改动"、让取消 seek 免费的关键。
 
-3. **命令串行 + 句柄**：控制走命令队列串行派发。Dart 投递命令拿句柄、UI 不阻塞、可 await 可 cancel。并发节奏由业务侧自治。
+3. **命令串行 + 句柄**：控制走命令队列串行派发。宿主投递命令拿句柄、UI 不阻塞、可 await 可 cancel。并发节奏由业务侧自治。
 
 4. **依赖注入（DI）**：模块构造期由 IoCContainer 注入 `std::shared_ptr<依赖>`，依赖关系写在构造函数签名里显式可见、可单测 mock。依赖图是 DAG 无真环，全部 `std::shared_ptr` 注入，无 `std::weak_ptr`、无运行时服务定位。
 
@@ -256,8 +256,8 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 - ❌ 各模块状态机与事件响应的细节（下一阶段讨论）
 - ❌ 对外 API 函数签名（待地基确认后）
 - ❌ demux/decode/miniaudio/同步内部实现
-- ❌ 平台纹理胶水层（硬解帧上 Flutter texture）
-- ❌ dart:ffi 绑定 + Dart 侧胶水
+- ❌ 平台纹理胶水层（硬解帧交付宿主呈现层）
+- ❌ 各宿主语言的绑定与胶水
 
 ---
 

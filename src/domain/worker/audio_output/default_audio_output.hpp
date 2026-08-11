@@ -138,6 +138,7 @@ private:
     void handle_backend_failure(
         AudioOutputBackendError error,
         std::optional<Generation::Value> generation_override = std::nullopt) noexcept;
+    void notify_playback_position_ready_if_needed() noexcept;
     void notify_backend_failure(AudioOutputBackendError error, Generation::Value generation) noexcept;
     void notify_playback_finished(Generation::Value generation) noexcept;
     void on_audio_frames_consumed(std::uint32_t confirmed_frames) noexcept;
@@ -170,6 +171,8 @@ private:
     bool discarding_stale_generation_ = false;
     bool input_not_empty_hint_ = false;
     std::atomic_bool backend_progress_hint_ = false;
+    std::atomic_bool playback_position_ready_hint_ = false;
+    std::atomic_bool playback_position_ready_notified_ = false;
     AudioPlaybackClockState playback_clock_;
 };
 

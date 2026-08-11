@@ -174,7 +174,7 @@ struct FfmpegVideoDecoder {             // 具体实现,依赖 FFmpeg + GpuDevic
 - **解码是吞吐瓶颈**:软解 1080p 吃满一个 CPU 核、4K/HEVC 扛不住;硬解(NVDEC 专用芯片)降到几 % CPU,数量级差异。值得用硬件。
 - **格式转换不是瓶颈**:sws_scale 转 NV12→RGBA 约 1-3ms/帧(CPU),30fps 占不到单核 10%。
 - **合成更不是瓶颈**:逐像素 alpha 叠加 <1ms/帧;字幕几秒才变一次,大多数帧原样复制。
-- **致命点**:copy-back 路线下,转换/合成的成果必须回 CPU(下游在 CPU + 交付 Flutter 要 CPU buffer)。GPU 转完再 download = 两次 GPU↔CPU 拷贝 + 同步,可能比 CPU 直接做还慢。**硬件加速用完还要回 CPU,那这段硬件就白做了**。
+- **致命点**:copy-back 路线下,转换/合成的成果必须回 CPU(下游在 CPU + 交付宿主需要 CPU buffer)。GPU 转完再 download = 两次 GPU↔CPU 拷贝 + 同步,可能比 CPU 直接做还慢。**硬件加速用完再回 CPU,那这段硬件就白做了**。
 
 > 要点:硬件加速不是越多越好,用在瓶颈且成果能留在硬件的场景。格式转换/合成虽能 GPU 化,但成果必须回 CPU,拷贝/同步开销抵消算力收益,得不偿失。
 
@@ -200,7 +200,7 @@ VideoDecoder 解完硬解帧立刻 download,喂 VideoFrameStore 的是 CPU 帧�
 
 ## 阶段二:GPU 直通升级路径(本阶段不实现)
 
-> **为什么分两阶段**:MVP(阶段一)走 copy-back 快速验证整条管道能跑、能出画面,把可跑成果兜底;阶段二再升级零拷贝 GPU 直通,消除 download 的 GPU→CPU 拷贝。分阶段的理由:① Flutter CPU buffer 接入最通用、跨平台最简单,先保证能跑;② download 开销可接受(1080p 1.3-4ms/帧,硬解收益仍保留一个数量级);③ 直通的复杂度集中在中后段(纹理共享/shader),前置依赖(硬解/PlaybackClock)和 copy-back 共用,先跑通再升级风险低;④ 做完 copy-back 对"为什么 download"有真实体感,再做直通时设计决策更扎实。
+> **为什么分两阶段**:MVP(阶段一)走 copy-back 快速验证整条管道能跑、能出画面,把可跑成果兜底;阶段二再升级零拷贝 GPU 直通,消除 download 的 GPU→CPU 拷贝。分阶段的理由:① CPU buffer 接入最通用、跨平台最简单,先保证能跑;② download 开销可接受(1080p 1.3-4ms/帧,硬解收益仍保留一个数量级);③ 直通的复杂度集中在中后段(纹理共享/shader),前置依赖(硬解/PlaybackClock)和 copy-back 共用,先跑通再升级风险低;④ 做完 copy-back 对"为什么 download"有真实体感,再做直通时设计决策更扎实。
 
 ### 直通的完整数据流(阶段二目标)
 
@@ -211,10 +211,10 @@ VideoDecoder 解完硬解帧立刻 download,喂 VideoFrameStore 的是 CPU 帧�
                                                                       ↓
             [Compositor GPU合成]←SubtitleFrameStore(GPU上传的字幕位图)
                     ↓
-            FinalFrameStore(GPU texture)→[VideoSync]→Flutter(纹理共享,零拷贝)
+            FinalFrameStore(GPU texture)→[VideoSync]→宿主呈现层(纹理共享,零拷贝)
 ```
 
-对比 copy-back:消除 3 次 GPU↔CPU 往返(硬解帧 download、字幕上传、最终帧 upload 给 Flutter),全程 GPU 零拷贝。
+对比 copy-back:消除 3 次 GPU↔CPU 往返(硬解帧 download、字幕上传、最终帧交付宿主),全程 GPU 零拷贝。
 
 ### GpuDevice 阶段二新增能力(抽象基类加方法)
 
@@ -222,7 +222,7 @@ VideoDecoder 解完硬解帧立刻 download,喂 VideoFrameStore 的是 CPU 帧�
 |---------|------|--------|
 | `create_shader_pipeline(desc)` | 建 GPU shader(顶点/片元/采样器/render target) | VideoRenderer(NV12→RGBA)、Compositor(叠加) |
 | `alloc_texture(fmt, w, h)` | 分配目标 GPU texture(装转换/合成结果) | VideoRenderer、Compositor |
-| `shared_handle_for_flutter(tex)` | 跨上下文纹理共享(D3D11 shared handle / Vulkan external memory),给 Flutter ExternalTexture 零拷贝 | 平台纹理交付层 |
+| `shared_handle_for_host(tex)` | 跨上下文纹理共享(D3D11 shared handle / Vulkan external memory),给宿主呈现层零拷贝 | 平台纹理交付层 |
 | `upload_to_texture(cpu_buf)` | CPU buffer→GPU texture 上传(字幕位图上 GPU) | SubtitleRenderer |
 
 各后端派生类(D3D11GpuDevice/VulkanGpuDevice/...)新增对应能力。抽象基类扩充,消费者按需调用。
@@ -239,16 +239,16 @@ VideoDecoder 解完硬解帧立刻 download,喂 VideoFrameStore 的是 CPU 帧�
 | SubtitleFrameStore | CPU RGBA 位图 | GPU texture 句柄 |
 | Compositor | CPU 像素叠加 | GPU shader 合成 + alloc_texture 目标 |
 | FinalFrameStore | CPU RGBA buffer | GPU texture 句柄 |
-| 平台纹理交付 | CPU buffer→Flutter texture 上传 | shared_handle_for_flutter 零拷贝 |
+| 平台纹理交付 | CPU buffer→宿主呈现纹理上传 | shared_handle_for_host 零拷贝 |
 
 **模块结构不动**:Store 的名义、模块依赖关系、ApiLoop 命令编排、世代号机制全不变。只是 GpuDevice 加能力 + 6 个模块切实现。这是契约抽象预留的价值——升级时不动地基。
 
 ### 为什么 MVP 没做直通(可讲的取舍)
 
-1. **Flutter CPU buffer 接入最通用**:跨平台最简单,先保证能跑。GPU texture 共享(Android SurfaceTexture/iOS MetalKit/桌面 GL texture)各平台机制不同,胶水多。
+1. **CPU buffer 接入最通用**:跨平台最简单,先保证能跑。GPU texture 共享(Android SurfaceTexture/iOS MetalKit/桌面 GL texture)各平台机制不同,胶水多。
 2. **download 开销可接受**:1080p 0.3-1ms/帧 + sws 1-3ms = 1.3-4ms/帧,远小于软解 20-40ms/帧,硬解收益仍保留一个数量级。
 3. **直通的收益是消除这次拷贝**:download 开销虽小,但全程零拷贝是"正确"的终态。阶段二做直通消除它,体现从"够用"到"最优"的演进。
-4. **业界标杆已验证可行**:media_kit 已在 Flutter 实现 GPU 直通,证明路径可行、收益真实,不是空中楼阁。
+4. **平台纹理共享已有成熟实践**:零拷贝路径可行,但实现复杂度集中在平台纹理共享和同步胶水层。
 
 
 

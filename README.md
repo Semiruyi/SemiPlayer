@@ -1,6 +1,6 @@
 # SemiPlayer
 
-C++ 跨平台播放器内核，导出 C ABI 供 Flutter(Dart) 经 dart:ffi 调用。
+C++ 跨平台播放器内核，导出 C ABI 供上层宿主调用。
 FFmpeg 解封装/解码、miniaudio 播音频，单例全局 + 命令队列/句柄控制模型。
 架构见 `docs/` 下设计文档（architecture / lifecycle / 各模块）。
 错误约定见 `docs/error_convention.md`，状态码见 `include/semi_player/status.h`。

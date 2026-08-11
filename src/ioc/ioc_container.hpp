@@ -21,7 +21,9 @@ class Generation;
 class VideoFrameStore;
 class VideoDecoder;
 class VideoRenderer;
+class VideoRenderedStore;
 class VideoPacketQueue;
+class VideoSync;
 }
 
 namespace semi::ioc {
@@ -78,8 +80,10 @@ private:
     std::shared_ptr<domain::AudioOutput> audio_output_;
     std::shared_ptr<domain::VideoPacketQueue> video_packet_queue_;
     std::shared_ptr<domain::VideoFrameStore> video_frame_store_;
+    std::shared_ptr<domain::VideoRenderedStore> video_rendered_store_;
     std::shared_ptr<domain::VideoDecoder> video_decoder_;
     std::shared_ptr<domain::VideoRenderer> video_renderer_;
+    std::shared_ptr<domain::VideoSync> video_sync_;
 };
 
 } // namespace semi::ioc

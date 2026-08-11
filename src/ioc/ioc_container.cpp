@@ -4,6 +4,7 @@
 #include "domain/resource/audio_frame_store/audio_frame_store.hpp"
 #include "domain/resource/audio_packet_queue/audio_packet_queue.hpp"
 #include "domain/resource/generation/generation.hpp"
+#include "domain/resource/video_rendered_store/video_rendered_store.hpp"
 #include "domain/resource/video_frame_store/video_frame_store.hpp"
 #include "domain/resource/video_packet_queue/video_packet_queue.hpp"
 #include "domain/worker/audio_decoder/default_audio_decoder.hpp"
@@ -12,6 +13,8 @@
 #include "domain/worker/demuxer/default_demuxer.hpp"
 #include "domain/worker/video_decoder/default_video_decoder.hpp"
 #include "domain/worker/video_renderer/default_video_renderer.hpp"
+#include "domain/worker/video_sync/default_video_sync.hpp"
+#include "domain/worker/video_sync/video_presentation_sink.hpp"
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
@@ -26,12 +29,11 @@
 namespace semi::ioc {
 namespace {
 
-class DiscardingVideoRenderedSink final : public domain::VideoRenderedSink {
+class DiscardingVideoPresentationSink final : public domain::VideoPresentationSink {
 public:
-    [[nodiscard]] domain::VideoRenderedPushResult
-    try_push(domain::VideoRenderedStoreItem&&) override {
-        return domain::VideoRenderedPushResult::Accepted;
-    }
+    void present(domain::RenderedVideoFrame&&) noexcept override {}
+
+    void end_of_input(domain::Generation::Value) noexcept override {}
 };
 
 } // namespace
@@ -56,7 +58,8 @@ bool IoCContainer::assemble() noexcept {
         auto audio_packet_queue = std::make_shared<domain::AudioPacketQueue>(notifier);
         auto video_packet_queue = std::make_shared<domain::VideoPacketQueue>(notifier);
         auto video_frame_store = std::make_shared<domain::VideoFrameStore>(notifier);
-        auto video_rendered_sink = std::make_shared<DiscardingVideoRenderedSink>();
+        auto video_rendered_store = std::make_shared<domain::VideoRenderedStore>(notifier);
+        auto presentation_sink = std::make_shared<DiscardingVideoPresentationSink>();
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
@@ -85,7 +88,9 @@ bool IoCContainer::assemble() noexcept {
         auto video_decoder = std::make_shared<domain::DefaultVideoDecoder>(
             video_packet_queue, video_frame_store, video_decoder_backend, notifier, generation);
         auto video_renderer = std::make_shared<domain::DefaultVideoRenderer>(
-            video_frame_store, video_rendered_sink, video_renderer_backend, notifier, generation);
+            video_frame_store, video_rendered_store, video_renderer_backend, notifier, generation);
+        auto video_sync = std::make_shared<domain::DefaultVideoSync>(
+            video_rendered_store, audio_output, presentation_sink, notifier, generation);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
             demuxer,
@@ -95,7 +100,8 @@ bool IoCContainer::assemble() noexcept {
             notifier,
             generation,
             video_decoder,
-            video_renderer);
+            video_renderer,
+            video_sync);
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");
             return false;
@@ -107,12 +113,14 @@ bool IoCContainer::assemble() noexcept {
         playback_audio_frame_store_ = std::move(playback_audio_frame_store);
         video_packet_queue_ = std::move(video_packet_queue);
         video_frame_store_ = std::move(video_frame_store);
+        video_rendered_store_ = std::move(video_rendered_store);
         demuxer_ = std::move(demuxer);
         audio_decoder_ = std::move(audio_decoder);
         audio_resampler_ = std::move(audio_resampler);
         audio_output_ = std::move(audio_output);
         video_decoder_ = std::move(video_decoder);
         video_renderer_ = std::move(video_renderer);
+        video_sync_ = std::move(video_sync);
         api_layer_ = std::move(api_layer);
     } catch (...) {
         SEMI_LOG_ERROR("ApiLayer assemble failed");
@@ -139,11 +147,13 @@ bool IoCContainer::dispose() noexcept {
     audio_output_.reset();
     audio_resampler_.reset();
     audio_decoder_.reset();
+    video_sync_.reset();
     video_renderer_.reset();
     video_decoder_.reset();
     demuxer_.reset();
     video_packet_queue_.reset();
     video_frame_store_.reset();
+    video_rendered_store_.reset();
     playback_audio_frame_store_.reset();
     decoded_audio_frame_store_.reset();
     audio_packet_queue_.reset();

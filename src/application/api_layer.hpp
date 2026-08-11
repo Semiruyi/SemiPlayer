@@ -14,6 +14,7 @@ class Demuxer;
 class Generation;
 class VideoDecoder;
 class VideoRenderer;
+class VideoSync;
 }
 
 namespace semi::infra {
@@ -69,7 +70,8 @@ public:
                       std::shared_ptr<infra::Notifier> notifier = nullptr,
                       std::shared_ptr<domain::Generation> generation = nullptr,
                       std::shared_ptr<domain::VideoDecoder> video_decoder = nullptr,
-                      std::shared_ptr<domain::VideoRenderer> video_renderer = nullptr);
+                      std::shared_ptr<domain::VideoRenderer> video_renderer = nullptr,
+                      std::shared_ptr<domain::VideoSync> video_sync = nullptr);
     ~ApiLayer();
 
     ApiLayer(const ApiLayer&) = delete;

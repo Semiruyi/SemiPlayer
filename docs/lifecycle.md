@@ -7,7 +7,7 @@
 ## 定位
 
 ```
-Player (顶层根, Dart 入口, init 前就存在)
+Player (顶层根, 宿主入口, init 前就存在)
 ├── init()         ← Player 自己: 装配整个模块体系(含 ApiLayer)
 ├── shutdown()     ← Player 自己: 拆除整个模块体系
 └── [init 后才存在的模块体系]

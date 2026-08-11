@@ -17,7 +17,7 @@
 
 ### 1. 统一错误只出边界
 
-- 进程外（Dart / C ABI）与 ApiLayer 对外结果**只认** `semi_status`。
+- 进程外（C ABI 调用方）与 ApiLayer 对外结果**只认** `semi_status`。
 - 内部模块**不**传播整表错误码，避免全链路 map。
 - 模块私有 enum **不**进入全局表；若调用方超过本模块，优先收成 `bool` 或上浮到 Api 时再映射。
 

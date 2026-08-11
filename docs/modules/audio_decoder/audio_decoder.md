@@ -369,5 +369,5 @@ Backend 不知道队列、generation、线程、Notifier、播放状态或输出
 
 - `AudioFrameStore` 当前采用有界 FIFO + `mutex`；其具体资源实现独立于 AudioDecoder。
 - 不实现 `swr_convert`、输出格式协商或 miniaudio；归 AudioResampler / AudioOutput。
-- 不实现设备音量、音频时钟或 Flutter 回调。
+- 不实现设备音量、音频时钟或宿主回调。
 - 不在本阶段扩展真实 seek 的 DemuxerBackend 契约；Decoder 通过 generation 变化自动响应。

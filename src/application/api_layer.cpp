@@ -8,6 +8,7 @@
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "domain/worker/video_decoder/video_decoder.hpp"
 #include "domain/worker/video_renderer/video_renderer.hpp"
+#include "domain/worker/video_sync/video_sync.hpp"
 #include "infrastructure/log/log.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
@@ -76,7 +77,8 @@ struct ApiLayer::Impl {
          std::shared_ptr<infra::Notifier> injected_notifier,
          std::shared_ptr<domain::Generation> injected_generation,
          std::shared_ptr<domain::VideoDecoder> injected_video_decoder,
-         std::shared_ptr<domain::VideoRenderer> injected_video_renderer)
+         std::shared_ptr<domain::VideoRenderer> injected_video_renderer,
+         std::shared_ptr<domain::VideoSync> injected_video_sync)
         : demuxer(std::move(injected_demuxer)),
           audio_decoder(std::move(injected_audio_decoder)),
           audio_resampler(std::move(injected_audio_resampler)),
@@ -84,7 +86,8 @@ struct ApiLayer::Impl {
           notifier(std::move(injected_notifier)),
           generation(std::move(injected_generation)),
           video_decoder(std::move(injected_video_decoder)),
-          video_renderer(std::move(injected_video_renderer)) {}
+          video_renderer(std::move(injected_video_renderer)),
+          video_sync(std::move(injected_video_sync)) {}
 
     struct Task {
         Task(CommandHandle task_handle, Command task_command)
@@ -115,11 +118,13 @@ struct ApiLayer::Impl {
     std::shared_ptr<domain::Generation> generation;
     std::shared_ptr<domain::VideoDecoder> video_decoder;
     std::shared_ptr<domain::VideoRenderer> video_renderer;
+    std::shared_ptr<domain::VideoSync> video_sync;
     std::shared_ptr<infra::Notifier::Subscription> playback_finished_subscription;
     PlayerState player_state = PlayerState::Idle;
     domain::Generation::Value active_generation = 0;
     CommandHandle next_handle = 1;
     bool audio_pipeline_configured = false;
+    bool video_sync_configured = false;
     bool accepting = false;
     bool stopping = false;
 };
@@ -259,7 +264,21 @@ semi_status_t video_renderer_status(const domain::VideoRendererError& error) noe
     return SEMI_ERR_INTERNAL;
 }
 
+semi_status_t video_sync_status(const domain::VideoSyncError& error) noexcept {
+    switch (error.code) {
+    case domain::VideoSyncErrorCode::InvalidState:
+        return SEMI_ERR_INVALID_STATE;
+    case domain::VideoSyncErrorCode::Internal:
+        return SEMI_ERR_INTERNAL;
+    }
+    return SEMI_ERR_INTERNAL;
+}
+
 void close_pipeline(ApiLayer::Impl& impl) noexcept {
+    if (impl.video_sync && impl.video_sync_configured) {
+        impl.video_sync->unconfigure();
+    }
+    impl.video_sync_configured = false;
     if (impl.demuxer) {
         impl.demuxer->close();
     }
@@ -346,6 +365,18 @@ configure_video_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& 
         close_pipeline(impl);
         return std::unexpected(
             make_failure(video_decoder_status(configured.error()), PlayerState::Idle));
+    }
+
+    if (impl.video_sync) {
+        auto synced = impl.video_sync->configure(
+            domain::VideoSyncOptions{.audio_master = opened.audio.has_value()});
+        if (!synced) {
+            SEMI_LOG_ERROR("video sync configure failed: {}", synced.error().message);
+            close_pipeline(impl);
+            return std::unexpected(
+                make_failure(video_sync_status(synced.error()), PlayerState::Idle));
+        }
+        impl.video_sync_configured = true;
     }
 
     return {};
@@ -444,11 +475,24 @@ CommandExecution execute_play(PlayerState current_state, ApiLayer::Impl& impl) {
         return make_failure(SEMI_OK);
     }
 
+    bool audio_started = false;
     if (impl.audio_pipeline_configured && impl.audio_output) {
         auto started = impl.audio_output->start_playback();
         if (!started) {
             SEMI_LOG_ERROR("audio output start playback failed: {}", started.error().message);
             return make_failure(output_status(started.error()));
+        }
+        audio_started = true;
+    }
+
+    if (impl.video_sync && impl.video_sync_configured) {
+        auto started = impl.video_sync->start_playback();
+        if (!started) {
+            SEMI_LOG_ERROR("video sync start playback failed: {}", started.error().message);
+            if (audio_started && impl.audio_output) {
+                (void)impl.audio_output->pause_playback();
+            }
+            return make_failure(video_sync_status(started.error()));
         }
     }
 
@@ -463,11 +507,24 @@ CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) 
         return make_failure(SEMI_OK);
     }
 
+    bool audio_paused = false;
     if (impl.audio_pipeline_configured && impl.audio_output) {
         auto paused = impl.audio_output->pause_playback();
         if (!paused) {
             SEMI_LOG_ERROR("audio output pause playback failed: {}", paused.error().message);
             return make_failure(output_status(paused.error()));
+        }
+        audio_paused = true;
+    }
+
+    if (impl.video_sync && impl.video_sync_configured) {
+        auto paused = impl.video_sync->pause_playback();
+        if (!paused) {
+            SEMI_LOG_ERROR("video sync pause playback failed: {}", paused.error().message);
+            if (audio_paused && impl.audio_output) {
+                (void)impl.audio_output->start_playback();
+            }
+            return make_failure(video_sync_status(paused.error()));
         }
     }
 
@@ -633,7 +690,8 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                    std::shared_ptr<infra::Notifier> notifier,
                    std::shared_ptr<domain::Generation> generation,
                    std::shared_ptr<domain::VideoDecoder> video_decoder,
-                   std::shared_ptr<domain::VideoRenderer> video_renderer)
+                   std::shared_ptr<domain::VideoRenderer> video_renderer,
+                   std::shared_ptr<domain::VideoSync> video_sync)
     : impl_(std::make_unique<Impl>(std::move(demuxer),
                                    std::move(audio_decoder),
                                    std::move(audio_resampler),
@@ -641,7 +699,8 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                                    std::move(notifier),
                                    std::move(generation),
                                    std::move(video_decoder),
-                                   std::move(video_renderer))) {
+                                   std::move(video_renderer),
+                                   std::move(video_sync))) {
     if (impl_->notifier) {
         impl_->playback_finished_subscription =
             impl_->notifier->subscribe<domain::AudioPlaybackFinished>(

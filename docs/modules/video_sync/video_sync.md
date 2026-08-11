@@ -1,6 +1,6 @@
 # VideoSync 模块设计
 
-> 末端同步模块。音视频同步的最后一环——读 AudioOutput 导出的只读 PlaybackClock，从 FinalFrameStore 选该显示的帧，交付 Flutter。
+> 末端同步模块。音视频同步的最后一环——读 AudioOutput 导出的只读 PlaybackClock，从 FinalFrameStore 选该显示的帧，交付宿主呈现层。
 > 对外接口由 ApiLayer 调用(start/pause/stop)。本文件描述其内部设计,核心是 A/V sync 选帧算法。
 
 ## Context
@@ -14,7 +14,7 @@
 ## 定位
 
 ```
-FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
+FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ 宿主呈现纹理
                                          ↑
                               PlaybackClock.current_pts()
                                          ↑
@@ -22,8 +22,8 @@ FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
 ```
 
 - **工作模块层,1 个 loop 线程**(方案 Y 常驻)。
-- **末端消费者**:读 FinalFrameStore + PlaybackClock,产出交付 Flutter。不喂任何下游 Store。
-- **copy-back 路下**:FinalFrameStore 是 CPU RGBA buffer,VideoSync 选完帧内部上传成 Flutter texture(这一跳很薄,归 VideoSync 内部,不单独模块)。
+- **末端消费者**:读 FinalFrameStore + PlaybackClock,产出交付宿主呈现层。不喂任何下游 Store。
+- **copy-back 路下**:FinalFrameStore 是 CPU RGBA buffer,VideoSync 选完帧交付宿主呈现层(这一跳很薄,归末端适配层负责,不单独模块)。
 - **seek 零改动**:无 seek() 方法,靠世代号丢弃 FinalFrameStore 旧帧 + 自然保持上一帧自洽(见设计决策)。
 
 ---
@@ -32,7 +32,7 @@ FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ Flutter texture
 
 - **选帧**:从 FinalFrameStore 取 PTS ≤ current_pts 且最近的帧(标准做法)。
 - **同步决策**:按"帧 PTS 与 current_pts 的差值"分四区间决策(丢帧/赶/交付/精准等)+ 无数据死等通知。
-- **交付 Flutter**:选定的帧上传成 Flutter texture 并触发重绘(copy-back:CPU buffer→texture 上传)。
+- **交付宿主**:选定的帧交付宿主呈现层并触发重绘(copy-back:CPU buffer→呈现纹理上传)。
 - **异常监控**:diff 异常大时(视频严重超前,说明音频卡顿/时钟出问题)上报异常通知。
 
 **不做**:
@@ -152,7 +152,7 @@ Constructed ─start()─▶ Running ⇄ Paused
 **Paused**:普通 pause 时线程不选新帧，保持当前纹理。暂停 seek 后，新的 FinalFrameStore 数据到达会唤醒线程；若 PlaybackClock 已处于 Prepared 并给出新 generation 的冻结 PTS，VideoSync 选择并交付一次对应的新帧，再继续暂停。
 - 关键:普通 Paused 时 PlaybackClock 冻结(current_pts 不变)；只有 seek 后的 Prepared PTS 允许一次换帧。显式 Paused 仍避免无意义循环。
 
-**Running ⇄ Paused 的纹理保留**:pause 时纹理停在当前帧,resume 从当前帧继续。VideoSync 不主动清纹理,pause/resume 期间 Flutter 持续显示最后一帧(play.md"pause 停在当前帧,纹理保留"的落地)。
+**Running ⇄ Paused 的纹理保留**:pause 时纹理停在当前帧,resume 从当前帧继续。VideoSync 不主动清纹理,pause/resume 期间宿主持续显示最后一帧(play.md"pause 停在当前帧,纹理保留"的落地)。
 
 **Stopping → Stopped**:stop() 设 Stopping + notify cv。线程醒来发现 Stopping,退出 loop → Stopped。close 时 stop() 等线程 join,对象留着复用。
 
@@ -192,9 +192,9 @@ Constructed ─start()─▶ Running ⇄ Paused
 | `Generation` | 丢弃旧世代帧(取 FinalFrameStore 帧时查 generation) |
 | `Notifier` | 注册 FinalReady 通知(帧就绪被唤醒)+ 发送 VideoSyncStalled 通知 |
 
-### 交付 Flutter(copy-back 路下)
+### 交付宿主(copy-back 路下)
 
-VideoSync 选完帧后,内部把 CPU RGBA buffer 上传成 Flutter texture 并触发重绘。这一跳很薄(单次上传 + texture ID 管理),归 VideoSync 内部,不单独模块。**Flutter texture 对接的具体方式(ExternalTexture 注册/texture ID/上传时序)是实现时平台细节**,本文档不展开。
+VideoSync 选完帧后,通过末端呈现适配层把 CPU RGBA buffer 交付给宿主并触发重绘。这一跳很薄(单次上传 + 呈现资源管理),不单独拆成业务模块。**宿主呈现资源对接的具体方式(纹理注册、资源 ID、上传时序)是实现时平台细节**,本文档不展开。
 
 ---
 
@@ -240,8 +240,8 @@ VideoSync 读 PlaybackClock + FinalFrameStore,接口固定,不需按媒体格式
 ### FinalFrameStore 的"最新帧"语义
 VideoSync 取 FinalFrameStore.try_latest()——是取"最新的一帧"还是"按 PTS 顺序的最旧可用帧"?倾向"最新满足 PTS ≤ current 的帧"。FinalFrameStore 内部实现(有界队列 vs 单帧快照)影响这个语义,见 architecture.md 待确认项"各 rendered Store 内部实现"。
 
-### Flutter texture 上传的开销与时机
-copy-back 路下每帧要 CPU buffer→texture 上传。上传在 VideoSync 线程做,要快(避免拖慢选帧循环)。Flutter 的 texture 注册/更新时序(和 Flutter vsync 对齐)是实现时平台细节。
+### 宿主呈现纹理上传的开销与时机
+copy-back 路下每帧要 CPU buffer→呈现纹理上传。上传在末端呈现适配层完成,要快(避免拖慢选帧循环)。宿主纹理注册/更新时序(以及与 vsync 对齐)是实现时平台细节。
 
 ### diff 异常大的误报
 diff > T异常(如 5s)上报 VideoSyncStalled,但 seek 刚完成时新帧 PTS 可能远 > current(音频还没追到新位置),会短暂触发误报。实现时可加"seek 后宽限期"(seek 完成后 N 秒内不上报),或"diff 持续异常才报"(连续 M 次 diff 异常才上报)。归实现阶段调参。
@@ -253,7 +253,7 @@ diff > T异常(如 5s)上报 VideoSyncStalled,但 seek 刚完成时新帧 PTS �
 
 ## 边界（本文档不涉及）
 
-- ❌ Flutter ExternalTexture 的注册/上传具体实现 → 实现阶段(平台细节)
+- ❌ 宿主呈现纹理的注册/上传具体实现 → 实现阶段(平台细节)
 - ❌ FinalFrameStore 的内部实现(有界队列 vs 单帧快照) → store 设计文档(待定)
 - ❌ 阈值的具体值(T落后/T异常) → 实现阶段调参
 - ❌ sleep 精度优化(busy-wait 等) → 实现阶段

@@ -149,6 +149,7 @@ void DefaultAudioOutput::on_audio_frames_consumed(
     std::uint32_t confirmed_frames) noexcept {
     const auto generation = active_generation_.load(std::memory_order_acquire);
     playback_clock_.on_audio_frames_consumed(generation, confirmed_frames);
+    playback_position_ready_hint_.store(true, std::memory_order_release);
     backend_progress_hint_.store(true, std::memory_order_release);
     cv_.notify_one();
 }
@@ -184,6 +185,7 @@ void DefaultAudioOutput::worker_main() noexcept {
                     read_next_input_to_pending();
                 }
             }
+            notify_playback_position_ready_if_needed();
             lock.lock();
         }
     }
@@ -265,6 +267,8 @@ void DefaultAudioOutput::process_command(ConfigureCommand& command) noexcept {
     active_generation_.store(current_generation, std::memory_order_release);
     playback_sample_rate_ = configured->playback_format.sample_rate;
     playback_clock_.reset(current_generation, playback_sample_rate_);
+    playback_position_ready_hint_.store(false, std::memory_order_release);
+    playback_position_ready_notified_.store(false, std::memory_order_release);
     pending_frame_.reset();
     phase_ = PlaybackPhase::Running;
     playback_enabled_ = false;
@@ -295,6 +299,8 @@ void DefaultAudioOutput::process_command(UnconfigureCommand& command) noexcept {
     }
 
     playback_clock_.reset(0, 0);
+    playback_position_ready_hint_.store(false, std::memory_order_release);
+    playback_position_ready_notified_.store(false, std::memory_order_release);
     std::lock_guard lock(mutex_);
     pending_frame_.reset();
     active_generation_.store(0, std::memory_order_release);
@@ -377,7 +383,11 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
     }
 
     if (generation_ && generation_->current() !=
-                          active_generation_.load(std::memory_order_acquire)) {
+                           active_generation_.load(std::memory_order_acquire)) {
+        return true;
+    }
+
+    if (playback_position_ready_hint_.load(std::memory_order_acquire)) {
         return true;
     }
 
@@ -427,6 +437,8 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
     }
     pending_frame_.reset();
     playback_clock_.reset(current_generation, playback_sample_rate_);
+    playback_position_ready_hint_.store(false, std::memory_order_release);
+    playback_position_ready_notified_.store(false, std::memory_order_release);
     phase_ = PlaybackPhase::Running;
     active_generation_.store(current_generation, std::memory_order_release);
     input_not_empty_hint_ = true;
@@ -678,6 +690,34 @@ void DefaultAudioOutput::handle_backend_failure(
 
     if (should_notify) {
         notify_backend_failure(std::move(error), generation);
+    }
+}
+
+void DefaultAudioOutput::notify_playback_position_ready_if_needed() noexcept {
+    if (!playback_position_ready_hint_.exchange(false, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    const auto position = playback_clock_.current_position();
+    if (!position) {
+        return;
+    }
+
+    bool expected = false;
+    if (!playback_position_ready_notified_.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    if (!notifier_) {
+        return;
+    }
+
+    try {
+        (void)notifier_->send(AudioPlaybackPositionReady{
+            .generation = static_cast<Generation::Value>(position->generation)});
+    } catch (...) {
+        // The clock remains queryable even when notification delivery fails.
     }
 }
 

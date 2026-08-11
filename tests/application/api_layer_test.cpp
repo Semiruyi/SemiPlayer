@@ -7,6 +7,7 @@
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "domain/worker/video_decoder/video_decoder.hpp"
 #include "domain/worker/video_renderer/video_renderer.hpp"
+#include "domain/worker/video_sync/video_sync.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
@@ -232,11 +233,61 @@ public:
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
 
+class FakeVideoSync final : public domain::VideoSync {
+public:
+    bool fail_configure = false;
+    bool fail_start_playback = false;
+    bool fail_pause_playback = false;
+    bool last_audio_master = false;
+    int configure_calls = 0;
+    int start_playback_calls = 0;
+    int pause_playback_calls = 0;
+    int unconfigure_calls = 0;
+
+    std::expected<void, domain::VideoSyncError>
+    configure(const domain::VideoSyncOptions& options) override {
+        ++configure_calls;
+        last_audio_master = options.audio_master;
+        if (fail_configure) {
+            return std::unexpected(domain::VideoSyncError{
+                .code = domain::VideoSyncErrorCode::Internal,
+                .message = "video sync configure failed",
+            });
+        }
+        return {};
+    }
+
+    std::expected<void, domain::VideoSyncError> start_playback() override {
+        ++start_playback_calls;
+        if (fail_start_playback) {
+            return std::unexpected(domain::VideoSyncError{
+                .code = domain::VideoSyncErrorCode::Internal,
+                .message = "video sync start failed",
+            });
+        }
+        return {};
+    }
+
+    std::expected<void, domain::VideoSyncError> pause_playback() override {
+        ++pause_playback_calls;
+        if (fail_pause_playback) {
+            return std::unexpected(domain::VideoSyncError{
+                .code = domain::VideoSyncErrorCode::Internal,
+                .message = "video sync pause failed",
+            });
+        }
+        return {};
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
 struct FakePipeline {
     std::shared_ptr<FakeDemuxer> demuxer = std::make_shared<FakeDemuxer>();
     std::shared_ptr<FakeAudioDecoder> decoder = std::make_shared<FakeAudioDecoder>();
     std::shared_ptr<FakeVideoDecoder> video_decoder = std::make_shared<FakeVideoDecoder>();
     std::shared_ptr<FakeVideoRenderer> video_renderer = std::make_shared<FakeVideoRenderer>();
+    std::shared_ptr<FakeVideoSync> video_sync = std::make_shared<FakeVideoSync>();
     std::shared_ptr<FakeAudioResampler> resampler = std::make_shared<FakeAudioResampler>();
     std::shared_ptr<FakeAudioOutput> output = std::make_shared<FakeAudioOutput>();
     std::shared_ptr<infra::DefaultNotifier> notifier = std::make_shared<infra::DefaultNotifier>();
@@ -251,7 +302,8 @@ ApiLayer make_layer(const FakePipeline& pipeline) {
                     pipeline.notifier,
                     pipeline.generation,
                     pipeline.video_decoder,
-                    pipeline.video_renderer);
+                    pipeline.video_renderer,
+                    pipeline.video_sync);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
@@ -274,6 +326,8 @@ TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
     EXPECT_EQ(pipeline.decoder->configure_calls, 1);
     EXPECT_EQ(pipeline.video_decoder->configure_calls, 1);
     EXPECT_EQ(pipeline.video_renderer->configure_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->configure_calls, 1);
+    EXPECT_TRUE(pipeline.video_sync->last_audio_master);
     EXPECT_EQ(pipeline.output->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->last_input_format.sample_rate, 48000U);
@@ -443,21 +497,73 @@ TEST(ApiLayerTest, PlayAndPauseControlAudioOutput) {
     ASSERT_NE(play, 0U);
     EXPECT_EQ(layer.await(play, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->start_playback_calls, 1);
 
     const CommandHandle duplicate_play = layer.play();
     ASSERT_NE(duplicate_play, 0U);
     EXPECT_EQ(layer.await(duplicate_play, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->start_playback_calls, 1);
 
     const CommandHandle pause = layer.pause();
     ASSERT_NE(pause, 0U);
     EXPECT_EQ(layer.await(pause, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->pause_playback_calls, 1);
 
     const CommandHandle duplicate_pause = layer.pause();
     ASSERT_NE(duplicate_pause, 0U);
     EXPECT_EQ(layer.await(duplicate_pause, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->pause_playback_calls, 1);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoSyncStartFailureRollsBackAudioPlayback) {
+    FakePipeline pipeline;
+    pipeline.video_sync->fail_start_playback = true;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const auto open = layer.open("movie.mp4");
+    ASSERT_EQ(layer.await(open, result), SEMI_OK);
+
+    const auto play = layer.play();
+    ASSERT_NE(play, 0U);
+    EXPECT_EQ(layer.await(play, result), SEMI_ERR_INTERNAL);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 1);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+    EXPECT_EQ(pipeline.video_sync->start_playback_calls, 1);
+
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoSyncPauseFailureRollsBackAudioPlayback) {
+    FakePipeline pipeline;
+    pipeline.video_sync->fail_pause_playback = true;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    const auto open = layer.open("movie.mp4");
+    ASSERT_EQ(layer.await(open, result), SEMI_OK);
+    const auto play = layer.play();
+    ASSERT_EQ(layer.await(play, result), SEMI_OK);
+
+    const auto pause = layer.pause();
+    ASSERT_NE(pause, 0U);
+    EXPECT_EQ(layer.await(pause, result), SEMI_ERR_INTERNAL);
+    EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
+    EXPECT_EQ(pipeline.output->start_playback_calls, 2);
+    EXPECT_EQ(pipeline.video_sync->pause_playback_calls, 1);
+
+    pipeline.video_sync->fail_pause_playback = false;
+    const auto retry = layer.pause();
+    ASSERT_NE(retry, 0U);
+    EXPECT_EQ(layer.await(retry, result), SEMI_OK);
+    EXPECT_EQ(pipeline.video_sync->pause_playback_calls, 2);
 
     EXPECT_TRUE(layer.stop());
 }
