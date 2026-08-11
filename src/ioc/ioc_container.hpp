@@ -18,7 +18,9 @@ class AudioPacketQueue;
 class AudioResampler;
 class Demuxer;
 class Generation;
+class VideoFrameStore;
 class VideoDecoder;
+class VideoRenderer;
 class VideoPacketQueue;
 }
 
@@ -34,7 +36,8 @@ namespace semi::ioc {
 // 结果约定见 docs/error_convention.md：内部用 bool，C ABI 再映射 semi_status。
 // 当前装配音频播放和视频解码链路：
 // Demuxer -> AudioDecoder -> AudioResampler -> AudioOutput，
-// Demuxer -> VideoPacketQueue -> VideoDecoder -> 丢弃型 VideoFrameSink；
+// Demuxer -> VideoPacketQueue -> VideoDecoder -> VideoFrameStore -> VideoRenderer；
+// 当前 VideoRenderer 的输出接临时丢弃型 VideoRenderedSink，等待宿主呈现链路接入。
 // 工作模块注入 ApiLayer。运行期仍禁止借 IoC 做服务定位。
 // 线程约定：assemble / dispose 为单线程控制面操作。
 class IoCContainer {
@@ -74,7 +77,9 @@ private:
     std::shared_ptr<domain::AudioResampler> audio_resampler_;
     std::shared_ptr<domain::AudioOutput> audio_output_;
     std::shared_ptr<domain::VideoPacketQueue> video_packet_queue_;
+    std::shared_ptr<domain::VideoFrameStore> video_frame_store_;
     std::shared_ptr<domain::VideoDecoder> video_decoder_;
+    std::shared_ptr<domain::VideoRenderer> video_renderer_;
 };
 
 } // namespace semi::ioc

@@ -54,13 +54,14 @@ Player::shutdown() ──→ IoCContainer::dispose() ──→ 手动逆序释�
 
 ## 当前实现落地
 
-当前 `IoCContainer::assemble()` 已经装配音频播放和视频解码链路：
+当前 `IoCContainer::assemble()` 已经装配音频播放和 CPU 视频渲染链路：
 
 ```
 DefaultNotifier
 Generation
 AudioPacketQueue
 VideoPacketQueue
+VideoFrameStore
 decoded AudioFrameStore
 playback AudioFrameStore
 
@@ -68,13 +69,18 @@ FfmpegDemuxerBackend        -> DefaultDemuxer
 FfmpegAudioDecoderBackend   -> DefaultAudioDecoder
 FfmpegAudioResamplerBackend -> DefaultAudioResampler
 MiniaudioAudioOutputBackend -> DefaultAudioOutput
-FfmpegVideoDecoderBackend   -> DefaultVideoDecoder -> DiscardingVideoFrameSink
+FfmpegVideoDecoderBackend   -> DefaultVideoDecoder -> VideoFrameStore
+FfmpegVideoRendererBackend  -> DefaultVideoRenderer -> DiscardingVideoRenderedSink
 
-ApiLayer(demuxer, video_decoder, audio_decoder, audio_resampler, audio_output)
+ApiLayer(demuxer, video_decoder, video_renderer,
+         audio_decoder, audio_resampler, audio_output)
 ```
 
-视频解码输出当前由 IoC 内部的 `DiscardingVideoFrameSink` 消费并直接丢弃，
-用于先打通 `Demuxer -> VideoPacketQueue -> VideoDecoder`；渲染和宿主帧交付属于后续阶段。
+`VideoRenderer` 当前将解码帧经 FFmpeg `sws_scale` 转成 RGBA8，
+输出接 IoC 内部的 `DiscardingVideoRenderedSink`，消费后直接释放。
+这是临时末端，目的是先验证 `VideoDecoder -> VideoRenderer` 链路，
+避免尚未接入宿主呈现时因 bounded `VideoRenderedStore` 无消费者而形成背压。
+宿主帧交付和真正的 `VideoRenderedStore` 消费者属于后续阶段。
 
 `MiniaudioAudioOutputBackend` 是当前 IoC 默认音频输出后端：它初始化系统默认播放设备，产出固定 playback PCM format，并通过内部 ring buffer 把 `DefaultAudioOutput` 提交的 PCM 交给 miniaudio 设备回调；设备 callback 由 play/pause 控制。
 `NullAudioOutputBackend` 保留为测试/占位后端，用于不需要真实设备的单元测试。

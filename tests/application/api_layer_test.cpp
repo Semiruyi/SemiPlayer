@@ -6,6 +6,7 @@
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
 #include "domain/worker/video_decoder/video_decoder.hpp"
+#include "domain/worker/video_renderer/video_renderer.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
@@ -137,6 +138,28 @@ public:
     void unconfigure() noexcept override { ++unconfigure_calls; }
 };
 
+class FakeVideoRenderer final : public domain::VideoRenderer {
+public:
+    bool fail_configure = false;
+    int configure_calls = 0;
+    int unconfigure_calls = 0;
+
+    std::expected<void, domain::VideoRendererError>
+    configure(const domain::VideoRendererOptions&) override {
+        ++configure_calls;
+        if (fail_configure) {
+            return std::unexpected(domain::VideoRendererError{
+                .code = domain::VideoRendererErrorCode::BackendFailure,
+                .message = "video renderer configure failed",
+                .backend_error = std::nullopt,
+            });
+        }
+        return {};
+    }
+
+    void unconfigure() noexcept override { ++unconfigure_calls; }
+};
+
 class FakeAudioResampler final : public domain::AudioResampler {
 public:
     int configure_calls = 0;
@@ -213,6 +236,7 @@ struct FakePipeline {
     std::shared_ptr<FakeDemuxer> demuxer = std::make_shared<FakeDemuxer>();
     std::shared_ptr<FakeAudioDecoder> decoder = std::make_shared<FakeAudioDecoder>();
     std::shared_ptr<FakeVideoDecoder> video_decoder = std::make_shared<FakeVideoDecoder>();
+    std::shared_ptr<FakeVideoRenderer> video_renderer = std::make_shared<FakeVideoRenderer>();
     std::shared_ptr<FakeAudioResampler> resampler = std::make_shared<FakeAudioResampler>();
     std::shared_ptr<FakeAudioOutput> output = std::make_shared<FakeAudioOutput>();
     std::shared_ptr<infra::DefaultNotifier> notifier = std::make_shared<infra::DefaultNotifier>();
@@ -226,7 +250,8 @@ ApiLayer make_layer(const FakePipeline& pipeline) {
                     pipeline.output,
                     pipeline.notifier,
                     pipeline.generation,
-                    pipeline.video_decoder);
+                    pipeline.video_decoder,
+                    pipeline.video_renderer);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
@@ -248,10 +273,30 @@ TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
     EXPECT_EQ(result.media_info.video_height, 1080U);
     EXPECT_EQ(pipeline.decoder->configure_calls, 1);
     EXPECT_EQ(pipeline.video_decoder->configure_calls, 1);
+    EXPECT_EQ(pipeline.video_renderer->configure_calls, 1);
     EXPECT_EQ(pipeline.output->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->configure_calls, 1);
     EXPECT_EQ(pipeline.resampler->last_input_format.sample_rate, 48000U);
     EXPECT_EQ(pipeline.resampler->last_output_format.sample_rate, 48000U);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoRendererConfigureFailureClosesTheOpenedPipeline) {
+    FakePipeline pipeline;
+    pipeline.video_renderer->fail_configure = true;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    const CommandHandle handle = layer.open("movie.mp4");
+    ASSERT_NE(handle, 0U);
+
+    CommandResult result;
+    EXPECT_EQ(layer.await(handle, result), SEMI_ERR_INTERNAL);
+    EXPECT_FALSE(result.has_media_info);
+    EXPECT_EQ(pipeline.demuxer->close_calls, 1);
+    EXPECT_EQ(pipeline.video_decoder->configure_calls, 0);
+    EXPECT_EQ(pipeline.video_decoder->unconfigure_calls, 1);
+    EXPECT_EQ(pipeline.video_renderer->unconfigure_calls, 1);
     EXPECT_TRUE(layer.stop());
 }
 
@@ -545,11 +590,13 @@ TEST(ApiLayerTest, CloseReleasesMediaAndAllowsAnotherOpen) {
     EXPECT_EQ(layer.await(close, result), SEMI_OK);
     EXPECT_FALSE(result.has_media_info);
     EXPECT_EQ(demuxer->close_calls, 1);
+    EXPECT_EQ(pipeline.video_renderer->unconfigure_calls, 1);
 
     const CommandHandle second_open = layer.open("second.mp4");
     ASSERT_NE(second_open, 0U);
     EXPECT_EQ(layer.await(second_open, result), SEMI_OK);
     EXPECT_TRUE(result.has_media_info);
+    EXPECT_EQ(pipeline.video_renderer->configure_calls, 2);
     EXPECT_TRUE(layer.stop());
 }
 
