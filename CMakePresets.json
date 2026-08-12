@@ -4,13 +4,14 @@
   "configurePresets": [
     {
       "name": "windows-all",
-      "displayName": "Windows UCRT64 Ninja (DLL + tests + smoke host)",
+      "displayName": "Windows UCRT64 Ninja (DLL + tests + SDL host)",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build-windows",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "SEMI_BUILD_DLL": "ON",
-        "SEMI_BUILD_TESTS": "ON"
+        "SEMI_BUILD_TESTS": "ON",
+        "SEMI_BUILD_SDL_PLAYER": "ON"
       }
     }
   ],

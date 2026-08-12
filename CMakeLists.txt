@@ -27,6 +27,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---- Options ----
 option(SEMI_BUILD_DLL    "Build the C ABI shared library for Dart FFI" ON)
 option(SEMI_BUILD_TESTS  "Build unit tests (links the static core, not the DLL)" OFF)
+option(SEMI_BUILD_SDL_PLAYER "Build the SDL3 playback example host" OFF)
 
 # ---- 符号可见性（全局默认）----
 # 非 Windows(ELF/Mach-O)：默认隐藏，只有头里 SEMI_API(=visibility("default")) 才导出，
@@ -61,9 +62,11 @@ target_link_libraries(semi_player_ffmpeg INTERFACE PkgConfig::FFMPEG)
 add_subdirectory(src)
 target_link_libraries(semi_player_core PRIVATE semi_player_ffmpeg)
 
-# 模拟宿主（依赖 C ABI 共享库）
-if(SEMI_BUILD_DLL)
-    add_subdirectory(tools/host_smoke)
+if(SEMI_BUILD_SDL_PLAYER)
+    if(NOT SEMI_BUILD_DLL)
+        message(FATAL_ERROR "SEMI_BUILD_SDL_PLAYER requires SEMI_BUILD_DLL=ON")
+    endif()
+    add_subdirectory(examples/sdl_player)
 endif()
 
 if(SEMI_BUILD_TESTS)

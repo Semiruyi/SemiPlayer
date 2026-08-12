@@ -40,7 +40,7 @@ pacman -Syu
 安装构建依赖：
 
 ```sh
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-spdlog mingw-w64-ucrt-x86_64-gtest mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-miniaudio git
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-spdlog mingw-w64-ucrt-x86_64-gtest mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-miniaudio mingw-w64-ucrt-x86_64-sdl3 git
 ```
 
 如果下载慢，可先设置你自己的代理再执行上面的命令：
@@ -65,16 +65,18 @@ cmake --build --preset windows-all
 - `semi_player_core` 静态库
 - `semi_player.dll` C ABI 动态库
 - `semi_player_tests` 单元测试
-- `semi_player_host.exe` C ABI 冒烟宿主
+- `semi_player_abi_tests` C ABI 动态库边界测试
+- `semi_player_sdl.exe` SDL3 播放示例宿主
 
 产物：
 
 - `build-windows/lib/libsemi_player_core.a`
 - `build-windows/bin/semi_player.dll`
 - `build-windows/bin/semi_player_tests.exe`
-- `build-windows/bin/semi_player_host.exe`
+- `build-windows/bin/semi_player_abi_tests.exe`
+- `build-windows/bin/semi_player_sdl.exe`
 
-### 4. 运行测试和宿主冒烟
+### 4. 运行测试和播放宿主
 
 运行单元测试：
 
@@ -82,18 +84,11 @@ cmake --build --preset windows-all
 ctest --test-dir build-windows
 ```
 
-运行 C ABI 冒烟宿主：
+运行 SDL3 播放宿主：
 
 ```sh
-./build-windows/bin/semi_player_host
+./build-windows/bin/semi_player_sdl path/to/media.mp4
 ```
 
-## 模拟宿主（C ABI 冒烟）
-
-在开启 `SEMI_BUILD_DLL` 的 preset 下会编 `semi_player_host`，只调公开 C API：
-
-```sh
-cmake --preset windows-all
-cmake --build --preset windows-all
-./build-windows/bin/semi_player_host
-```
+按空格播放/暂停，左右方向键前后跳转 5 秒，F11 切换全屏，Esc 退出。详细设计与线程边界见
+[`examples/sdl_player/README.md`](examples/sdl_player/README.md)。

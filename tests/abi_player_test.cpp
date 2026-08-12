@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
+#include <thread>
 
 namespace {
 
@@ -14,6 +15,28 @@ semi_command_result_t await_ok(semi_handle_t handle) {
     semi_command_result_t result{};
     EXPECT_EQ(semi_player_handle_await(handle, &result), SEMI_OK);
     return result;
+}
+
+bool wait_for_event(semi_player_event_type_t expected,
+                    std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        semi_player_event_t event{};
+        const int status = semi_player_poll_event(&event);
+        if (status != SEMI_OK) {
+            ADD_FAILURE() << "poll event failed with status " << status;
+            return false;
+        }
+        if (event.type == expected) {
+            return true;
+        }
+        if (event.type != SEMI_PLAYER_EVENT_NONE) {
+            ADD_FAILURE() << "unexpected player event " << event.type;
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
 }
 
 struct FrameCapture {
@@ -51,6 +74,12 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     ASSERT_EQ(semi_player_shutdown(), SEMI_OK);
     ASSERT_EQ(semi_player_init(), SEMI_OK);
     EXPECT_EQ(semi_player_init(), SEMI_OK);
+
+    const semi_handle_t idle_play = semi_player_play();
+    ASSERT_NE(idle_play, 0U);
+    semi_command_result_t idle_play_result{};
+    EXPECT_EQ(semi_player_handle_await(idle_play, &idle_play_result),
+              SEMI_ERR_INVALID_STATE);
 
     EXPECT_EQ(semi_player_configure_video_output(nullptr), 0U);
     semi_video_output_config_t too_small{};
@@ -113,14 +142,18 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     await_ok(pause);
     await_ok(final_seek);
     await_ok(resume);
+    ASSERT_TRUE(wait_for_event(SEMI_PLAYER_EVENT_PLAYBACK_FINISHED,
+                               std::chrono::seconds(5)));
 
-    await_ok(semi_player_close());
+    const semi_command_result_t close_result = await_ok(semi_player_close());
+    EXPECT_EQ(close_result.has_media_info, 0U);
 
     const semi_command_result_t reopen_result =
         await_ok(semi_player_open(SEMI_PLAYER_TEST_MEDIA_PATH));
     EXPECT_NE(reopen_result.has_media_info, 0U);
-    await_ok(semi_player_close());
+    EXPECT_EQ(semi_player_init(), SEMI_OK);
 
+    // shutdown must close an active media session before tearing down the DLL.
     EXPECT_EQ(semi_player_shutdown(), SEMI_OK);
     EXPECT_EQ(semi_player_shutdown(), SEMI_OK);
     EXPECT_EQ(semi_player_init(), SEMI_OK);
