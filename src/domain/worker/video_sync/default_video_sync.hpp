@@ -26,7 +26,6 @@ class DefaultVideoSync final : public VideoSync {
 public:
     DefaultVideoSync(std::shared_ptr<VideoRenderedSource> video_rendered_source,
                      std::shared_ptr<AudioOutput> audio_output,
-                     std::shared_ptr<VideoPresentationSink> presentation_sink,
                      std::shared_ptr<infra::Notifier> notifier,
                      std::shared_ptr<Generation> generation);
     ~DefaultVideoSync() override;
@@ -100,7 +99,6 @@ private:
 
     struct DataStepPresentation {
         std::optional<RenderedVideoFrame> frame;
-        std::optional<Generation::Value> end_of_input_generation;
     };
 
     void worker_main() noexcept;
@@ -131,14 +129,12 @@ private:
     void resume_local_clock() noexcept;
     void reset_local_clock() noexcept;
     void present_frame(RenderedVideoFrame&& frame) noexcept;
-    void present_end_of_input(Generation::Value generation) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
 
     std::shared_ptr<VideoRenderedSource> video_rendered_source_;
     std::shared_ptr<AudioOutput> audio_output_;
-    std::shared_ptr<VideoPresentationSink> presentation_sink_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<Generation> generation_;
 
@@ -164,7 +160,6 @@ private:
     bool waiting_for_audio_position_ = false;
     bool waiting_for_resume_ = false;
     bool end_of_input_observed_ = false;
-    bool end_of_input_notified_ = false;
 
     std::optional<RenderedVideoFrame> pending_frame_;
     std::optional<Clock::time_point> next_wake_deadline_;

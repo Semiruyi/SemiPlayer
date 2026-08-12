@@ -71,7 +71,7 @@ FfmpegAudioResamplerBackend -> DefaultAudioResampler
 MiniaudioAudioOutputBackend -> DefaultAudioOutput
 FfmpegVideoDecoderBackend   -> DefaultVideoDecoder -> VideoFrameStore
 FfmpegVideoRendererBackend  -> DefaultVideoRenderer -> VideoRenderedStore
-VideoRenderedStore          -> DefaultVideoSync -> DiscardingVideoPresentationSink
+VideoRenderedStore          -> DefaultVideoSync -> 宿主同步帧回调
 
 ApiLayer(demuxer, video_decoder, video_renderer,
          video_sync, audio_decoder, audio_resampler, audio_output)
@@ -79,9 +79,7 @@ ApiLayer(demuxer, video_decoder, video_renderer,
 
 `VideoRenderer` 当前将解码帧经 FFmpeg `sws_scale` 转成 RGBA8，
 输出进入 `VideoRenderedStore`，再由 `DefaultVideoSync` 按播放时钟消费。
-当前 IoC 注入临时的 `DiscardingVideoPresentationSink`，所以到期帧会被消费后直接释放。
-
-宿主帧回调落地后不会新增 `VideoOutput` IoC 节点：删除临时 presentation sink 构造依赖，宿主回调改由 ApiLayer 在 `open` 时通过 `VideoSyncOptions` 传给 `DefaultVideoSync`。输出格式和尺寸同时由 ApiLayer 传给 `VideoRenderer::configure()`。
+宿主帧回调不构成独立 IoC 节点：它由 ApiLayer 在 `open` 时通过 `VideoSyncOptions` 传给 `DefaultVideoSync`。输出格式和尺寸同时由 ApiLayer 传给 `VideoRenderer::configure()`；未配置回调时，VideoSync 仍消费并销毁到期帧。
 
 `MiniaudioAudioOutputBackend` 是当前 IoC 默认音频输出后端：它初始化系统默认播放设备，产出固定 playback PCM format，并通过内部 ring buffer 把 `DefaultAudioOutput` 提交的 PCM 交给 miniaudio 设备回调；设备 callback 由 play/pause 控制。
 `NullAudioOutputBackend` 保留为测试/占位后端，用于不需要真实设备的单元测试。

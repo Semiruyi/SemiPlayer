@@ -34,12 +34,10 @@ VideoSyncError internal_error(std::string message) {
 DefaultVideoSync::DefaultVideoSync(
     std::shared_ptr<VideoRenderedSource> video_rendered_source,
     std::shared_ptr<AudioOutput> audio_output,
-    std::shared_ptr<VideoPresentationSink> presentation_sink,
     std::shared_ptr<infra::Notifier> notifier,
     std::shared_ptr<Generation> generation)
     : video_rendered_source_(std::move(video_rendered_source)),
       audio_output_(std::move(audio_output)),
-      presentation_sink_(std::move(presentation_sink)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
       worker_([this] {
@@ -204,7 +202,7 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
         }
     }
 
-    if (!video_rendered_source_ || !presentation_sink_ || !notifier_ || !generation_ ||
+    if (!video_rendered_source_ || !notifier_ || !generation_ ||
         (command.options.audio_master && !audio_output_)) {
         std::lock_guard lock(mutex_);
         const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
@@ -226,7 +224,6 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
         waiting_for_audio_position_ = false;
         waiting_for_resume_ = false;
         end_of_input_observed_ = false;
-        end_of_input_notified_ = false;
         pending_frame_.reset();
         next_wake_deadline_.reset();
         reset_local_clock();
@@ -289,7 +286,6 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
     end_of_input_observed_ = false;
-    end_of_input_notified_ = false;
     pending_frame_.reset();
     next_wake_deadline_.reset();
     active_generation_ = 0;
@@ -354,9 +350,6 @@ void DefaultVideoSync::process_data_step() noexcept {
             paused_generation_pending_ = false;
         }
     }
-    if (presentation.end_of_input_generation) {
-        present_end_of_input(*presentation.end_of_input_generation);
-    }
 }
 
 bool DefaultVideoSync::begin_data_step() noexcept {
@@ -391,12 +384,7 @@ bool DefaultVideoSync::wait_for_audio_clock_if_needed(
         if (auto* frame = std::get_if<RenderedVideoFrame>(&item)) {
             pending_frame_.emplace(std::move(*frame));
         } else {
-            const auto end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
             end_of_input_observed_ = true;
-            if (!end_of_input_notified_) {
-                end_of_input_notified_ = true;
-                present_end_of_input(end_generation);
-            }
             return true;
         }
     }
@@ -442,12 +430,7 @@ DefaultVideoSync::DataStepPresentation DefaultVideoSync::collect_due_presentatio
                 continue;
             }
 
-            const auto end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
             end_of_input_observed_ = true;
-            if (!end_of_input_notified_) {
-                presentation.end_of_input_generation = end_generation;
-            }
-            end_of_input_notified_ = true;
             break;
         }
     }
@@ -517,7 +500,6 @@ void DefaultVideoSync::adopt_generation_if_needed() noexcept {
     waiting_for_resume_ = false;
     audio_position_ready_hint_ = false;
     end_of_input_observed_ = false;
-    end_of_input_notified_ = false;
     active_generation_ = current_generation;
     generation_changed_hint_ = false;
     input_not_empty_hint_ = true;
@@ -615,24 +597,13 @@ void DefaultVideoSync::reset_local_clock() noexcept {
 }
 
 void DefaultVideoSync::present_frame(RenderedVideoFrame&& frame) noexcept {
-    if (!presentation_sink_) {
+    if (!options_.on_frame) {
         return;
     }
     try {
-        presentation_sink_->present(std::move(frame));
+        options_.on_frame(frame);
     } catch (...) {
-        SEMI_LOG_ERROR("video presentation sink threw an exception");
-    }
-}
-
-void DefaultVideoSync::present_end_of_input(Generation::Value generation) noexcept {
-    if (!presentation_sink_) {
-        return;
-    }
-    try {
-        presentation_sink_->end_of_input(generation);
-    } catch (...) {
-        SEMI_LOG_ERROR("video presentation sink end-of-input threw an exception");
+        SEMI_LOG_ERROR("video frame callback threw an exception");
     }
 }
 

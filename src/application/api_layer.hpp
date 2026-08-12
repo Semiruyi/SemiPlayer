@@ -1,8 +1,10 @@
 #pragma once
 
+#include "contracts/media/media_types.hpp"
 #include "semi_player/status.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -13,6 +15,7 @@ class AudioResampler;
 class Demuxer;
 class Generation;
 class VideoDecoder;
+class RenderedVideoFrame;
 class VideoRenderer;
 class VideoSync;
 }
@@ -48,6 +51,17 @@ struct MediaInfo {
 struct CommandResult {
     bool has_media_info = false;
     MediaInfo media_info;
+};
+
+using VideoFramePresentationCallback =
+    std::function<void(const domain::RenderedVideoFrame&)>;
+
+struct VideoPresentationConfig {
+    contracts::media::VideoPixelFormat pixel_format =
+        contracts::media::VideoPixelFormat::Rgba8;
+    std::uint32_t output_width = 0;
+    std::uint32_t output_height = 0;
+    VideoFramePresentationCallback on_frame;
 };
 
 enum class PlayerEventType : std::uint8_t {
@@ -90,6 +104,9 @@ public:
     [[nodiscard]] CommandHandle seek(std::int64_t position_us);
     [[nodiscard]] CommandHandle close();
     [[nodiscard]] CommandHandle set_volume(std::uint32_t volume);
+    [[nodiscard]] CommandHandle configure_video_output(
+        VideoPresentationConfig config,
+        semi_status_t validation_status = SEMI_OK);
 
     // 等待命令进入终态，将结果复制到 out_result 并消费 handle。返回命令的最终状态；
     // 无效、已消费或已淘汰的 handle 返回 SEMI_ERR_INVALID_HANDLE。
@@ -111,6 +128,9 @@ private:
     [[nodiscard]] CommandHandle enqueue_seek(std::int64_t position_us);
     [[nodiscard]] CommandHandle enqueue_close();
     [[nodiscard]] CommandHandle enqueue_set_volume(std::uint32_t volume);
+    [[nodiscard]] CommandHandle
+    enqueue_configure_video_output(VideoPresentationConfig config,
+                                   semi_status_t validation_status);
 
     std::unique_ptr<Impl> impl_;
 };

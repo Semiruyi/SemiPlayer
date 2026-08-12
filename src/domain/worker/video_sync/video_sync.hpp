@@ -1,10 +1,10 @@
 #pragma once
 
 #include "domain/resource/video_rendered_store/video_rendered_store_source.hpp"
-#include "domain/worker/video_sync/video_presentation_sink.hpp"
 
 #include <cstdint>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -25,6 +25,7 @@ struct VideoSyncOptions {
     // Audio is the master clock when the opened media has an audio stream.
     // Video-only media uses the local monotonic clock fallback.
     bool audio_master = true;
+    std::function<void(const RenderedVideoFrame&)> on_frame;
 };
 
 // Final video consumer. The worker lives for the module lifetime; configure /

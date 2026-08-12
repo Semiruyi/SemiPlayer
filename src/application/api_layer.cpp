@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <deque>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -40,9 +41,13 @@ struct CloseCommand {};
 struct SetVolumeCommand {
     std::uint32_t volume;
 };
+struct ConfigureVideoOutputCommand {
+    VideoPresentationConfig config;
+    semi_status_t validation_status = SEMI_OK;
+};
 
 using Command = std::variant<OpenCommand, PlayCommand, PauseCommand, SeekCommand, CloseCommand,
-                             SetVolumeCommand>;
+                             SetVolumeCommand, ConfigureVideoOutputCommand>;
 
 template <typename... Handlers>
 struct Overloaded : Handlers... {
@@ -119,6 +124,7 @@ struct ApiLayer::Impl {
     std::shared_ptr<domain::VideoDecoder> video_decoder;
     std::shared_ptr<domain::VideoRenderer> video_renderer;
     std::shared_ptr<domain::VideoSync> video_sync;
+    VideoPresentationConfig video_presentation_config;
     std::shared_ptr<infra::Notifier::Subscription> playback_finished_subscription;
     PlayerState player_state = PlayerState::Idle;
     domain::Generation::Value active_generation = 0;
@@ -187,6 +193,9 @@ bool can_execute(PlayerState state, const Command& command) noexcept {
             },
             [](const CloseCommand&) { return true; },
             [](const SetVolumeCommand&) { return true; },
+            [state](const ConfigureVideoOutputCommand&) {
+                return state == PlayerState::Idle;
+            },
         },
         command);
 }
@@ -350,7 +359,11 @@ configure_video_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& 
     }
 
     if (impl.video_renderer) {
-        auto rendered = impl.video_renderer->configure({});
+        auto rendered = impl.video_renderer->configure({
+            .output_pixel_format = impl.video_presentation_config.pixel_format,
+            .output_width = impl.video_presentation_config.output_width,
+            .output_height = impl.video_presentation_config.output_height,
+        });
         if (!rendered) {
             SEMI_LOG_ERROR("video renderer configure failed: {}", rendered.error().message);
             close_pipeline(impl);
@@ -368,8 +381,11 @@ configure_video_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& 
     }
 
     if (impl.video_sync) {
-        auto synced = impl.video_sync->configure(
-            domain::VideoSyncOptions{.audio_master = opened.audio.has_value()});
+        domain::VideoSyncOptions sync_options{
+            .audio_master = opened.audio.has_value(),
+            .on_frame = impl.video_presentation_config.on_frame,
+        };
+        auto synced = impl.video_sync->configure(sync_options);
         if (!synced) {
             SEMI_LOG_ERROR("video sync configure failed: {}", synced.error().message);
             close_pipeline(impl);
@@ -572,6 +588,25 @@ CommandExecution execute_close(PlayerState current_state, ApiLayer::Impl& impl) 
     return execution;
 }
 
+CommandExecution execute_configure_video_output(
+    const ConfigureVideoOutputCommand& command,
+    ApiLayer::Impl& impl) {
+    const auto& config = command.config;
+    if (command.validation_status != SEMI_OK) {
+        return make_failure(command.validation_status);
+    }
+
+    constexpr auto max_dimension =
+        static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+    if (config.pixel_format != contracts::media::VideoPixelFormat::Rgba8 ||
+        config.output_width > max_dimension || config.output_height > max_dimension) {
+        return make_failure(SEMI_ERR_INVALID_ARGUMENT);
+    }
+
+    impl.video_presentation_config = config;
+    return make_failure(SEMI_OK);
+}
+
 CommandExecution execute_command(PlayerState current_state,
                                  const Command& command,
                                  ApiLayer::Impl& impl) noexcept {
@@ -600,6 +635,9 @@ CommandExecution execute_command(PlayerState current_state,
                     return execute_close(current_state, impl);
                 },
                 [](const SetVolumeCommand&) -> CommandExecution { return {}; },
+                [&impl](const ConfigureVideoOutputCommand& value) {
+                    return execute_configure_video_output(value, impl);
+                },
             },
             command);
     } catch (const std::exception& error) {
@@ -820,6 +858,15 @@ CommandHandle ApiLayer::enqueue_set_volume(std::uint32_t volume) {
     return enqueue(*impl_, SetVolumeCommand{volume});
 }
 
+CommandHandle
+ApiLayer::enqueue_configure_video_output(VideoPresentationConfig config,
+                                         semi_status_t validation_status) {
+    return enqueue(*impl_, ConfigureVideoOutputCommand{
+        .config = std::move(config),
+        .validation_status = validation_status,
+    });
+}
+
 CommandHandle ApiLayer::open(std::string source) {
     return enqueue_open(std::move(source));
 }
@@ -842,6 +889,11 @@ CommandHandle ApiLayer::close() {
 
 CommandHandle ApiLayer::set_volume(std::uint32_t volume) {
     return enqueue_set_volume(volume);
+}
+
+CommandHandle ApiLayer::configure_video_output(VideoPresentationConfig config,
+                                               semi_status_t validation_status) {
+    return enqueue_configure_video_output(std::move(config), validation_status);
 }
 
 semi_status_t ApiLayer::await(CommandHandle handle, CommandResult& out_result) {

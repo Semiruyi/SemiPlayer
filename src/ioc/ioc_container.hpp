@@ -39,7 +39,8 @@ namespace semi::ioc {
 // 当前装配音频播放和视频解码链路：
 // Demuxer -> AudioDecoder -> AudioResampler -> AudioOutput，
 // Demuxer -> VideoPacketQueue -> VideoDecoder -> VideoFrameStore -> VideoRenderer；
-// 当前 VideoRenderer 的输出接临时丢弃型 VideoRenderedSink，等待宿主呈现链路接入。
+// VideoRenderer 的输出经 VideoRenderedStore 交给 VideoSync；宿主帧回调作为
+// VideoSync 的会话配置由 ApiLayer 在 open 时传入，不构成独立 IoC 节点。
 // 工作模块注入 ApiLayer。运行期仍禁止借 IoC 做服务定位。
 // 线程约定：assemble / dispose 为单线程控制面操作。
 class IoCContainer {

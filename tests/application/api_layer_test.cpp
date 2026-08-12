@@ -144,10 +144,12 @@ public:
     bool fail_configure = false;
     int configure_calls = 0;
     int unconfigure_calls = 0;
+    domain::VideoRendererOptions last_options;
 
     std::expected<void, domain::VideoRendererError>
-    configure(const domain::VideoRendererOptions&) override {
+    configure(const domain::VideoRendererOptions& options) override {
         ++configure_calls;
+        last_options = options;
         if (fail_configure) {
             return std::unexpected(domain::VideoRendererError{
                 .code = domain::VideoRendererErrorCode::BackendFailure,
@@ -239,6 +241,7 @@ public:
     bool fail_start_playback = false;
     bool fail_pause_playback = false;
     bool last_audio_master = false;
+    bool last_has_on_frame = false;
     int configure_calls = 0;
     int start_playback_calls = 0;
     int pause_playback_calls = 0;
@@ -248,6 +251,7 @@ public:
     configure(const domain::VideoSyncOptions& options) override {
         ++configure_calls;
         last_audio_master = options.audio_master;
+        last_has_on_frame = static_cast<bool>(options.on_frame);
         if (fail_configure) {
             return std::unexpected(domain::VideoSyncError{
                 .code = domain::VideoSyncErrorCode::Internal,
@@ -517,6 +521,56 @@ TEST(ApiLayerTest, PlayAndPauseControlAudioOutput) {
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
     EXPECT_EQ(pipeline.video_sync->pause_playback_calls, 1);
 
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoOutputConfigurationIsSerializedAndAppliedOnOpen) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    VideoPresentationConfig config;
+    config.output_width = 640;
+    config.output_height = 360;
+    config.on_frame = [](const domain::RenderedVideoFrame&) {};
+
+    const CommandHandle configured = layer.configure_video_output(std::move(config));
+    const CommandHandle opened = layer.open("movie.mp4");
+    ASSERT_NE(configured, 0U);
+    ASSERT_NE(opened, 0U);
+
+    CommandResult result;
+    EXPECT_EQ(layer.await(configured, result), SEMI_OK);
+    EXPECT_EQ(layer.await(opened, result), SEMI_OK);
+    EXPECT_EQ(pipeline.video_renderer->last_options.output_pixel_format,
+              contracts::media::VideoPixelFormat::Rgba8);
+    EXPECT_EQ(pipeline.video_renderer->last_options.output_width, 640U);
+    EXPECT_EQ(pipeline.video_renderer->last_options.output_height, 360U);
+    EXPECT_TRUE(pipeline.video_sync->last_has_on_frame);
+
+    const CommandHandle rejected =
+        layer.configure_video_output(VideoPresentationConfig{});
+    ASSERT_NE(rejected, 0U);
+    EXPECT_EQ(layer.await(rejected, result), SEMI_ERR_INVALID_STATE);
+
+    const auto close = layer.close();
+    ASSERT_NE(close, 0U);
+    EXPECT_EQ(layer.await(close, result), SEMI_OK);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoOutputConfigurationReportsInvalidArgumentsThroughHandle) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    VideoPresentationConfig config;
+    config.pixel_format = contracts::media::VideoPixelFormat::Unknown;
+    const CommandHandle handle = layer.configure_video_output(std::move(config));
+    ASSERT_NE(handle, 0U);
+
+    CommandResult result;
+    EXPECT_EQ(layer.await(handle, result), SEMI_ERR_INVALID_ARGUMENT);
     EXPECT_TRUE(layer.stop());
 }
 

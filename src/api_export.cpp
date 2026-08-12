@@ -1,10 +1,13 @@
 #include "semi_player/semi_player.h"
 
 #include "application/api_layer.hpp"
+#include "domain/resource/video_rendered_store/rendered_video_frame.hpp"
 #include "infrastructure/log/log.hpp"
 #include "ioc/ioc_container.hpp"
 
+#include <cstdint>
 #include <memory>
+#include <utility>
 
 // C ABI 导出层（也是生命周期入口）。
 // init     → log::init + IoCContainer::assemble
@@ -53,6 +56,51 @@ int api_layer_unavailable_status() noexcept {
     return semi::ioc::IoCContainer::instance().is_assembled()
         ? SEMI_ERR_INTERNAL
         : SEMI_ERR_NOT_INITIALIZED;
+}
+
+struct ParsedVideoPresentationConfig {
+    semi::application::VideoPresentationConfig config;
+    semi_status_t validation_status = SEMI_OK;
+};
+
+ParsedVideoPresentationConfig make_video_presentation_config(
+    const semi_video_output_config_t& public_config) {
+    ParsedVideoPresentationConfig parsed;
+    if (public_config.struct_size < sizeof(semi_video_output_config_t)) {
+        parsed.validation_status = SEMI_ERR_INVALID_ARGUMENT;
+        return parsed;
+    }
+
+    auto& config = parsed.config;
+    config.pixel_format = public_config.pixel_format == SEMI_VIDEO_PIXEL_FORMAT_RGBA8888
+        ? semi::contracts::media::VideoPixelFormat::Rgba8
+        : semi::contracts::media::VideoPixelFormat::Unknown;
+    config.output_width = public_config.output_width;
+    config.output_height = public_config.output_height;
+
+    if (public_config.on_frame != nullptr) {
+        config.on_frame = [callback = public_config.on_frame,
+                           user_data = public_config.user_data](
+                              const semi::domain::RenderedVideoFrame& frame) {
+            const auto& rendered = frame.rendered();
+            semi_video_frame_t public_frame{};
+            public_frame.struct_size = sizeof(public_frame);
+            public_frame.pixel_format = SEMI_VIDEO_PIXEL_FORMAT_RGBA8888;
+            public_frame.width = rendered.width;
+            public_frame.height = rendered.height;
+            public_frame.has_pts = rendered.pts_us.has_value() ? 1U : 0U;
+            public_frame.pts_us = rendered.pts_us.value_or(0);
+            public_frame.generation = frame.generation();
+            public_frame.plane_count = 1;
+            public_frame.planes[0].data =
+                reinterpret_cast<const std::uint8_t*>(rendered.pixels.data());
+            public_frame.planes[0].size_bytes =
+                static_cast<std::uint64_t>(rendered.pixels.size());
+            public_frame.planes[0].stride_bytes = rendered.stride_bytes;
+            callback(user_data, &public_frame);
+        };
+    }
+    return parsed;
 }
 
 } // namespace
@@ -125,6 +173,25 @@ semi_handle_t semi_player_close(void) {
 semi_handle_t semi_player_set_volume(unsigned int volume) {
     const auto layer = api_layer();
     return layer ? layer->set_volume(volume) : 0;
+}
+
+semi_handle_t semi_player_configure_video_output(
+    const semi_video_output_config_t* config) {
+    if (config == nullptr) {
+        return 0;
+    }
+    const auto layer = api_layer();
+    if (!layer) {
+        return 0;
+    }
+    try {
+        auto parsed = make_video_presentation_config(*config);
+        return layer->configure_video_output(std::move(parsed.config),
+                                             parsed.validation_status);
+    } catch (...) {
+        SEMI_LOG_ERROR("failed to construct video output configuration command");
+        return 0;
+    }
 }
 
 int semi_player_poll_event(semi_player_event_t* out_event) {

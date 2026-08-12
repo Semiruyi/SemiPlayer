@@ -14,7 +14,6 @@
 #include "domain/worker/video_decoder/default_video_decoder.hpp"
 #include "domain/worker/video_renderer/default_video_renderer.hpp"
 #include "domain/worker/video_sync/default_video_sync.hpp"
-#include "domain/worker/video_sync/video_presentation_sink.hpp"
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
@@ -27,17 +26,6 @@
 #define SEMI_LOG_TAG "ioc"
 
 namespace semi::ioc {
-namespace {
-
-class DiscardingVideoPresentationSink final : public domain::VideoPresentationSink {
-public:
-    void present(domain::RenderedVideoFrame&&) noexcept override {}
-
-    void end_of_input(domain::Generation::Value) noexcept override {}
-};
-
-} // namespace
-
 IoCContainer& IoCContainer::instance() {
     static IoCContainer container;
     return container;
@@ -59,7 +47,6 @@ bool IoCContainer::assemble() noexcept {
         auto video_packet_queue = std::make_shared<domain::VideoPacketQueue>(notifier);
         auto video_frame_store = std::make_shared<domain::VideoFrameStore>(notifier);
         auto video_rendered_store = std::make_shared<domain::VideoRenderedStore>(notifier);
-        auto presentation_sink = std::make_shared<DiscardingVideoPresentationSink>();
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
@@ -90,7 +77,7 @@ bool IoCContainer::assemble() noexcept {
         auto video_renderer = std::make_shared<domain::DefaultVideoRenderer>(
             video_frame_store, video_rendered_store, video_renderer_backend, notifier, generation);
         auto video_sync = std::make_shared<domain::DefaultVideoSync>(
-            video_rendered_store, audio_output, presentation_sink, notifier, generation);
+            video_rendered_store, audio_output, notifier, generation);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
             demuxer,

@@ -15,6 +15,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -68,14 +69,13 @@ struct PresentedFrame {
     std::uint8_t marker = 0;
 };
 
-class RecordingPresentationSink final : public VideoPresentationSink {
+class RecordingPresentation final {
 public:
-    RecordingPresentationSink() {
+    RecordingPresentation() {
         frames_.reserve(8);
-        end_generations_.reserve(4);
     }
 
-    void present(RenderedVideoFrame&& frame) noexcept override {
+    void present(const RenderedVideoFrame& frame) noexcept {
         const auto& rendered = frame.rendered();
         PresentedFrame presented{
             .generation = frame.generation(),
@@ -87,14 +87,6 @@ public:
         {
             std::lock_guard lock(mutex_);
             frames_.push_back(presented);
-        }
-        cv_.notify_all();
-    }
-
-    void end_of_input(Generation::Value generation) noexcept override {
-        {
-            std::lock_guard lock(mutex_);
-            end_generations_.push_back(generation);
         }
         cv_.notify_all();
     }
@@ -115,7 +107,39 @@ private:
     mutable std::mutex mutex_;
     mutable std::condition_variable cv_;
     std::vector<PresentedFrame> frames_;
-    std::vector<Generation::Value> end_generations_;
+};
+
+class BlockingPresentation final {
+public:
+    void present(const RenderedVideoFrame&) {
+        std::unique_lock lock(mutex_);
+        entered_ = true;
+        cv_.notify_all();
+        cv_.wait(lock, [this] {
+            return may_return_;
+        });
+    }
+
+    bool wait_until_entered(std::chrono::milliseconds timeout) {
+        std::unique_lock lock(mutex_);
+        return cv_.wait_for(lock, timeout, [this] {
+            return entered_;
+        });
+    }
+
+    void allow_return() {
+        {
+            std::lock_guard lock(mutex_);
+            may_return_ = true;
+        }
+        cv_.notify_all();
+    }
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool entered_ = false;
+    bool may_return_ = false;
 };
 
 contracts::media::RenderedVideo make_rendered_video(std::uint8_t marker,
@@ -145,7 +169,7 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     auto generation = std::make_shared<Generation>(notifier);
     auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
     auto audio_output = std::make_shared<FakeAudioOutput>();
-    auto sink = std::make_shared<RecordingPresentationSink>();
+    auto presentation = std::make_shared<RecordingPresentation>();
 
     ASSERT_EQ(rendered_store->try_push(make_frame(1, 100'000, generation->current())),
               VideoRenderedPushResult::Accepted);
@@ -154,13 +178,18 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     ASSERT_EQ(rendered_store->try_push(make_frame(3, 2'000'000, generation->current())),
               VideoRenderedPushResult::Accepted);
 
-    DefaultVideoSync sync(rendered_store, audio_output, sink, notifier, generation);
-    ASSERT_TRUE(sync.configure(VideoSyncOptions{.audio_master = true}));
+    DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
+    ASSERT_TRUE(sync.configure(VideoSyncOptions{
+        .audio_master = true,
+        .on_frame = [presentation](const RenderedVideoFrame& frame) {
+            presentation->present(frame);
+        },
+    }));
     audio_output->set_position(generation->current(), 150'000);
     ASSERT_TRUE(sync.start_playback());
 
-    ASSERT_TRUE(sink->wait_for_frames(1, std::chrono::seconds(1)));
-    auto presented = sink->frames();
+    ASSERT_TRUE(presentation->wait_for_frames(1, std::chrono::seconds(1)));
+    auto presented = presentation->frames();
     ASSERT_EQ(presented.size(), 1U);
     EXPECT_EQ(presented.front().generation, generation->current());
     EXPECT_EQ(presented.front().pts_us, 120'000);
@@ -170,8 +199,8 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     ASSERT_TRUE(notifier->send(AudioPlaybackPositionReady{
         .generation = generation->current(),
     }));
-    ASSERT_TRUE(sink->wait_for_frames(2, std::chrono::seconds(1)));
-    presented = sink->frames();
+    ASSERT_TRUE(presentation->wait_for_frames(2, std::chrono::seconds(1)));
+    presented = presentation->frames();
     ASSERT_EQ(presented.size(), 2U);
     EXPECT_EQ(presented.back().pts_us, 2'000'000);
     EXPECT_EQ(presented.back().marker, 3);
@@ -184,27 +213,64 @@ TEST(DefaultVideoSyncTest, DiscardsStaleGenerationAndPresentsOnePausedFrameAfter
     auto generation = std::make_shared<Generation>(notifier);
     auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
     auto audio_output = std::make_shared<FakeAudioOutput>();
-    auto sink = std::make_shared<RecordingPresentationSink>();
+    auto presentation = std::make_shared<RecordingPresentation>();
 
     ASSERT_EQ(rendered_store->try_push(make_frame(1, 10'000, generation->current())),
               VideoRenderedPushResult::Accepted);
 
-    DefaultVideoSync sync(rendered_store, audio_output, sink, notifier, generation);
-    ASSERT_TRUE(sync.configure(VideoSyncOptions{.audio_master = true}));
+    DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
+    ASSERT_TRUE(sync.configure(VideoSyncOptions{
+        .audio_master = true,
+        .on_frame = [presentation](const RenderedVideoFrame& frame) {
+            presentation->present(frame);
+        },
+    }));
 
     const auto new_generation = generation->bump();
     audio_output->set_position(new_generation, 200'000);
     ASSERT_EQ(rendered_store->try_push(make_frame(2, 100'000, new_generation)),
               VideoRenderedPushResult::Accepted);
 
-    ASSERT_TRUE(sink->wait_for_frames(1, std::chrono::seconds(1)));
-    const auto presented = sink->frames();
+    ASSERT_TRUE(presentation->wait_for_frames(1, std::chrono::seconds(1)));
+    const auto presented = presentation->frames();
     ASSERT_EQ(presented.size(), 1U);
     EXPECT_EQ(presented.front().generation, new_generation);
     EXPECT_EQ(presented.front().marker, 2);
     EXPECT_EQ(presented.front().pts_us, 100'000);
 
     sync.unconfigure();
+}
+
+TEST(DefaultVideoSyncTest, UnconfigureWaitsForSynchronousFrameCallback) {
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto generation = std::make_shared<Generation>(notifier);
+    auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
+    auto presentation = std::make_shared<BlockingPresentation>();
+
+    ASSERT_EQ(rendered_store->try_push(make_frame(1, 0, generation->current())),
+              VideoRenderedPushResult::Accepted);
+
+    DefaultVideoSync sync(rendered_store, nullptr, notifier, generation);
+    ASSERT_TRUE(sync.configure(VideoSyncOptions{
+        .audio_master = false,
+        .on_frame = [presentation](const RenderedVideoFrame& frame) {
+            presentation->present(frame);
+        },
+    }));
+    ASSERT_TRUE(sync.start_playback());
+    ASSERT_TRUE(presentation->wait_until_entered(std::chrono::seconds(1)));
+
+    std::atomic<bool> unconfigured = false;
+    std::thread unconfigure_thread([&sync, &unconfigured] {
+        sync.unconfigure();
+        unconfigured.store(true, std::memory_order_release);
+    });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    EXPECT_FALSE(unconfigured.load(std::memory_order_acquire));
+    presentation->allow_return();
+    unconfigure_thread.join();
+    EXPECT_TRUE(unconfigured.load(std::memory_order_acquire));
 }
 
 } // namespace

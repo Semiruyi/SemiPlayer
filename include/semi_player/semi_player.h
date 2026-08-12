@@ -9,6 +9,8 @@
 
 #include "semi_player/status.h"
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -29,6 +31,44 @@ extern "C" {
 
 /* Opaque handle to an in-flight command. 0 == invalid/no handle. */
 typedef unsigned long long semi_handle_t;
+
+typedef uint32_t semi_video_pixel_format_t;
+
+enum {
+    SEMI_VIDEO_PIXEL_FORMAT_RGBA8888 = 1
+};
+
+typedef struct semi_video_plane {
+    const uint8_t *data;
+    uint64_t size_bytes;
+    uint32_t stride_bytes;
+} semi_video_plane_t;
+
+typedef struct semi_video_frame {
+    uint32_t struct_size;
+    semi_video_pixel_format_t pixel_format;
+    uint32_t width;
+    uint32_t height;
+    uint32_t has_pts;
+    int64_t pts_us;
+    uint32_t generation;
+    uint32_t plane_count;
+    semi_video_plane_t planes[4];
+} semi_video_frame_t;
+
+/* frame and all plane data are read-only and valid only during the callback. */
+typedef void (*semi_video_frame_callback)(
+    void *user_data,
+    const semi_video_frame_t *frame);
+
+typedef struct semi_video_output_config {
+    uint32_t struct_size;
+    semi_video_pixel_format_t pixel_format;
+    uint32_t output_width;
+    uint32_t output_height;
+    semi_video_frame_callback on_frame;
+    void *user_data;
+} semi_video_output_config_t;
 
 typedef struct semi_media_info {
     long long duration_us;
@@ -70,6 +110,10 @@ SEMI_API semi_handle_t semi_player_pause(void);
 SEMI_API semi_handle_t semi_player_seek(long long position_us);
 SEMI_API semi_handle_t semi_player_close(void);
 SEMI_API semi_handle_t semi_player_set_volume(unsigned int volume);
+/* Copies config into the normal command queue. Returns 0 when no task can be
+ * created; otherwise await the handle for SEMI_OK or SEMI_ERR_*. */
+SEMI_API semi_handle_t semi_player_configure_video_output(
+    const semi_video_output_config_t *config);
 
 /* ---- Events ---- */
 /* Non-blocking. Returns SEMI_OK when out_event is written; no pending event is
