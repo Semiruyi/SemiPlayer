@@ -1,0 +1,18 @@
+include/semi_player/semi_player.h
+  h_71186a0a6bfb09 4
+tools/host_smoke/main.cpp
+  h_71186a0a6bfb09 1
+src/CMakeLists.txt
+  h_71186a0a6bfb09 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "2.5.918",
+  "base_commit_sha": "6ca5595d9ef35b5f41cfe630b81cfa39afab2ead",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
