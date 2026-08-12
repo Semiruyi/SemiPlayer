@@ -437,6 +437,9 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
     }
     pending_frame_.reset();
     playback_clock_.reset(current_generation, playback_sample_rate_);
+    if (!playback_enabled_) {
+        playback_clock_.pause(current_generation);
+    }
     playback_position_ready_hint_.store(false, std::memory_order_release);
     playback_position_ready_notified_.store(false, std::memory_order_release);
     phase_ = PlaybackPhase::Running;
@@ -647,8 +650,11 @@ void DefaultAudioOutput::handle_audio_frame(
 
     pending_frame_.emplace(std::move(frame));
     if (pending_frame_->decoded().pts_us) {
-        (void)playback_clock_.set_first_pts(current_generation,
-                                            *pending_frame_->decoded().pts_us);
+        const bool clock_anchored = playback_clock_.set_first_pts(
+            current_generation, *pending_frame_->decoded().pts_us);
+        if (clock_anchored && playback_clock_.current_position()) {
+            playback_position_ready_hint_.store(true, std::memory_order_release);
+        }
     }
     backend_progress_hint_ = true;
 }

@@ -1,4 +1,4 @@
-// 模拟宿主进程：只依赖公开 C ABI（与 Flutter/dart:ffi 侧用法一致）。
+// 模拟宿主进程
 // 验证 init/shutdown 返回值，以及 IoC 侧 info 日志（未 init 日志库时走 stderr fallback）。
 
 #include "semi_player/semi_player.h"

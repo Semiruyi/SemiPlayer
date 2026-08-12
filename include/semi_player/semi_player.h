@@ -1,7 +1,7 @@
 #ifndef SEMI_PLAYER_H
 #define SEMI_PLAYER_H
 
-/* SemiPlayer C ABI — consumed by Flutter(Dart) via dart:ffi.
+/* SemiPlayer C ABI
  * 对应 docs/modules/api_layer/api_layer.md 的三类接口：
  *   控制命令（投递命令、返回句柄，可 await/cancel）
  * 同步返回的 int 状态码见 status.h / docs/error_convention.md。

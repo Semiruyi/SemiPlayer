@@ -27,7 +27,7 @@ add_subdirectory(infrastructure)
 add_subdirectory(application)
 add_subdirectory(ioc)
 
-# ---- C ABI 共享库（给 Flutter 经 dart:ffi 加载）----
+# ---- C ABI 共享库 ----
 # 纯逻辑/测试开发阶段可 -DSEMI_BUILD_DLL=OFF 跳过，只编 core + tests，不碰 FFI/导出。
 if(SEMI_BUILD_DLL)
     add_library(semi_player SHARED
