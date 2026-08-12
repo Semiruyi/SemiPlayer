@@ -4,7 +4,9 @@
 
 ## 对外模型
 
-控制接口 `open/play/pause/seek/close/set_volume` 只负责构造任务并立即返回非零 `CommandHandle`。`0` 表示 ApiLayer 未运行、任务容量已满或入队失败。
+控制接口 `open/play/pause/seek/close/set_volume/configure_video_output` 只负责构造任务并立即返回非零 `CommandHandle`。`0` 表示必要的顶层指针参数为空、ApiLayer 未运行、任务容量已满或入队失败。
+
+`configure_video_output` 是普通异步控制命令，只允许在执行时的状态为 `Idle`。它声明输出像素格式、尺寸、宿主帧回调和 `user_data`；后续 `open` 把格式/尺寸传给 VideoRenderer，把回调传给 VideoSync。配置与 `open` 由同一命令线程按 FIFO 串行执行，因此不存在配置和 open 的并发竞态。完整的借用生命周期和线程契约见 [`../video_output/video_output.md`](../video_output/video_output.md)。
 
 宿主对 handle 可调用：
 
@@ -12,7 +14,7 @@
 - `cancel(handle)`：仅接受尚未开始任务的取消请求。任务不从队列移除，仍由命令线程取出并完成为 `SEMI_ERR_CANCELLED`。
 - `poll_event(out_event)`：非阻塞读取宿主可观察事件；没有待处理事件时仍返回 `SEMI_OK`，并写入 `SEMI_PLAYER_EVENT_NONE`。
 
-没有 `release`、独立 `get_media_info` 或会话查询接口。`await` 是唯一的结果读取与正常回收路径。
+控制命令没有独立 `release`、`get_media_info` 或会话查询接口，`await` 是命令结果的唯一读取与正常回收路径。视频帧只在同步回调期间借用，不提供帧 release 接口。
 
 ## 任务状态
 
@@ -48,12 +50,13 @@ Queued -> Running -> Completed
 | `seek` | `Ready/Playing/Paused/Ended` | 保持原播放意图；`Ended` 后续进入 `Paused` |
 | `close` | 任意状态 | `Idle`；`Idle` 下不访问媒体模块 |
 | `set_volume` | 任意状态 | 状态不变 |
+| `configure_video_output` | `Idle` | 状态不变；原子替换后续 open 使用的视频输出配置 |
 
 `Idle/Error` 下的 `play/pause/seek` 返回 `SEMI_ERR_INVALID_STATE`。普通资源错误不会进入 `Error`；只有模块可能处于不一致状态且无法回滚时才使用 `Error`，并可通过 `close` 恢复到 `Idle`。
 
 ## 执行边界
 
-当前已接入 `open/close` 的真实业务和状态转移。`play/pause/seek/set_volume` 的状态前置条件已生效，但尚未接入的实际媒体操作仍返回 `SEMI_ERR_INTERNAL`，不会为了推进状态而伪装成功；不需要媒体操作的幂等分支可直接返回成功。
+视频输出配置落地时作为现有任务 variant 的普通命令加入，共用 handle 表、FIFO 队列、`await`、cancel 和容量管理，不另建同步配置通道。
 
 ## 生命周期
 

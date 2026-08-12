@@ -100,6 +100,10 @@ Player::shutdown():
 - ❌ 不逐个调模块的清理方法（那是模块析构的事）
 - ❌ 不懂 FFmpeg/miniaudio 的回收（模块内部）
 
+### 视频帧回调
+
+宿主视频帧只在 `VideoSync` 同步回调期间借用。回调返回后帧描述和像素指针立即失效，不存在跨媒体会话持帧或 `release` 操作。`close`/`shutdown` 会等待正在执行的回调返回；返回后不再产生当前会话的新帧回调。宿主回调必须快速完成 GPU 上传或复制，且不得在回调内反向等待 `shutdown`。完整契约见 [`modules/video_output/video_output.md`](modules/video_output/video_output.md)。
+
 ### shutdown 是命令队列的最后一条命令
 
 shutdown 不走媒体命令队列；它停止 ApiLayer 接收新命令，排空已提交任务后再拆除模块。shutdown 后再调任何命令 → 错误（"not initialized"）。

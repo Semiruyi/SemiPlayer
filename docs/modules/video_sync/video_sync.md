@@ -1,295 +1,231 @@
 # VideoSync 模块设计
 
-> 末端同步模块。音视频同步的最后一环——读 AudioOutput 导出的只读 PlaybackClock，从 FinalFrameStore 选该显示的帧，交付宿主呈现层。
-> 对外接口由 ApiLayer 调用(start/pause/stop)。本文件描述其内部设计,核心是 A/V sync 选帧算法。
-
-## Context
-
-播放器的视频画面要和音频对齐——音频是主时钟(声卡恒定采样率,最稳),视频要"追"音频。VideoSync 就是这个"追"的执行者:它读 AudioOutput 导出的 `PlaybackClock::current_pts()`,从 FinalFrameStore 里选 PTS 最接近 current 的帧,决定何时交付、何时丢、何时等。
-
-这是 A/V sync 的核心,也是音视频面试的高频考点。VideoSync 的设计本质是"视频帧 PTS 与音频时钟 current_pts 的差值分类决策"。
-
----
+> 视频管道的末端同步 worker。它读取播放时钟，从 `VideoRenderedStore` 选择当前应显示的帧，并在自己的工作线程同步调用宿主帧回调。
 
 ## 定位
 
-```
-FinalFrameStore(gen, CPU RGBA) ──→ [VideoSync] ──→ 宿主呈现纹理
-                                         ↑
-                              PlaybackClock.current_pts()
-                                         ↑
-                                  ApiLoop 控制: start/pause/stop
+当前阶段尚未接入字幕合成，因此数据流为：
+
+```text
+VideoRenderedStore(gen, CPU RGBA)
+        |
+        v
+   [VideoSync] <----- AudioOutput.current_position()
+        |
+        +---- 同步调用 on_frame(const RenderedVideoFrame&)
+                        |
+                        +---- 宿主同步上传 GPU 或复制到自有内存
 ```
 
-- **工作模块层,1 个 loop 线程**(方案 Y 常驻)。
-- **末端消费者**:读 FinalFrameStore + PlaybackClock,产出交付宿主呈现层。不喂任何下游 Store。
-- **copy-back 路下**:FinalFrameStore 是 CPU RGBA buffer,VideoSync 选完帧交付宿主呈现层(这一跳很薄,归末端适配层负责,不单独模块)。
-- **seek 零改动**:无 seek() 方法,靠世代号丢弃 FinalFrameStore 旧帧 + 自然保持上一帧自洽(见设计决策)。
+未来加入 Compositor 后，`VideoSync` 的输入可替换为最终合成帧 Store；选帧和回调契约不需要改变。
 
----
+`VideoSync` 是拥有一个常驻 loop 线程的工作模块：
+
+- `VideoRenderedStore` 是帧输入。
+- 有音频时，`AudioOutput` 导出的播放位置是主时钟。
+- 纯视频媒体使用内部 `steady_clock` 回退时钟。
+- ApiLayer 通过 `configure/start_playback/pause_playback/unconfigure` 控制媒体会话和播放意图。
+- 帧回调通过 `VideoSyncOptions` 传入，不存在独立的 `VideoOutput` 或 `VideoPresentationSink` 模块。
 
 ## 职责
 
-- **选帧**:从 FinalFrameStore 取 PTS ≤ current_pts 且最近的帧(标准做法)。
-- **同步决策**:按"帧 PTS 与 current_pts 的差值"分四区间决策(丢帧/赶/交付/精准等)+ 无数据死等通知。
-- **交付宿主**:选定的帧交付宿主呈现层并触发重绘(copy-back:CPU buffer→呈现纹理上传)。
-- **异常监控**:diff 异常大时(视频严重超前,说明音频卡顿/时钟出问题)上报异常通知。
+- 丢弃非当前 generation 的帧。
+- 等待音频播放位置建立，或为纯视频媒体维护本地单调时钟。
+- 对未来帧等待到其 PTS；对已经到期的连续帧只交付最新一帧。
+- pause 时停止常规换帧；暂停 seek 后允许为新 generation 交付一次目标附近的新帧。
+- 在 `VideoSync` 工作线程同步调用已配置的帧回调。
+- 观察输入 EOF，避免 EOF 后空转或重复通知。
 
-**不做**:
-- ❌ 不解码/转换/合成(上游模块的事)。
-- ❌ 不驱动音频(PlaybackClock 由 AudioOutput 驱动,VideoSync 只读)。
-- ❌ 不决定播什么(只选"现在该显示哪帧",不改变帧内容)。
-- ❌ 不做 configure(不需媒体格式配置,读的接口固定)。
+不负责：
 
----
+- 解码、像素格式转换或缩放；这些属于 VideoDecoder/VideoRenderer。
+- GPU 上传或窗口绘制；这些属于宿主回调。
+- 驱动音频时钟；VideoSync 只读 AudioOutput 的播放位置。
+- 保存宿主配置；ApiLayer 保存会话前配置并在 `open` 时传入。
+- 允许宿主跨回调持有帧；帧只在同步回调期间借用。
 
-## 核心算法:四区间选帧决策 + 无数据死等
+## 配置接口
 
-视频帧 PTS 与 PlaybackClock `current_pts()` 的差值 `diff = frame.pts - current_pts`。有帧时分四种情况,无帧时单独处理:
+```cpp
+using VideoFramePresentationCallback =
+    std::function<void(const RenderedVideoFrame&)>;
 
+struct VideoSyncOptions {
+    // 有音频流时为 true；纯视频媒体为 false。
+    bool audio_master = true;
+
+    // 空回调表示禁用宿主视频交付。
+    VideoFramePresentationCallback on_frame;
+};
+
+class VideoSync {
+public:
+    virtual std::expected<void, VideoSyncError>
+    configure(const VideoSyncOptions& options) = 0;
+
+    virtual std::expected<void, VideoSyncError> start_playback() = 0;
+    virtual std::expected<void, VideoSyncError> pause_playback() = 0;
+    virtual void unconfigure() noexcept = 0;
+};
 ```
-   帧 PTS 远 < current    帧 PTS 略 < current    帧 PTS ≥ current
-   ◄──────────────────►◄──────────────────►◄────────────────►
-        落后太多              落后不多          超前(含同步)
+
+配置来自 ApiLayer 的 `open` 编排：
+
+- 输出格式和尺寸传给 `VideoRenderer::configure()`，不进入 VideoSync。
+- 帧回调传给 `VideoSync::configure()`。
+- 回调配置在一个媒体会话内保持不变。
+- `on_frame` 为空时，VideoSync 仍消费到期帧，只是不调用宿主。
+
+VideoSync 没有显式 `seek()`。generation 变化会唤醒 worker，清除 pending frame 和等待 deadline，并丢弃旧世代数据。暂停状态下的 generation 变化会允许新世代交付一帧，然后继续暂停。
+
+## 选帧算法
+
+### 有音频流
+
+音频是主时钟。VideoSync 读取：
+
+```text
+AudioOutput.current_position()
+    -> { generation, pts_us }
 ```
 
-| 情况 | 条件 | 策略 | 理由 |
-|------|------|------|------|
-| **落后太多** | diff < -T落后 | **丢帧**:pop 掉这帧,continue 取下一帧 | 视频严重滞后,逐帧丢直到追上或到能用的帧 |
-| **落后不多** | -T落后 ≤ diff < 0 | **立即交付该帧**,不丢不 sleep | 略旧的帧还能用,立即交付让显示跟上,视频"快进一点"自然追上 |
-| **超前(含同步)** | diff ≥ 0 | **sleep diff 精准等到该帧 PTS 时刻**再交付;diff 异常大时上报异常 | 视频跑到音频前面了,等到该显示它的时候。无论超前多少都能算出精准等待时长 |
-| **无数据** | Store 空 | **wait(None) 死等通知** | 无帧可算 diff,只能等 FinalReady/控制信号唤醒 |
+只有时钟 generation 与当前 generation 一致时才能用于选帧。若位置尚未建立，VideoSync 可以先保存一帧为 pending，但不能提前交付；它等待 `AudioPlaybackPositionReady` 或控制/generation 信号唤醒。
 
-### 为什么"超前"统一 sleep diff 精准等(不区分超前多少)
+当当前时钟为 `current_pts` 时：
 
-无论超前 30ms 还是 300ms,都能算出 `diff = frame.pts - current` 这个精准等待时长。sleep diff 后醒来,音频时钟已推进到 ≈ frame.pts,diff 变 ≈ 0,该帧从"超前"变"同步",交付即可。所以"超前不多"和"超前太多"是**同一个处理**(sleep diff 交付),只是 sleep 时长不同,不需要分两个区间。
+- `frame.pts <= current_pts`：帧已经到期。
+- 连续存在多张到期帧：逐张消费，只保留最新到期帧作为本次交付候选；更旧的到期帧自然丢弃。
+- `frame.pts > current_pts`：保存为 pending frame，并设置 `frame.pts - current_pts` 对应的等待 deadline。
+- deadline 到达后回到循环顶部重新读取时钟和 generation，不盲目直接交付。
+- 帧没有 PTS 时视为可立即交付，但仍受 generation、pause 和会话状态约束。
 
-> 之前的"超前太多保持上一帧"是基于"怕 sleep 太久出问题"的误判——sleep diff 是精确计算,睡多久取决于 diff 多大,没有"睡太久"的问题。保持上一帧反而错了:它让画面冻住,而实际上该帧睡一会儿就能正常交付。
+这种“排尽到期帧、只交付最新一帧”的策略同时完成追赶和丢帧，不需要额外维护固定的落后阈值。
 
-### 异常监控:diff 过大上报
+### 纯视频媒体
 
-异常监控从"保持上一帧时监控"改成"diff 过大时上报":如果 diff 大得离谱(如 > 5s,远超正常超前量),说明音频严重卡顿/时钟出问题,通过 Notifier 上报 `VideoSyncStalled` 通知,ApiLayer 决定怎么处理。这是**诊断信号**,不影响选帧动作(还是 sleep diff 交付)。比"固定时长停滞才报"更准——diff 过大直接反映音频出了问题。
+`audio_master == false` 时使用 `std::chrono::steady_clock`：
 
-### 无数据死等通知(不掩盖 bug)
+- 第一张带 PTS 的帧建立本地时钟锚点。
+- `start_playback()` 恢复本地时钟推进。
+- `pause_playback()` 冻结当前位置。
+- generation 变化或 `unconfigure()` 重置本地时钟。
 
-无帧时 wait(None) 无限等,只靠 FinalReady(来新帧)和控制信号(pause/stop)唤醒。**不加兜底超时自醒**——如果唤醒丢了那是 Notifier/控制信号的 bug,该暴露不是该掩盖。加兜底超时反而隐藏 lost wakeup bug(唤醒丢了 100ms 后自醒"正常"了,你以为没问题其实机制坏了)。死等能让 bug 显形(画面冻住不动,立刻知道唤醒链路坏了)。和 Demuxer 线程模型一致(纯等通知,无兜底超时)。
+后续的到期判断与音频主时钟路径相同。
 
-### 阈值(实现时调参,初值参考)
+### 伪代码
 
-- **T落后(丢帧阈值)**:1-2 个视频帧时长(30fps → 33-66ms)。超过才丢,否则"快速追赶"。
-- **T异常(diff 过大阈值)**:如 5s。diff 超过此值上报异常(诊断音频卡顿/时钟问题)。
-
-> 阈值不写死,架构定"有这几个阈值 + 各自触发什么策略",实现时按实测调参。
-
----
-
-## 线程模型:事件驱动,自己知道何时醒
-
-VideoSync **不用定时器轮询**,它该在"有新帧可用 且 该显示它的时间到了"时醒。唤醒源:
-
-VideoSync **不用定时器轮询**,它该在"有新帧可用 且 该显示它的时间到了"时醒。唤醒源:
-
-1. **FinalFrameStore 来新帧**(Notifier 通知 FinalReady)→ notify cv,醒来看新帧的 PTS 和 current 关系。
-2. **sleep 超时**(超前时算了 diff,sleep diff 时长)→ 超时也是 notify cv,醒来交付该帧。
-3. **控制信号**(pause/stop)→ notify cv,醒来检查 state。
-
-无数据时没有 sleep(无可算的等待时长),只靠源 1 和 3 唤醒(死等)。
-
-这样醒的时机**精准对齐"该换帧的时刻"**,不空转、不抖动。和 Demuxer 线程模型一致(cv.wait + Notifier 回调唤醒 + 循环顶重新检查)。
-
-### 选帧循环
-
-```
+```text
 VideoSync loop:
-    loop:
-        wait on cv (被 FinalReady / sleep超时 / 控制信号 唤醒)
-        回到循环顶检查 state:
-            if state == Paused: continue wait      # 暂停,保持当前帧
-            if state == Stopping: 退出 loop
-        
-        final = FinalFrameStore.try_latest()       # 取最新帧(查 generation,旧世代丢弃)
-        if final is None:
-            wait(None)                             # 无数据死等通知(不加兜底超时,掩盖bug)
-            continue
-        
-        diff = final.pts - playback_clock.current_pts()
-        if diff < -T落后 (落后太多):
-            FinalFrameStore.pop()                  # 丢帧
-            continue                               # 取下一帧看
-        elif diff < 0 (落后不多):
-            交付 final (上传 texture), continue    # 快速追赶(不sleep)
-        else: # diff >= 0 (超前或同步)
-            if diff > T异常: 上报 VideoSyncStalled  # 诊断,不影响动作
-            wait(Some(diff))                       # 精准等到该帧 PTS
-            continue                               # 醒来回循环顶重新评估
+    优先处理 configure/start/pause/unconfigure 控制命令
+
+    若 generation 改变:
+        清除 pending frame、deadline 和 EOF 状态
+        切换 active generation
+        paused_generation_pending = !playback_enabled
+
+    若会话未配置:
+        wait
+
+    若已暂停且没有 paused_generation_pending:
+        wait
+
+    读取当前时钟
+    若以音频为主且时钟尚未建立:
+        最多保存一张当前 generation 帧为 pending
+        wait AudioPlaybackPositionReady / generation / control
+
+    candidate = 到期的 pending frame（若有）
+
+    while Store 有当前 generation 数据:
+        若是 EOF:
+            标记 EOF；停止继续读取
+        若帧尚未到期:
+            保存为 pending，设置 deadline；break
+        若帧已经到期:
+            candidate = 该帧       # 覆盖旧 candidate，自动丢旧帧
+            若暂停 seek 只需一帧: break
+
+    若 candidate 存在:
+        同步调用 on_frame(candidate)
+        回调返回后销毁 candidate
+        若是暂停 seek: 清除 paused_generation_pending
 ```
 
+## 回调契约
 
----
+VideoSync 对内部回调的调用形式为：
 
-## 状态机
-
-```
-Constructed ─start()─▶ Running ⇄ Paused
-   ▲                       │
-   │                       └─stop()/close()─▶ Stopping ─▶ Stopped
-   └──────────────────────────────────────────┘
-   (Stopped 后不再回 Constructed;模块对象在 close 时复用,真正销毁归 shutdown)
+```cpp
+options_.on_frame(frame);
 ```
 
-| 状态 | 含义 | 线程 | 选帧循环 |
-|------|------|------|---------|
-| **Constructed** | init 装配完,空壳 | 未起 | — |
-| **Running** | play 启动后,选帧循环在跑 | 在跑 | 活跃(选帧/交付/sleep) |
-| **Paused** | pause 后,冻结 | wait 在 cv | 停止选帧(保持上一帧) |
-| **Stopping** | 收到 stop/close,线程准备退出 | 即将退出 | 停止 |
-| **Stopped** | 线程已退出 | 已退出 | — |
+- 回调在 VideoSync 工作线程同步执行。
+- `frame` 是只读借用，只在本次调用期间有效。
+- 回调返回后 VideoSync 不保留帧，帧随当前处理步骤销毁。
+- 回调为空时直接跳过调用。
+- 回调异常必须在 worker 边界捕获，不能导致工作线程退出；公开 C ABI 同时规定宿主不得让异常跨越回调边界。
+- 回调阻塞会直接阻塞后续视频同步，并可能让 `close`/`shutdown` 等待，因此宿主只能执行快速复制、上传或命令提交。
 
-### 各状态行为
+公开 `semi_video_frame_t` 的构造和借用规则见 [`../video_output/video_output.md`](../video_output/video_output.md)。VideoSync 本身只认识内部 `RenderedVideoFrame` 和内部回调类型，不依赖 C ABI 结构。
 
-**Running**:选帧循环活跃(上面的 loop)。被 FinalReady/sleep 超时/控制信号唤醒,按四区间 + 无数据决策。
+## 线程模型与唤醒
 
-**Paused**:普通 pause 时线程不选新帧，保持当前纹理。暂停 seek 后，新的 FinalFrameStore 数据到达会唤醒线程；若 PlaybackClock 已处于 Prepared 并给出新 generation 的冻结 PTS，VideoSync 选择并交付一次对应的新帧，再继续暂停。
-- 关键:普通 Paused 时 PlaybackClock 冻结(current_pts 不变)；只有 seek 后的 Prepared PTS 允许一次换帧。显式 Paused 仍避免无意义循环。
+VideoSync 使用一个常驻 worker，不做固定周期轮询。唤醒源包括：
 
-**Running ⇄ Paused 的纹理保留**:pause 时纹理停在当前帧,resume 从当前帧继续。VideoSync 不主动清纹理,pause/resume 期间宿主持续显示最后一帧(play.md"pause 停在当前帧,纹理保留"的落地)。
+1. 控制命令：`configure/start_playback/pause_playback/unconfigure`。
+2. `VideoRenderedStoreNotEmpty`：输入从空变为非空。
+3. `GenerationChanged`：open/seek 产生新世代。
+4. `AudioPlaybackPositionReady`：音频播放位置首次可用或需要重新评估。
+5. pending future frame 的等待 deadline 到达。
+6. 析构发出的 worker shutdown 请求。
 
-**Stopping → Stopped**:stop() 设 Stopping + notify cv。线程醒来发现 Stopping,退出 loop → Stopped。close 时 stop() 等线程 join,对象留着复用。
+Notifier 事件只作为唤醒 hint。worker 每次醒来都重新检查真实状态、当前 generation、Store 和时钟，不能假设某个事件仍然成立。
 
-### 线程生命周期(方案 Y,常驻)
+没有输入、没有 deadline、没有控制命令时使用无超时 `cv.wait()`；不增加周期性兜底唤醒来掩盖 lost wakeup。
 
-- **首次 start 时 spawn**(不播放不占线程)。
-- 常驻到 **close/shutdown**(Stopping)才退出。
-- pause / 无数据死等 / 超前 sleep → 线程 **wait 在 cv**(不退出)。
-- close 后线程没了,下次 start 检查并重新 spawn。
+## 状态
 
----
+worker 生命周期与媒体会话状态分离。
 
-## 对外接口
+```text
+Worker:
+Starting -> Alive -> ShuttingDown -> Stopped
 
-| 方法 | 调用者 | 职责 |
-|------|--------|------|
-| `start()` | play 命令 | 首次 spawn 线程;state=Running;notify cv 唤醒进入选帧循环 |
-| `pause()` | pause 命令 | 冻结选帧(保持当前帧);state=Paused;线程 wait |
-| `stop()` | close 命令 | state=Stopping + 唤醒,等线程退出(join) |
+Session:
+Constructed -> Configuring -> Configured -> Unconfiguring -> Constructed
+```
 
-**无 seek()**——靠世代号丢弃 FinalFrameStore 旧帧 + 自然保持上一帧自洽(见设计决策)。
-**无 configure**——不需媒体格式配置,读的 PlaybackClock/FinalFrameStore 接口固定。
-**无对外选帧方法**——选帧是内部 loop 的事,外部只控制生命周期。
+- worker 随模块构造启动，随模块析构退出。
+- `configure()` 建立一个媒体会话，但默认不开始常规播放。
+- `start_playback()` 允许连续选帧和交付。
+- `pause_playback()` 冻结常规交付。
+- `unconfigure()` 清除 pending frame、deadline、EOF、generation 和回调配置。
 
-> 这是所有工作模块里接口最少的之一(只 start/pause/stop),因为 VideoSync 是末端消费者 + seek 零改动。
-
----
+`close` 通过 ApiLayer 调用 `unconfigure()`。该调用与 worker 串行，并会等待正在执行的数据步骤及宿主回调返回，因此完成后不会再产生当前会话的新回调。
 
 ## 依赖
 
-### 构造期注入(DI,shared_ptr 持有)
+构造期注入：
 
 | 依赖 | 用途 |
 |------|------|
-| `FinalFrameStore` | 取最新帧(选帧输入) |
-| `PlaybackClock` | 读 current_pts(同步基准，由 AudioOutput 导出) |
-| `Generation` | 丢弃旧世代帧(取 FinalFrameStore 帧时查 generation) |
-| `Notifier` | 注册 FinalReady 通知(帧就绪被唤醒)+ 发送 VideoSyncStalled 通知 |
+| `VideoRenderedSource` | 消费渲染完成的 CPU 视频帧和 EOF |
+| `AudioOutput` | 有音频时读取当前播放位置 |
+| `Notifier` | 订阅 Store、generation、音频位置事件 |
+| `Generation` | 判断当前数据世代 |
 
-### 交付宿主(copy-back 路下)
+会话配置传入：
 
-VideoSync 选完帧后,通过末端呈现适配层把 CPU RGBA buffer 交付给宿主并触发重绘。这一跳很薄(单次上传 + 呈现资源管理),不单独拆成业务模块。**宿主呈现资源对接的具体方式(纹理注册、资源 ID、上传时序)是实现时平台细节**,本文档不展开。
+| 配置 | 用途 |
+|------|------|
+| `audio_master` | 选择音频主时钟或本地时钟 |
+| `on_frame` | 同步交付宿主的内部回调 |
 
----
+VideoSync 不构造或持有独立的宿主输出模块，不依赖 GPU API，也不参与 IoC 运行时服务定位。
 
-## 关键设计决策
+## 边界与后续工作
 
-### 选 PTS ≤ current 且最近的帧(标准 A/V sync)
-音频是主时钟,视频追音频。取满足"PTS ≤ current"的最新帧,即"该显示的帧是已到播放时间且最近的"。这是 ffplay/mpv 等的标准做法。
-
-### 四区间决策(丢/赶/交付/精准等)+ 无数据死等
-diff 不是简单的"同步/不同步"二分,而是四区间:落后太多丢、落后不多赶、超前(含同步)sleep diff 精准等、无数据死等通知。区分"落后太多"和"落后不多"是关键——前者要丢帧止损,后者用略旧帧快速追赶(不丢不 sleep,自然追上)。
-
-### 超前统一 sleep diff 精准等(不区分超前多少)
-无论超前多少都能算出 `diff = frame.pts - current` 精准等待时长。sleep diff 后醒来音频时钟已推进,diff 变 ≈ 0,该帧从"超前"变"同步"交付。所以"超前不多/超前太多"是同一个处理(sleep diff 交付),只是 sleep 时长不同。之前的"超前太多保持上一帧"是基于"怕 sleep 太久"的误判——sleep diff 是精确计算,没有"睡太久"问题,保持上一帧反而让画面无谓冻住。
-
-### 无数据死等通知,不加兜底超时
-无帧时 wait(None) 无限等,只靠 FinalReady + 控制信号唤醒。不加兜底超时自醒——如果唤醒丢了是 Notifier/控制信号的 bug,该暴露不是该掩盖。兜底超时隐藏 lost wakeup bug(唤醒丢了自醒"正常"了,你以为没问题其实机制坏了)。死等让 bug 显形(画面冻住立刻知道唤醒链路坏了)。和 Demuxer 线程模型一致(纯等通知,无兜底超时)。
-
-### 事件驱动,不用定时器轮询
-VideoSync 不用"每 16ms 醒一次查"的定时器(大多数时候帧没变白醒、醒的时机和换帧时刻不对齐有抖动、和视频帧率不匹配)。而是 cv.wait 被精准唤醒:FinalFrameStore 来帧(FinalReady)+ sleep 超时(超前时算的 diff)+ 控制信号。醒的时机对齐"该换帧的时刻",不空转不抖动。和 Demuxer 线程模型一致。
-
-### 异常监控:diff 过大上报
-异常监控是"diff 过大上报 VideoSyncStalled"(诊断音频卡顿/时钟问题),不是"保持上一帧持续多久才报"。diff 过大直接反映音频出问题,比"固定时长停滞"更准。这是诊断信号,不影响选帧动作(还是 sleep diff 交付)。
-
-### seek 不清除上一帧缓存(体验 + 正确性)
-seek 后 VideoSync 保留 seek 前的最后一帧。新数据没到时,选不到新帧 → 无数据死等(保持上一帧)。新世代第一帧到达后才切换。
-- **体验好**:seek 时画面停在最后一帧,等新数据无缝切换,不黑屏。
-- **正确**:seek 后首块音频 PCM 尚未预读时，PlaybackClock 返回 `nullopt`，VideoSync 保持旧帧；暂停 seek 的 Prepared 锚点出现后，VideoSync 可选一次新 generation 的目标帧；运行态仍等待实际消费建立时钟后再持续选帧。世代号管 Store 里的旧帧(丢弃)，VideoSync 内部的上一帧不受世代号管(已显示过的)，自然保持。
-- **唯一边界**:seek 跨度大(如 10s→100s)时,保持的是 10s 画面直到 100s 新帧到(<200ms),用户感知"短暂停顿后跳到新位置",可接受,比黑屏好。
-
-### seek 零改动(无 seek() 方法)
-基于上一条,VideoSync 靠世代号 + 自然保持自洽 seek,不需要显式 seek() 方法。这是 architecture.md"seek 逻辑零改动"原则向工作模块的延伸——只要工作模块内部状态能靠"保持/丢弃"自洽,就不需要显式 seek。对比 decoder 需要 seek()(要 flush 内部参考帧),VideoSync 更简单。接口只有 start/pause/stop。
-
-### 无 configure
-VideoSync 读 PlaybackClock + FinalFrameStore,接口固定,不需按媒体格式配置。和 decoder(configure 建解码器)/AudioOutput(configure 建设备流)区别清晰——末端消费者不需要按媒体特性初始化。
-
----
-
-## 坑与边界
-
-### sleep 的精度
-"超前 sleep diff 精准等"依赖 sleep 精度。std sleep 精度约 1-15ms(平台/调度),可能不准。实现时可考虑:① sleep 略短一点 + 醒后 busy-wait 精准对齐;② 或接受小抖动(A/V sync 容忍几 ms)。归实现阶段。
-
-### FinalFrameStore 的"最新帧"语义
-VideoSync 取 FinalFrameStore.try_latest()——是取"最新的一帧"还是"按 PTS 顺序的最旧可用帧"?倾向"最新满足 PTS ≤ current 的帧"。FinalFrameStore 内部实现(有界队列 vs 单帧快照)影响这个语义,见 architecture.md 待确认项"各 rendered Store 内部实现"。
-
-### 宿主呈现纹理上传的开销与时机
-copy-back 路下每帧要 CPU buffer→呈现纹理上传。上传在末端呈现适配层完成,要快(避免拖慢选帧循环)。宿主纹理注册/更新时序(以及与 vsync 对齐)是实现时平台细节。
-
-### diff 异常大的误报
-diff > T异常(如 5s)上报 VideoSyncStalled,但 seek 刚完成时新帧 PTS 可能远 > current(音频还没追到新位置),会短暂触发误报。实现时可加"seek 后宽限期"(seek 完成后 N 秒内不上报),或"diff 持续异常才报"(连续 M 次 diff 异常才上报)。归实现阶段调参。
-
-### 丢帧的统计
-落后太多丢帧时,可统计丢帧率(每秒丢多少)用于诊断。高频丢帧说明解码跟不上/系统卡,可上报。这是可选的运维功能,非核心。
-
----
-
-## 边界（本文档不涉及）
-
-- ❌ 宿主呈现纹理的注册/上传具体实现 → 实现阶段(平台细节)
-- ❌ FinalFrameStore 的内部实现(有界队列 vs 单帧快照) → store 设计文档(待定)
-- ❌ 阈值的具体值(T落后/T异常) → 实现阶段调参
-- ❌ sleep 精度优化(busy-wait 等) → 实现阶段
-- ❌ 丢帧率统计上报 → 可选运维功能,未来阶段
-1. **FinalFrameStore 来新帧**(Notifier 通知 FinalReady)→ notify cv,醒来看新帧的 PTS 和 current 关系。
-2. **sleep 超时**(超前时算了 diff,sleep diff 时长)→ 超时也是 notify cv,醒来交付该帧。
-3. **控制信号**(pause/stop)→ notify cv,醒来检查 state。
-
-无数据时没有 sleep(无可算的等待时长),只靠源 1 和 3 唤醒(死等)。
-
-这样醒的时机**精准对齐"该换帧的时刻"**,不空转、不抖动。和 Demuxer 线程模型一致(cv.wait + Notifier 回调唤醒 + 循环顶重新检查)。
-
-### 选帧循环
-
-```
-VideoSync loop:
-    loop:
-        wait on cv (被 FinalReady / sleep超时 / 控制信号 唤醒)
-        回到循环顶检查 state:
-            if state == Paused: continue wait      # 暂停,保持当前帧
-            if state == Stopping: 退出 loop
-        
-        final = FinalFrameStore.try_latest()       # 取最新帧(查 generation,旧世代丢弃)
-        if final is None:
-            wait(None)                             # 无数据死等通知(不加兜底超时,掩盖bug)
-            continue
-        
-        diff = final.pts - playback_clock.current_pts()
-        if diff < -T落后 (落后太多):
-            FinalFrameStore.pop()                  # 丢帧
-            continue                               # 取下一帧看
-        elif diff < 0 (落后不多):
-            交付 final (上传 texture), continue    # 快速追赶(不sleep)
-        else: # diff >= 0 (超前或同步)
-            if diff > T异常: 上报 VideoSyncStalled  # 诊断,不影响动作
-            wait(Some(diff))                       # 精准等到该帧 PTS
-            continue                               # 醒来回循环顶重新评估
-```
-
+- 字幕合成和最终帧 Store 尚未接入；当前直接消费 `VideoRenderedStore`。
+- GPU texture、共享句柄和零拷贝输出属于另一种输出模式。
+- 具体 GPU 上传、vsync 和窗口呈现策略属于宿主。
+- 丢帧率、回调耗时和时钟异常的诊断统计可在后续增加，但不得改变同步回调的借用生命周期。

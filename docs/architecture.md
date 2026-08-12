@@ -11,6 +11,7 @@ SemiPlayer 是一个 C++ 实现的跨平台播放器：FFmpeg 解封装/解码�
 - **去中心化状态**：不用上帝模块控制全局状态，每个模块自管状态
 - **依赖注入（DI）**：IoCContainer 作为装配期装配器，按 DAG 拓扑顺序构造所有模块，构造时注入 `std::shared_ptr<依赖>`。依赖图无真循环（资源/基础设施不反向依赖工作模块），故全部 `std::shared_ptr` 注入，无需 `std::weak_ptr` 破环
 - **世代号（generation）机制**：seek/取消进行中的事务靠"数据标记识别"而非"时序协调"，消除主动清理和模块间顺序依赖，规避死锁
+- **宿主帧同步借用回调**：VideoSync 到点后在自己的工作线程同步调用宿主回调；回调只读借用最终 CPU 帧，返回前须完成 GPU 上传或复制，返回后播放器立即销毁帧。C ABI 视图不额外复制像素
 
 本阶段**只确定模块清单、职责、依赖关系**这张地基图。后续阶段再细化：(1) 每个模块的状态机与事件响应；(2) 对外 API；(3) 内部实现。
 
@@ -137,14 +138,16 @@ ApiLayer 命令线程串行取 Command:
 | **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取 CPU 原生格式帧（NV12/P010）→ `sws_scale` 转 RGBA（CPU）→ 喂 VideoRenderedStore。**纯 CPU 转换，不碰 GPU、不碰字幕** |
 | **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
 | **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
-| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从 FinalFrameStore 选帧（丢弃旧 generation 帧）→ 交付宿主呈现层。**回归纯粹末端消费者，不再驱动渲染/合成** |
+| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从最终帧输入选帧（丢弃旧 generation 帧）→ 在本工作线程同步调用宿主帧回调。**回归纯粹末端消费者，不再驱动渲染/合成** |
 | **AudioOutput** | 1 个 worker + miniaudio 实时回调 | 取重采样 PCM（丢弃旧 generation）→ 送声卡；内部维护 PlaybackClock |
 
 ### 🚪 接口层
 
 | 模块 | 线程 | 职责 |
 |------|------|------|
-| **ApiLayer** | 1 个命令线程 | 对外 open/play/pause/seek/close/set_volume 并立即返回句柄；私有队列、任务表和命令线程均内聚于此。维护内部 PlayerState，校验命令合法性并派发给业务模块 |
+| **ApiLayer** | 1 个命令线程 | 对外 open/play/pause/seek/close/set_volume/configure_video_output 并立即返回句柄；私有队列、任务表和命令线程均内聚于此。维护内部 PlayerState，校验命令合法性并派发给业务模块 |
+
+宿主在 `Idle` 中通过普通异步命令配置格式、尺寸和回调。ApiLayer 在后续 `open` 时把格式/尺寸传给 VideoRenderer，把回调传给 VideoSync；不装配独立的 VideoOutput 模块。每个到期帧只在同步回调期间借用，宿主必须在回调返回前完成 GPU 上传或复制，不存在帧 release 接口。具体契约见 [`modules/video_output/video_output.md`](modules/video_output/video_output.md)。
 
 ---
 
@@ -179,7 +182,7 @@ ApiLayer 命令线程串行取 Command:
 | VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
 | SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
-| VideoSync | FinalFrameStore, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/pause()；从 FinalFrameStore 选帧交付宿主呈现层；Notifier 唤醒（FinalReady 等）|
+| VideoSync | 最终帧 Source, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()/unconfigure()；回调随 configure 传入，不是构造期 IoC 依赖；Notifier 唤醒（FrameReady 等）|
 | AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock；GenerationChanged 唤醒 stale 维护 |
 | Generation | Notifier | `bump()` 原子递增后发送一次 GenerationChanged；通知只是唤醒 hint，消费者仍比较 current() |
 | ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
@@ -206,7 +209,7 @@ ApiLayer 命令线程串行取 Command:
                                                                                     ↓
                                                                             FinalFrameStore(gen)
                                                                                     ↓
-                                                                            [VideoSync](读PlaybackClock选帧)→ 纹理
+                                                                            [VideoSync](读PlaybackClock选帧)→ 宿主同步帧回调
 
             └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioFrameStore(gen,输出格式) →[AudioOutput]→ 声卡
        ↑new open / successful seek: gen+1                                       │
@@ -256,7 +259,7 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 - ❌ 各模块状态机与事件响应的细节（下一阶段讨论）
 - ❌ 对外 API 函数签名（待地基确认后）
 - ❌ demux/decode/miniaudio/同步内部实现
-- ❌ 平台纹理胶水层（硬解帧交付宿主呈现层）
+- ❌ 宿主侧 GPU 上传、纹理管理与窗口呈现
 - ❌ 各宿主语言的绑定与胶水
 
 ---
@@ -267,6 +270,7 @@ ApiLoop 串行执行 (忠实执行, 不跳过/合并):
 - [x] ~~字幕/合成是否独立模块~~ → 独立。字幕侧拆为 SubtitleDecoder（解析+PTS匹配）+ SubtitleRenderer（libass光栅化）；视频侧拆出 VideoRenderer（格式转换）；末端 Compositor 只合成；各产出经 Store 解耦
 - [x] ~~字幕位图如何传给合成~~ → Compositor 按视频帧 PTS 从 SubtitleFrameStore 被动拉取（SubtitleRenderer 仅事件变化时渲染缓存）
 - [x] ~~显示流水线谁驱动~~ → 渲染/合成/选帧各自独立线程、靠 Store 解耦；VideoSync 回归纯粹末端消费者
+- [x] ~~CPU 帧如何交付宿主~~ → VideoSync 工作线程同步调用只读借用回调；回调返回后销毁帧，不新增 VideoOutput 模块，不提供 retain/release
 - [x] ~~外挂字幕是否支持~~ → 本阶段不做，只支持 demuxer 解出的内嵌字幕流
 - [x] ~~VideoRenderer 转换路径~~ → copy-back（硬解在 GPU，download 后 sws_scale 转 RGBA 在 CPU；合成 CPU）。GPU 直通作未来优化，GpuDevice 抽象基类留扩展点
 - [x] ~~图形上下文归属~~ → 抽基础设施层 GpuDevice 契约（D3D11/Vulkan/OpenGL 实现），copy-back 路下仅 FfmpegVideoDecoder 依赖
