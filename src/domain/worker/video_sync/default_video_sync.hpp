@@ -98,6 +98,11 @@ private:
                                         PausePlaybackCommand,
                                         UnconfigureCommand>;
 
+    struct DataStepPresentation {
+        std::optional<RenderedVideoFrame> frame;
+        std::optional<Generation::Value> end_of_input_generation;
+    };
+
     void worker_main() noexcept;
     void process_command(ConfigureCommand& command) noexcept;
     void process_command(StartPlaybackCommand& command) noexcept;
@@ -107,6 +112,17 @@ private:
 
     [[nodiscard]] bool should_process_data_locked() const noexcept;
     void process_data_step() noexcept;
+    [[nodiscard]] bool begin_data_step() noexcept;
+    [[nodiscard]] bool wait_for_audio_clock_if_needed(
+        const std::optional<std::int64_t>& clock_pts) noexcept;
+    [[nodiscard]] DataStepPresentation collect_due_presentation(
+        std::optional<std::int64_t>& clock_pts) noexcept;
+    [[nodiscard]] bool take_pending_frame_if_due(
+        std::optional<std::int64_t>& clock_pts,
+        std::optional<RenderedVideoFrame>& candidate) noexcept;
+    [[nodiscard]] bool frame_is_due(const RenderedVideoFrame& frame,
+                                    std::optional<std::int64_t>& clock_pts) noexcept;
+    void schedule_frame_wait(std::int64_t frame_pts, std::int64_t clock_pts) noexcept;
     void adopt_generation_if_needed() noexcept;
     [[nodiscard]] bool pop_next_item(VideoRenderedStoreItem& item) noexcept;
     [[nodiscard]] std::optional<std::int64_t> current_clock_pts() const noexcept;

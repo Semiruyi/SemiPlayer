@@ -338,79 +338,81 @@ bool DefaultVideoSync::should_process_data_locked() const noexcept {
 void DefaultVideoSync::process_data_step() noexcept {
     adopt_generation_if_needed();
 
-    {
-        std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured ||
-            (!playback_enabled_ && !paused_generation_pending_)) {
-            return;
-        }
-        if (audio_position_ready_hint_) {
-            audio_position_ready_hint_ = false;
-            waiting_for_audio_position_ = false;
-        }
-    }
-
-    auto clock_pts = current_clock_pts();
-    if (options_.audio_master && !clock_pts) {
-        if (!pending_frame_) {
-            VideoRenderedStoreItem item = RenderedVideoEndOfInput{};
-            if (!pop_next_item(item)) {
-                return;
-            }
-            if (video_rendered_store_item_generation(item) !=
-                (generation_ ? generation_->current() : 0)) {
-                adopt_generation_if_needed();
-                return;
-            }
-            if (auto* frame = std::get_if<RenderedVideoFrame>(&item)) {
-                pending_frame_.emplace(std::move(*frame));
-            } else {
-                const auto end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
-                end_of_input_observed_ = true;
-                if (!end_of_input_notified_) {
-                    end_of_input_notified_ = true;
-                    present_end_of_input(end_generation);
-                }
-                return;
-            }
-        }
-        {
-            std::lock_guard lock(mutex_);
-            waiting_for_audio_position_ = true;
-            next_wake_deadline_.reset();
-        }
+    if (!begin_data_step()) {
         return;
     }
 
-    std::optional<RenderedVideoFrame> candidate;
-    bool should_notify_end = false;
-    Generation::Value end_generation = active_generation_;
+    auto clock_pts = current_clock_pts();
+    if (wait_for_audio_clock_if_needed(clock_pts)) {
+        return;
+    }
 
-    if (pending_frame_) {
-        if (!clock_pts && !options_.audio_master && pending_frame_->rendered().pts_us) {
-            anchor_local_clock_if_needed(*pending_frame_->rendered().pts_us);
-            clock_pts = current_clock_pts();
+    auto presentation = collect_due_presentation(clock_pts);
+    if (presentation.frame) {
+        present_frame(std::move(*presentation.frame));
+        if (!playback_enabled_) {
+            paused_generation_pending_ = false;
         }
+    }
+    if (presentation.end_of_input_generation) {
+        present_end_of_input(*presentation.end_of_input_generation);
+    }
+}
 
-        const auto frame_pts = pending_frame_->rendered().pts_us;
-        if (frame_pts && clock_pts && *frame_pts > *clock_pts) {
-            if (!playback_enabled_) {
-                std::lock_guard lock(mutex_);
-                waiting_for_resume_ = true;
-                next_wake_deadline_.reset();
-            } else {
-                std::lock_guard lock(mutex_);
-                waiting_for_resume_ = false;
-                waiting_for_audio_position_ = false;
-                const auto wait_us = *frame_pts - *clock_pts;
-                next_wake_deadline_ = Clock::now() + std::chrono::microseconds(wait_us);
+bool DefaultVideoSync::begin_data_step() noexcept {
+    std::lock_guard lock(mutex_);
+    if (session_state_ != SessionState::Configured ||
+        (!playback_enabled_ && !paused_generation_pending_)) {
+        return false;
+    }
+    if (audio_position_ready_hint_) {
+        audio_position_ready_hint_ = false;
+        waiting_for_audio_position_ = false;
+    }
+    return true;
+}
+
+bool DefaultVideoSync::wait_for_audio_clock_if_needed(
+    const std::optional<std::int64_t>& clock_pts) noexcept {
+    if (!options_.audio_master || clock_pts) {
+        return false;
+    }
+
+    if (!pending_frame_) {
+        VideoRenderedStoreItem item = RenderedVideoEndOfInput{};
+        if (!pop_next_item(item)) {
+            return true;
+        }
+        if (video_rendered_store_item_generation(item) !=
+            (generation_ ? generation_->current() : 0)) {
+            adopt_generation_if_needed();
+            return true;
+        }
+        if (auto* frame = std::get_if<RenderedVideoFrame>(&item)) {
+            pending_frame_.emplace(std::move(*frame));
+        } else {
+            const auto end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
+            end_of_input_observed_ = true;
+            if (!end_of_input_notified_) {
+                end_of_input_notified_ = true;
+                present_end_of_input(end_generation);
             }
-            return;
+            return true;
         }
+    }
 
-        candidate.emplace(std::move(*pending_frame_));
-        pending_frame_.reset();
-        next_wake_deadline_.reset();
+    std::lock_guard lock(mutex_);
+    waiting_for_audio_position_ = true;
+    next_wake_deadline_.reset();
+    return true;
+}
+
+DefaultVideoSync::DataStepPresentation DefaultVideoSync::collect_due_presentation(
+    std::optional<std::int64_t>& clock_pts) noexcept {
+    std::optional<RenderedVideoFrame> candidate;
+    DataStepPresentation presentation;
+    if (!take_pending_frame_if_due(clock_pts, candidate)) {
+        return presentation;
     }
 
     const bool can_drain_multiple = playback_enabled_;
@@ -428,24 +430,8 @@ void DefaultVideoSync::process_data_step() noexcept {
             }
 
             if (auto* frame = std::get_if<RenderedVideoFrame>(&item)) {
-                if (!clock_pts && !options_.audio_master && frame->rendered().pts_us) {
-                    anchor_local_clock_if_needed(*frame->rendered().pts_us);
-                    clock_pts = current_clock_pts();
-                }
-
-                const auto frame_pts = frame->rendered().pts_us;
-                if (frame_pts && clock_pts && *frame_pts > *clock_pts) {
+                if (!frame_is_due(*frame, clock_pts)) {
                     pending_frame_.emplace(std::move(*frame));
-                    if (playback_enabled_) {
-                        const auto wait_us = *frame_pts - *clock_pts;
-                        next_wake_deadline_ = Clock::now() +
-                                              std::chrono::microseconds(wait_us);
-                        waiting_for_resume_ = false;
-                        waiting_for_audio_position_ = false;
-                    } else {
-                        waiting_for_resume_ = true;
-                        next_wake_deadline_.reset();
-                    }
                     break;
                 }
 
@@ -456,23 +442,65 @@ void DefaultVideoSync::process_data_step() noexcept {
                 continue;
             }
 
-            end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
+            const auto end_generation = std::get<RenderedVideoEndOfInput>(item).generation;
             end_of_input_observed_ = true;
-            should_notify_end = !end_of_input_notified_;
+            if (!end_of_input_notified_) {
+                presentation.end_of_input_generation = end_generation;
+            }
             end_of_input_notified_ = true;
             break;
         }
     }
 
-    if (candidate) {
-        present_frame(std::move(*candidate));
-        if (!playback_enabled_) {
-            paused_generation_pending_ = false;
-        }
+    presentation.frame = std::move(candidate);
+    return presentation;
+}
+
+bool DefaultVideoSync::take_pending_frame_if_due(
+    std::optional<std::int64_t>& clock_pts,
+    std::optional<RenderedVideoFrame>& candidate) noexcept {
+    if (!pending_frame_) {
+        return true;
     }
-    if (should_notify_end) {
-        present_end_of_input(end_generation);
+
+    if (!frame_is_due(*pending_frame_, clock_pts)) {
+        return false;
     }
+
+    candidate.emplace(std::move(*pending_frame_));
+    pending_frame_.reset();
+    next_wake_deadline_.reset();
+    return true;
+}
+
+bool DefaultVideoSync::frame_is_due(const RenderedVideoFrame& frame,
+                                    std::optional<std::int64_t>& clock_pts) noexcept {
+    const auto frame_pts = frame.rendered().pts_us;
+    if (!clock_pts && !options_.audio_master && frame_pts) {
+        anchor_local_clock_if_needed(*frame_pts);
+        clock_pts = current_clock_pts();
+    }
+    if (!frame_pts || !clock_pts || *frame_pts <= *clock_pts) {
+        return true;
+    }
+
+    schedule_frame_wait(*frame_pts, *clock_pts);
+    return false;
+}
+
+void DefaultVideoSync::schedule_frame_wait(std::int64_t frame_pts,
+                                           std::int64_t clock_pts) noexcept {
+    std::lock_guard lock(mutex_);
+    if (!playback_enabled_) {
+        waiting_for_resume_ = true;
+        next_wake_deadline_.reset();
+        return;
+    }
+
+    waiting_for_resume_ = false;
+    waiting_for_audio_position_ = false;
+    next_wake_deadline_ =
+        Clock::now() + std::chrono::microseconds(frame_pts - clock_pts);
 }
 
 void DefaultVideoSync::adopt_generation_if_needed() noexcept {
