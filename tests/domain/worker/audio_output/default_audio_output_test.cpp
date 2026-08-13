@@ -468,7 +468,8 @@ TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x07});
 }
 
-TEST(DefaultAudioOutputTest, PausedGenerationChangeDropsStaleFramesAndPrimesTheNewFrame) {
+TEST(DefaultAudioOutputTest,
+     PausedGenerationChangeReannouncesClockAfterPlaybackResumes) {
     auto dependencies = complete_dependencies();
     auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
     std::atomic_int position_ready_events = 0;
@@ -506,6 +507,15 @@ TEST(DefaultAudioOutputTest, PausedGenerationChangeDropsStaleFramesAndPrimesTheN
     ASSERT_TRUE(output->start_playback().has_value());
     ASSERT_TRUE(eventually([&] { return backend->submitted_marker_count() == 1; }));
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x02});
+
+    EXPECT_FALSE(output->current_position());
+    backend->notify_progress();
+    ASSERT_TRUE(eventually([&] {
+        return position_ready_events.load(std::memory_order_acquire) == 2;
+    }));
+    const auto resumed_position = output->current_position();
+    ASSERT_TRUE(resumed_position);
+    EXPECT_EQ(resumed_position->generation, dependencies.generation->current());
 }
 
 TEST(DefaultAudioOutputTest, PropagatesBackendPauseFailureAndKeepsPlaybackEnabled) {

@@ -340,6 +340,14 @@ void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept
 
     const auto generation = active_generation_.load(std::memory_order_acquire);
     playback_clock_.resume(generation);
+    const auto position_after_resume = playback_clock_.current_position();
+    if (!position_after_resume) {
+        // A paused post-seek clock may be usable as a frozen prepared position,
+        // then become unavailable while waiting for the device to consume its
+        // first PCM frame. Re-arm the availability notification for that next
+        // unavailable-to-available transition within the same generation.
+        playback_position_ready_notified_.store(false, std::memory_order_release);
+    }
     std::lock_guard lock(mutex_);
     playback_enabled_ = true;
     input_not_empty_hint_ = true;
