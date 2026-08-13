@@ -15,6 +15,7 @@
 #include "domain/worker/video_renderer/default_video_renderer.hpp"
 #include "domain/worker/video_sync/default_video_sync.hpp"
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
+#include "infrastructure/audio_output/null_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
@@ -60,8 +61,13 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>();
         auto video_renderer_backend =
             std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>();
+#if defined(SEMI_USE_NULL_AUDIO_OUTPUT)
+        auto audio_output_backend =
+            std::make_shared<infra::audio_output::NullAudioOutputBackend>(audio_realtime_notifier);
+#else
         auto audio_output_backend =
             std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(audio_realtime_notifier);
+#endif
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
             demuxer_backend, audio_packet_queue, notifier, generation, video_packet_queue);

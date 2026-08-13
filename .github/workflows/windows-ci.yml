@@ -1,0 +1,73 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Preserve repository line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-spdlog
+            mingw-w64-ucrt-x86_64-gtest
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-miniaudio
+            mingw-w64-ucrt-x86_64-sdl3
+
+      - name: Report toolchain versions
+        run: |
+          c++ --version
+          cmake --version
+          ninja --version
+          ffmpeg -version | head -n 1
+
+      - name: Configure
+        run: cmake --preset windows-ci
+
+      - name: Build
+        run: cmake --build --preset windows-ci
+
+      - name: Test
+        run: ctest --test-dir build-windows-ci --output-on-failure --no-tests=error
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-logs
+          path: |
+            build-windows-ci/Testing/Temporary/**
+            logs/**
+          if-no-files-found: ignore
+          retention-days: 7

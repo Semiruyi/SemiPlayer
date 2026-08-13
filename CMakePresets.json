@@ -13,9 +13,19 @@
         "SEMI_BUILD_TESTS": "ON",
         "SEMI_BUILD_SDL_PLAYER": "ON"
       }
+    },
+    {
+      "name": "windows-ci",
+      "inherits": "windows-all",
+      "displayName": "Windows UCRT64 CI (headless audio)",
+      "binaryDir": "${sourceDir}/build-windows-ci",
+      "cacheVariables": {
+        "SEMI_USE_NULL_AUDIO_OUTPUT": "ON"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "windows-all", "configurePreset": "windows-all" }
+    { "name": "windows-all", "configurePreset": "windows-all" },
+    { "name": "windows-ci", "configurePreset": "windows-ci" }
   ]
 }

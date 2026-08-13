@@ -1,5 +1,7 @@
 # SemiPlayer
 
+[![Windows CI](https://github.com/Semiruyi/SemiPlayer/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Semiruyi/SemiPlayer/actions/workflows/windows-ci.yml)
+
 C++ 跨平台播放器内核，导出 C ABI 供上层宿主调用。
 FFmpeg 解封装/解码、miniaudio 播音频，单例全局 + 命令队列/句柄控制模型。
 架构见 `docs/` 下设计文档（architecture / lifecycle / 各模块）。
@@ -92,3 +94,15 @@ ctest --test-dir build-windows
 
 按空格播放/暂停，左右方向键前后跳转 5 秒，F11 切换全屏，Esc 退出。详细设计与线程边界见
 [`examples/sdl_player/README.md`](examples/sdl_player/README.md)。
+
+### CI 无声卡构建
+
+GitHub Actions 使用独立的 `windows-ci` preset，将 composition root 切换为
+`NullAudioOutputBackend`，避免依赖 Runner 的音频设备；默认 `windows-all` 仍使用
+Miniaudio：
+
+```sh
+cmake --preset windows-ci
+cmake --build --preset windows-ci
+ctest --test-dir build-windows-ci --output-on-failure
+```
