@@ -170,11 +170,6 @@ semi_handle_t semi_player_close(void) {
     return layer ? layer->close() : 0;
 }
 
-semi_handle_t semi_player_set_volume(unsigned int volume) {
-    const auto layer = api_layer();
-    return layer ? layer->set_volume(volume) : 0;
-}
-
 semi_handle_t semi_player_configure_video_output(
     const semi_video_output_config_t* config) {
     if (config == nullptr) {

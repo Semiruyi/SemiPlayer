@@ -145,7 +145,7 @@ ApiLayer 命令线程串行取 Command:
 
 | 模块 | 线程 | 职责 |
 |------|------|------|
-| **ApiLayer** | 1 个命令线程 | 对外 open/play/pause/seek/close/set_volume/configure_video_output 并立即返回句柄；私有队列、任务表和命令线程均内聚于此。维护内部 PlayerState，校验命令合法性并派发给业务模块 |
+| **ApiLayer** | 1 个命令线程 | 对外 open/play/pause/seek/close/configure_video_output 并立即返回句柄；私有队列、任务表和命令线程均内聚于此。维护内部 PlayerState，校验命令合法性并派发给业务模块 |
 
 宿主在 `Idle` 中通过普通异步命令配置格式、尺寸和回调。ApiLayer 在后续 `open` 时把格式/尺寸传给 VideoRenderer，把回调传给 VideoSync；不装配独立的 VideoOutput 模块。每个到期帧只在同步回调期间借用，宿主必须在回调返回前完成 GPU 上传或复制，不存在帧 release 接口。具体契约见 [`modules/video_output/video_output.md`](modules/video_output/video_output.md)。
 

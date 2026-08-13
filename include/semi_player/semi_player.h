@@ -109,7 +109,6 @@ SEMI_API semi_handle_t semi_player_play(void);
 SEMI_API semi_handle_t semi_player_pause(void);
 SEMI_API semi_handle_t semi_player_seek(long long position_us);
 SEMI_API semi_handle_t semi_player_close(void);
-SEMI_API semi_handle_t semi_player_set_volume(unsigned int volume);
 /* Copies config into the normal command queue. Returns 0 when no task can be
  * created; otherwise await the handle for SEMI_OK or SEMI_ERR_*. */
 SEMI_API semi_handle_t semi_player_configure_video_output(

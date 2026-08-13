@@ -4,7 +4,7 @@
 
 ## 对外模型
 
-控制接口 `open/play/pause/seek/close/set_volume/configure_video_output` 只负责构造任务并立即返回非零 `CommandHandle`。`0` 表示必要的顶层指针参数为空、ApiLayer 未运行、任务容量已满或入队失败。
+控制接口 `open/play/pause/seek/close/configure_video_output` 只负责构造任务并立即返回非零 `CommandHandle`。`0` 表示必要的顶层指针参数为空、ApiLayer 未运行、任务容量已满或入队失败。
 
 `configure_video_output` 是普通异步控制命令，只允许在执行时的状态为 `Idle`。它声明输出像素格式、尺寸、宿主帧回调和 `user_data`；后续 `open` 把格式/尺寸传给 VideoRenderer，把回调传给 VideoSync。配置与 `open` 由同一命令线程按 FIFO 串行执行，因此不存在配置和 open 的并发竞态。完整的借用生命周期和线程契约见 [`../video_output/video_output.md`](../video_output/video_output.md)。
 
@@ -49,7 +49,6 @@ Queued -> Running -> Completed
 | `pause` | `Ready/Playing/Paused/Ended` | `Playing` 时进入 `Paused`，其他合法状态为幂等成功 |
 | `seek` | `Ready/Playing/Paused/Ended` | 保持原播放意图；`Ended` 后续进入 `Paused` |
 | `close` | 任意状态 | `Idle`；`Idle` 下不访问媒体模块 |
-| `set_volume` | 任意状态 | 状态不变 |
 | `configure_video_output` | `Idle` | 状态不变；原子替换后续 open 使用的视频输出配置 |
 
 `Idle/Error` 下的 `play/pause/seek` 返回 `SEMI_ERR_INVALID_STATE`。普通资源错误不会进入 `Error`；只有模块可能处于不一致状态且无法回滚时才使用 `Error`，并可通过 `close` 恢复到 `Idle`。
