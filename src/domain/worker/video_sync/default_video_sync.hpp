@@ -6,6 +6,7 @@
 #include "domain/worker/audio_output/audio_output.hpp"
 #include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/video_sync/video_sync.hpp"
+#include "domain/worker/video_sync/video_sync_events.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <chrono>
@@ -122,6 +123,7 @@ private:
                                     std::optional<std::int64_t>& clock_pts) noexcept;
     void schedule_frame_wait(std::int64_t frame_pts, std::int64_t clock_pts) noexcept;
     void adopt_generation_if_needed() noexcept;
+    void adopt_audio_playback_finished_if_needed() noexcept;
     [[nodiscard]] bool pop_next_item(VideoRenderedStoreItem& item) noexcept;
     [[nodiscard]] std::optional<std::int64_t> current_clock_pts() const noexcept;
     void anchor_local_clock_if_needed(std::int64_t pts_us) noexcept;
@@ -129,6 +131,7 @@ private:
     void resume_local_clock() noexcept;
     void reset_local_clock() noexcept;
     void present_frame(RenderedVideoFrame&& frame) noexcept;
+    void notify_playback_finished_if_needed() noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
@@ -142,6 +145,7 @@ private:
         video_rendered_store_not_empty_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> generation_changed_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> audio_position_ready_subscription_;
+    std::shared_ptr<infra::Notifier::Subscription> audio_playback_finished_subscription_;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
@@ -157,9 +161,12 @@ private:
     bool input_not_empty_hint_ = false;
     bool generation_changed_hint_ = false;
     bool audio_position_ready_hint_ = false;
+    bool audio_playback_finished_hint_ = false;
     bool waiting_for_audio_position_ = false;
     bool waiting_for_resume_ = false;
     bool end_of_input_observed_ = false;
+    bool playback_finished_notified_ = false;
+    bool audio_playback_finished_ = false;
 
     std::optional<RenderedVideoFrame> pending_frame_;
     std::optional<Clock::time_point> next_wake_deadline_;

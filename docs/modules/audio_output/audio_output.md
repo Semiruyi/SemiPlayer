@@ -437,7 +437,7 @@ AudioOutput 拥有 `AudioPlaybackClockState`，因为它是唯一同时掌握 PC
    - 配置 AudioResampler(decoded PCM format, playback PCM format)。
 5. close 编排增加 `audio_output.unconfigure()`。
 6. seek 编排不调用 `AudioOutput::seek()`；只推进共享 Generation，并由 AudioOutput 自行 reset/drop stale。
-7. ApiLayer 或宿主最终接收 `AudioPlaybackFinished`，而不是 Demuxer/Decoder/Resampler 的 EOF 细节。
+7. VideoSync 和 ApiLayer 接收 `AudioPlaybackFinished`：前者在音频先结束时继续调度视频尾帧，后者与 `VideoPlaybackFinished` 汇聚为宿主可见的会话完成事件。
 
 ## 关键设计决策
 

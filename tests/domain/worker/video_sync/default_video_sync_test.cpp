@@ -2,6 +2,7 @@
 #include "domain/resource/video_rendered_store/video_rendered_store.hpp"
 #include "domain/worker/audio_output/audio_output.hpp"
 #include "domain/worker/video_sync/default_video_sync.hpp"
+#include "domain/worker/video_sync/video_sync_events.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
@@ -274,6 +275,114 @@ TEST(DefaultVideoSyncTest, UnconfigureWaitsForSynchronousFrameCallback) {
     presentation->allow_return();
     unconfigure_thread.join();
     EXPECT_TRUE(unconfigured.load(std::memory_order_acquire));
+}
+
+TEST(DefaultVideoSyncTest, PublishesFinishedAfterTheFinalFrameCallbackReturns) {
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto generation = std::make_shared<Generation>(notifier);
+    auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
+    std::atomic<bool> callback_returned = false;
+    std::mutex finished_mutex;
+    std::condition_variable finished_cv;
+    bool finished = false;
+    Generation::Value finished_generation = 0;
+
+    auto subscription = notifier->subscribe<VideoPlaybackFinished>(
+        [&](const VideoPlaybackFinished& event) {
+            EXPECT_TRUE(callback_returned.load(std::memory_order_acquire));
+            {
+                std::lock_guard lock(finished_mutex);
+                finished = true;
+                finished_generation = event.generation;
+            }
+            finished_cv.notify_all();
+        });
+    ASSERT_TRUE(subscription);
+
+    ASSERT_EQ(rendered_store->try_push(make_frame(1, 0, generation->current())),
+              VideoRenderedPushResult::Accepted);
+    ASSERT_EQ(rendered_store->try_push(RenderedVideoEndOfInput{
+                  .generation = generation->current(),
+              }),
+              VideoRenderedPushResult::Accepted);
+
+    DefaultVideoSync sync(rendered_store, nullptr, notifier, generation);
+    ASSERT_TRUE(sync.configure(VideoSyncOptions{
+        .audio_master = false,
+        .on_frame = [&](const RenderedVideoFrame&) {
+            callback_returned.store(true, std::memory_order_release);
+        },
+    }));
+    ASSERT_TRUE(sync.start_playback());
+
+    {
+        std::unique_lock lock(finished_mutex);
+        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] {
+            return finished;
+        }));
+    }
+    EXPECT_EQ(finished_generation, generation->current());
+    sync.unconfigure();
+}
+
+TEST(DefaultVideoSyncTest, ContinuesVideoTailAfterAudioFinishes) {
+    auto notifier = std::make_shared<infra::DefaultNotifier>();
+    auto generation = std::make_shared<Generation>(notifier);
+    auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
+    auto audio_output = std::make_shared<FakeAudioOutput>();
+    auto presentation = std::make_shared<RecordingPresentation>();
+    std::mutex finished_mutex;
+    std::condition_variable finished_cv;
+    bool finished = false;
+
+    auto subscription = notifier->subscribe<VideoPlaybackFinished>(
+        [&](const VideoPlaybackFinished&) {
+            {
+                std::lock_guard lock(finished_mutex);
+                finished = true;
+            }
+            finished_cv.notify_all();
+        });
+    ASSERT_TRUE(subscription);
+
+    ASSERT_EQ(rendered_store->try_push(make_frame(1, 0, generation->current())),
+              VideoRenderedPushResult::Accepted);
+    ASSERT_EQ(rendered_store->try_push(make_frame(2, 30'000, generation->current())),
+              VideoRenderedPushResult::Accepted);
+    ASSERT_EQ(rendered_store->try_push(RenderedVideoEndOfInput{
+                  .generation = generation->current(),
+              }),
+              VideoRenderedPushResult::Accepted);
+
+    DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
+    ASSERT_TRUE(sync.configure(VideoSyncOptions{
+        .audio_master = true,
+        .on_frame = [presentation](const RenderedVideoFrame& frame) {
+            presentation->present(frame);
+        },
+    }));
+    audio_output->set_position(generation->current(), 0);
+    ASSERT_TRUE(sync.start_playback());
+    ASSERT_TRUE(presentation->wait_for_frames(1, std::chrono::seconds(1)));
+
+    // A drained backend may no longer expose a usable position. The video
+    // tail must then anchor its local clock from the next frame instead.
+    audio_output->set_position(generation->current() + 1, 0);
+    ASSERT_TRUE(notifier->send(AudioPlaybackFinished{
+        .generation = generation->current(),
+    }));
+    ASSERT_TRUE(presentation->wait_for_frames(2, std::chrono::seconds(1)));
+    {
+        std::unique_lock lock(finished_mutex);
+        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] {
+            return finished;
+        }));
+    }
+
+    const auto frames = presentation->frames();
+    ASSERT_EQ(frames.size(), 2U);
+    EXPECT_EQ(frames.back().marker, 2);
+    sync.unconfigure();
 }
 
 } // namespace

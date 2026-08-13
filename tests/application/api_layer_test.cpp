@@ -8,6 +8,7 @@
 #include "domain/worker/video_decoder/video_decoder.hpp"
 #include "domain/worker/video_renderer/video_renderer.hpp"
 #include "domain/worker/video_sync/video_sync.hpp"
+#include "domain/worker/video_sync/video_sync_events.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
@@ -20,6 +21,8 @@ namespace {
 class FakeDemuxer final : public domain::Demuxer {
 public:
     bool fail_open = false;
+    bool has_audio = true;
+    bool has_video = true;
     bool is_open = false;
     int open_calls = 0;
     int close_calls = 0;
@@ -52,17 +55,21 @@ public:
         is_open = true;
         domain::DemuxerOpenResult result;
         result.container.duration_us = 1234567;
-        result.video = domain::SelectedStream<domain::VideoCodecConfig>{
-            .id = {0},
-            .timing = {},
-            .config = {.common = {}, .coded_width = 1920, .coded_height = 1080,
-                       .profile = std::nullopt, .level = std::nullopt},
-        };
-        result.audio = domain::SelectedStream<domain::AudioCodecConfig>{
-            .id = {1},
-            .timing = {},
-            .config = {.common = {}, .sample_rate = 48000, .channels = 2},
-        };
+        if (has_video) {
+            result.video = domain::SelectedStream<domain::VideoCodecConfig>{
+                .id = {0},
+                .timing = {},
+                .config = {.common = {}, .coded_width = 1920, .coded_height = 1080,
+                           .profile = std::nullopt, .level = std::nullopt},
+            };
+        }
+        if (has_audio) {
+            result.audio = domain::SelectedStream<domain::AudioCodecConfig>{
+                .id = {1},
+                .timing = {},
+                .config = {.common = {}, .sample_rate = 48000, .channels = 2},
+            };
+        }
         return result;
     }
 
@@ -682,7 +689,7 @@ TEST(ApiLayerTest, PollEventReturnsNoneWhenQueueIsEmpty) {
     EXPECT_TRUE(layer.stop());
 }
 
-TEST(ApiLayerTest, PlaybackFinishedMovesCurrentSessionToEnded) {
+TEST(ApiLayerTest, PlaybackFinishedWaitsForEveryPresentStream) {
     FakePipeline pipeline;
     ApiLayer layer = make_layer(pipeline);
     ASSERT_TRUE(layer.start());
@@ -704,7 +711,18 @@ TEST(ApiLayerTest, PlaybackFinishedMovesCurrentSessionToEnded) {
 
     PlayerEvent event;
     EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
+
+    EXPECT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = pipeline.generation->current(),
+    }));
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
     EXPECT_EQ(event.type, PlayerEventType::PlaybackFinished);
+
+    EXPECT_TRUE(pipeline.notifier->send(finished));
+    EXPECT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = pipeline.generation->current(),
+    }));
     EXPECT_EQ(layer.poll_event(event), SEMI_OK);
     EXPECT_EQ(event.type, PlayerEventType::None);
 
@@ -718,6 +736,44 @@ TEST(ApiLayerTest, PlaybackFinishedMovesCurrentSessionToEnded) {
     EXPECT_EQ(layer.await(replay, result), SEMI_ERR_INVALID_STATE);
     EXPECT_EQ(pipeline.output->start_playback_calls, 1);
 
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, AudioOnlyPlaybackFinishesWhenAudioDrains) {
+    FakePipeline pipeline;
+    pipeline.demuxer->has_video = false;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    ASSERT_EQ(layer.await(layer.open("audio.m4a"), result), SEMI_OK);
+    ASSERT_EQ(layer.await(layer.play(), result), SEMI_OK);
+    ASSERT_TRUE(pipeline.notifier->send(domain::AudioPlaybackFinished{
+        .generation = pipeline.generation->current(),
+    }));
+
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::PlaybackFinished);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, VideoOnlyPlaybackFinishesAfterVideoEndOfInput) {
+    FakePipeline pipeline;
+    pipeline.demuxer->has_audio = false;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    ASSERT_EQ(layer.await(layer.open("video.mp4"), result), SEMI_OK);
+    ASSERT_EQ(layer.await(layer.play(), result), SEMI_OK);
+    ASSERT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = pipeline.generation->current(),
+    }));
+
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::PlaybackFinished);
     EXPECT_TRUE(layer.stop());
 }
 
@@ -739,6 +795,9 @@ TEST(ApiLayerTest, PlaybackFinishedIgnoresStaleGeneration) {
         .generation = pipeline.generation->current() + 1,
     };
     EXPECT_TRUE(pipeline.notifier->send(stale_finished));
+    EXPECT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = pipeline.generation->current() + 1,
+    }));
 
     PlayerEvent event;
     EXPECT_EQ(layer.poll_event(event), SEMI_OK);
@@ -749,6 +808,61 @@ TEST(ApiLayerTest, PlaybackFinishedIgnoresStaleGeneration) {
     EXPECT_EQ(layer.await(pause, result), SEMI_OK);
     EXPECT_EQ(pipeline.output->pause_playback_calls, 1);
 
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, SeekResetsObservedStreamCompletions) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    ASSERT_EQ(layer.await(layer.open("movie.mp4"), result), SEMI_OK);
+    ASSERT_EQ(layer.await(layer.play(), result), SEMI_OK);
+
+    ASSERT_TRUE(pipeline.notifier->send(domain::AudioPlaybackFinished{
+        .generation = pipeline.generation->current(),
+    }));
+
+    const auto seek_generation = pipeline.generation->bump();
+    ASSERT_EQ(layer.await(layer.seek(1'000'000, domain::SeekMode::PreviousKeyframe), result),
+              SEMI_OK);
+
+    ASSERT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = seek_generation,
+    }));
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
+
+    ASSERT_TRUE(pipeline.notifier->send(domain::AudioPlaybackFinished{
+        .generation = seek_generation,
+    }));
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::PlaybackFinished);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, PlaybackFinishedIgnoresEventsAfterClose) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    ASSERT_EQ(layer.await(layer.open("movie.mp4"), result), SEMI_OK);
+    const auto generation = pipeline.generation->current();
+    ASSERT_EQ(layer.await(layer.close(), result), SEMI_OK);
+
+    ASSERT_TRUE(pipeline.notifier->send(domain::AudioPlaybackFinished{
+        .generation = generation,
+    }));
+    ASSERT_TRUE(pipeline.notifier->send(domain::VideoPlaybackFinished{
+        .generation = generation,
+    }));
+
+    PlayerEvent event;
+    EXPECT_EQ(layer.poll_event(event), SEMI_OK);
+    EXPECT_EQ(event.type, PlayerEventType::None);
     EXPECT_TRUE(layer.stop());
 }
 

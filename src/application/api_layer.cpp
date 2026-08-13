@@ -9,6 +9,7 @@
 #include "domain/worker/video_decoder/video_decoder.hpp"
 #include "domain/worker/video_renderer/video_renderer.hpp"
 #include "domain/worker/video_sync/video_sync.hpp"
+#include "domain/worker/video_sync/video_sync_events.hpp"
 #include "infrastructure/log/log.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
@@ -126,12 +127,17 @@ struct ApiLayer::Impl {
     std::shared_ptr<domain::VideoRenderer> video_renderer;
     std::shared_ptr<domain::VideoSync> video_sync;
     VideoPresentationConfig video_presentation_config;
-    std::shared_ptr<infra::Notifier::Subscription> playback_finished_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> audio_playback_finished_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> video_playback_finished_subscription;
     PlayerState player_state = PlayerState::Idle;
     domain::Generation::Value active_generation = 0;
     CommandHandle next_handle = 1;
     bool audio_pipeline_configured = false;
     bool video_sync_configured = false;
+    bool expects_audio_completion = false;
+    bool expects_video_completion = false;
+    bool audio_completion_observed = false;
+    bool video_completion_observed = false;
     bool accepting = false;
     bool stopping = false;
 };
@@ -311,18 +317,42 @@ void close_pipeline(ApiLayer::Impl& impl) noexcept {
     {
         std::lock_guard lock(impl.mutex);
         impl.active_generation = 0;
+        impl.expects_audio_completion = false;
+        impl.expects_video_completion = false;
+        impl.audio_completion_observed = false;
+        impl.video_completion_observed = false;
     }
 }
 
-void handle_playback_finished(ApiLayer::Impl& impl,
-                              const domain::AudioPlaybackFinished& event) noexcept {
+enum class FinishedStream : std::uint8_t {
+    Audio,
+    Video,
+};
+
+void handle_stream_finished(ApiLayer::Impl& impl,
+                            FinishedStream stream,
+                            domain::Generation::Value generation) noexcept {
     std::lock_guard lock(impl.mutex);
-    if (event.generation != impl.active_generation) {
+    if (generation != impl.active_generation || impl.player_state == PlayerState::Idle ||
+        impl.player_state == PlayerState::Ended) {
         return;
     }
-    if (impl.player_state == PlayerState::Ready ||
-        impl.player_state == PlayerState::Playing ||
-        impl.player_state == PlayerState::Paused) {
+
+    if (stream == FinishedStream::Audio) {
+        if (!impl.expects_audio_completion) {
+            return;
+        }
+        impl.audio_completion_observed = true;
+    } else {
+        if (!impl.expects_video_completion) {
+            return;
+        }
+        impl.video_completion_observed = true;
+    }
+
+    const bool audio_finished = !impl.expects_audio_completion || impl.audio_completion_observed;
+    const bool video_finished = !impl.expects_video_completion || impl.video_completion_observed;
+    if (audio_finished && video_finished) {
         impl.player_state = PlayerState::Ended;
         push_event_locked(impl, PlayerEvent{.type = PlayerEventType::PlaybackFinished});
     }
@@ -483,6 +513,10 @@ CommandExecution execute_open(const OpenCommand& command,
     if (impl.generation) {
         std::lock_guard lock(impl.mutex);
         impl.active_generation = impl.generation->current();
+        impl.expects_audio_completion = opened->audio.has_value();
+        impl.expects_video_completion = opened->video.has_value();
+        impl.audio_completion_observed = false;
+        impl.video_completion_observed = false;
     }
     return make_open_success(*opened);
 }
@@ -575,6 +609,8 @@ CommandExecution execute_seek(std::int64_t position_us,
     if (impl.generation) {
         std::lock_guard lock(impl.mutex);
         impl.active_generation = impl.generation->current();
+        impl.audio_completion_observed = false;
+        impl.video_completion_observed = false;
     }
 
     CommandExecution execution;
@@ -746,10 +782,15 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
                                    std::move(video_renderer),
                                    std::move(video_sync))) {
     if (impl_->notifier) {
-        impl_->playback_finished_subscription =
+        impl_->audio_playback_finished_subscription =
             impl_->notifier->subscribe<domain::AudioPlaybackFinished>(
                 [impl = impl_.get()](const domain::AudioPlaybackFinished& event) {
-                    handle_playback_finished(*impl, event);
+                    handle_stream_finished(*impl, FinishedStream::Audio, event.generation);
+                });
+        impl_->video_playback_finished_subscription =
+            impl_->notifier->subscribe<domain::VideoPlaybackFinished>(
+                [impl = impl_.get()](const domain::VideoPlaybackFinished& event) {
+                    handle_stream_finished(*impl, FinishedStream::Video, event.generation);
                 });
     }
 }

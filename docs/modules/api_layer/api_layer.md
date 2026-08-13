@@ -40,7 +40,7 @@ Queued -> Running -> Completed
 `ApiLayer` 在唯一命令线程内持有 `PlayerState`，初始状态为 `Idle`。状态校验发生在命令真正开始执行时，而不是入队时；因此连续提交的 `open -> play` 会让 `play` 看到前一个命令执行后的 `Ready`。
 
 命令执行结果可以携带下一状态，由命令线程在业务操作结束后统一提交。普通失败和非法命令不改变状态；替换媒体时若旧媒体已经关闭而新媒体打开失败，最终状态为 `Idle`。
-`ApiLayer` 同时订阅 `AudioPlaybackFinished`，只接受当前 generation 的完成事件；当前会话播放完成后进入 `Ended`，并向宿主事件队列追加 `PlaybackFinished`。旧 generation 的完成事件会被忽略，避免 seek/open 替换后的过期数据污染状态。
+`ApiLayer` 分别订阅 `AudioPlaybackFinished` 和 `VideoPlaybackFinished`，并在 `open` 时记录当前媒体实际存在的流。只有当前 generation 的所有有效流都完成后，会话才进入 `Ended` 并向宿主事件队列追加一次 `PlaybackFinished`。纯音频和纯视频媒体只等待自身管线；重复事件、旧 generation 事件以及 `close` 后迟到的事件都会被忽略。
 
 | 命令 | 合法状态 | 成功后的状态 |
 |------|----------|--------------|

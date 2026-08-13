@@ -76,6 +76,17 @@ DefaultVideoSync::DefaultVideoSync(
             }
             cv_.notify_one();
         });
+    audio_playback_finished_subscription_ = notifier_->subscribe<AudioPlaybackFinished>(
+        [this](const AudioPlaybackFinished& event) {
+            {
+                std::lock_guard lock(mutex_);
+                if (event.generation != active_generation_) {
+                    return;
+                }
+                audio_playback_finished_hint_ = true;
+            }
+            cv_.notify_one();
+        });
 }
 
 DefaultVideoSync::~DefaultVideoSync() {
@@ -83,6 +94,7 @@ DefaultVideoSync::~DefaultVideoSync() {
     video_rendered_store_not_empty_subscription_.reset();
     generation_changed_subscription_.reset();
     audio_position_ready_subscription_.reset();
+    audio_playback_finished_subscription_.reset();
 }
 
 std::expected<void, VideoSyncError>
@@ -221,9 +233,12 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
         input_not_empty_hint_ = true;
         generation_changed_hint_ = false;
         audio_position_ready_hint_ = false;
+        audio_playback_finished_hint_ = false;
         waiting_for_audio_position_ = false;
         waiting_for_resume_ = false;
         end_of_input_observed_ = false;
+        playback_finished_notified_ = false;
+        audio_playback_finished_ = false;
         pending_frame_.reset();
         next_wake_deadline_.reset();
         reset_local_clock();
@@ -283,9 +298,12 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
     input_not_empty_hint_ = false;
     generation_changed_hint_ = false;
     audio_position_ready_hint_ = false;
+    audio_playback_finished_hint_ = false;
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
     end_of_input_observed_ = false;
+    playback_finished_notified_ = false;
+    audio_playback_finished_ = false;
     pending_frame_.reset();
     next_wake_deadline_.reset();
     active_generation_ = 0;
@@ -301,6 +319,10 @@ bool DefaultVideoSync::should_process_data_locked() const noexcept {
     }
 
     if (generation_changed_hint_ || (generation_ && generation_->current() != active_generation_)) {
+        return true;
+    }
+
+    if (audio_playback_finished_hint_) {
         return true;
     }
 
@@ -333,6 +355,7 @@ bool DefaultVideoSync::should_process_data_locked() const noexcept {
 
 void DefaultVideoSync::process_data_step() noexcept {
     adopt_generation_if_needed();
+    adopt_audio_playback_finished_if_needed();
 
     if (!begin_data_step()) {
         return;
@@ -350,6 +373,7 @@ void DefaultVideoSync::process_data_step() noexcept {
             paused_generation_pending_ = false;
         }
     }
+    notify_playback_finished_if_needed();
 }
 
 bool DefaultVideoSync::begin_data_step() noexcept {
@@ -367,7 +391,7 @@ bool DefaultVideoSync::begin_data_step() noexcept {
 
 bool DefaultVideoSync::wait_for_audio_clock_if_needed(
     const std::optional<std::int64_t>& clock_pts) noexcept {
-    if (!options_.audio_master || clock_pts) {
+    if (!options_.audio_master || audio_playback_finished_ || clock_pts) {
         return false;
     }
 
@@ -466,7 +490,7 @@ bool DefaultVideoSync::frame_is_due(const RenderedVideoFrame& frame,
     }
 
     const auto frame_pts = frame.rendered().pts_us;
-    if (!clock_pts && !options_.audio_master && frame_pts) {
+    if (!clock_pts && (!options_.audio_master || audio_playback_finished_) && frame_pts) {
         anchor_local_clock_if_needed(*frame_pts);
         clock_pts = current_clock_pts();
     }
@@ -506,12 +530,35 @@ void DefaultVideoSync::adopt_generation_if_needed() noexcept {
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
     audio_position_ready_hint_ = false;
+    audio_playback_finished_hint_ = false;
     end_of_input_observed_ = false;
+    playback_finished_notified_ = false;
+    audio_playback_finished_ = false;
     active_generation_ = current_generation;
     generation_changed_hint_ = false;
     input_not_empty_hint_ = true;
     paused_generation_pending_ = !playback_enabled_;
     reset_local_clock();
+}
+
+void DefaultVideoSync::adopt_audio_playback_finished_if_needed() noexcept {
+    std::lock_guard lock(mutex_);
+    if (session_state_ != SessionState::Configured ||
+        !audio_playback_finished_hint_ || audio_playback_finished_) {
+        return;
+    }
+
+    audio_playback_finished_hint_ = false;
+    reset_local_clock();
+    if (const auto position = audio_output_ ? audio_output_->current_position() : std::nullopt;
+        position && position->generation == active_generation_) {
+        local_clock_start_pts_us_ = position->pts_us;
+        local_clock_started_at_ = Clock::now();
+        local_clock_paused_ = !playback_enabled_;
+    }
+    audio_playback_finished_ = true;
+    waiting_for_audio_position_ = false;
+    input_not_empty_hint_ = true;
 }
 
 bool DefaultVideoSync::pop_next_item(VideoRenderedStoreItem& item) noexcept {
@@ -544,6 +591,18 @@ bool DefaultVideoSync::pop_next_item(VideoRenderedStoreItem& item) noexcept {
 
 std::optional<std::int64_t> DefaultVideoSync::current_clock_pts() const noexcept {
     if (options_.audio_master) {
+        if (audio_playback_finished_) {
+            if (local_clock_frozen_pts_us_) {
+                return *local_clock_frozen_pts_us_;
+            }
+            if (!local_clock_started_at_) {
+                return std::nullopt;
+            }
+            return local_clock_start_pts_us_ +
+                   std::chrono::duration_cast<std::chrono::microseconds>(
+                       Clock::now() - *local_clock_started_at_)
+                       .count();
+        }
         if (!audio_output_) {
             return std::nullopt;
         }
@@ -578,14 +637,15 @@ void DefaultVideoSync::anchor_local_clock_if_needed(std::int64_t pts_us) noexcep
 }
 
 void DefaultVideoSync::pause_local_clock() noexcept {
-    if (const auto current = current_clock_pts(); current && !options_.audio_master) {
+    if (const auto current = current_clock_pts();
+        current && (!options_.audio_master || audio_playback_finished_)) {
         local_clock_frozen_pts_us_ = *current;
     }
     local_clock_paused_ = true;
 }
 
 void DefaultVideoSync::resume_local_clock() noexcept {
-    if (options_.audio_master) {
+    if (options_.audio_master && !audio_playback_finished_) {
         return;
     }
     if (local_clock_frozen_pts_us_) {
@@ -611,6 +671,27 @@ void DefaultVideoSync::present_frame(RenderedVideoFrame&& frame) noexcept {
         options_.on_frame(frame);
     } catch (...) {
         SEMI_LOG_ERROR("video frame callback threw an exception");
+    }
+}
+
+void DefaultVideoSync::notify_playback_finished_if_needed() noexcept {
+    Generation::Value generation = 0;
+    {
+        std::lock_guard lock(mutex_);
+        if (session_state_ != SessionState::Configured || !end_of_input_observed_ ||
+            playback_finished_notified_) {
+            return;
+        }
+        playback_finished_notified_ = true;
+        generation = active_generation_;
+    }
+
+    try {
+        if (notifier_) {
+            (void)notifier_->send(VideoPlaybackFinished{.generation = generation});
+        }
+    } catch (...) {
+        SEMI_LOG_ERROR("failed to publish video playback finished");
     }
 }
 

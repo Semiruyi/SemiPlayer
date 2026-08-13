@@ -34,7 +34,7 @@ VideoRenderedStore(gen, CPU RGBA)
 - 对未来帧等待到其 PTS；对已经到期的连续帧只交付最新一帧。
 - pause 时停止常规换帧；暂停 seek 后允许为新 generation 交付一次目标附近的新帧。
 - 在 `VideoSync` 工作线程同步调用已配置的帧回调。
-- 观察输入 EOF，避免 EOF 后空转或重复通知。
+- 观察输入 EOF，在最后一帧宿主回调返回后发布一次当前 generation 的 `VideoPlaybackFinished`。
 
 不负责：
 
@@ -101,6 +101,8 @@ AudioOutput.current_position()
 
 这种“排尽到期帧、只交付最新一帧”的策略同时完成追赶和丢帧，不需要额外维护固定的落后阈值。
 
+音频可能早于视频结束。收到当前 generation 的 `AudioPlaybackFinished` 后，VideoSync 以最终音频位置为锚点切换到本地 `steady_clock`，继续调度视频尾帧，直到视频 EOF。这样应用层可以等待两条实际存在的管线都结束，而不会在音频 drain 完成时提前结束视频会话。
+
 ### 纯视频媒体
 
 `audio_master == false` 时使用 `std::chrono::steady_clock`：
@@ -149,6 +151,9 @@ VideoSync loop:
         同步调用 on_frame(candidate)
         回调返回后销毁 candidate
         若是暂停 seek: 清除 paused_generation_pending
+
+    若已观察到 EOF 且尚未通知:
+        发布 VideoPlaybackFinished(active_generation)
 ```
 
 ## 回调契约
@@ -176,8 +181,9 @@ VideoSync 使用一个常驻 worker，不做固定周期轮询。唤醒源包括
 2. `VideoRenderedStoreNotEmpty`：输入从空变为非空。
 3. `GenerationChanged`：open/seek 产生新世代。
 4. `AudioPlaybackPositionReady`：音频播放位置首次可用或需要重新评估。
-5. pending future frame 的等待 deadline 到达。
-6. 析构发出的 worker shutdown 请求。
+5. `AudioPlaybackFinished`：音频先结束时切换到本地时钟继续调度视频尾帧。
+6. pending future frame 的等待 deadline 到达。
+7. 析构发出的 worker shutdown 请求。
 
 Notifier 事件只作为唤醒 hint。worker 每次醒来都重新检查真实状态、当前 generation、Store 和时钟，不能假设某个事件仍然成立。
 
@@ -211,7 +217,7 @@ Constructed -> Configuring -> Configured -> Unconfiguring -> Constructed
 |------|------|
 | `VideoRenderedSource` | 消费渲染完成的 CPU 视频帧和 EOF |
 | `AudioOutput` | 有音频时读取当前播放位置 |
-| `Notifier` | 订阅 Store、generation、音频位置事件 |
+| `Notifier` | 订阅 Store、generation、音频位置/完成事件，并发布视频完成事件 |
 | `Generation` | 判断当前数据世代 |
 
 会话配置传入：
