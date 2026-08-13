@@ -208,7 +208,8 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     sync.unconfigure();
 }
 
-TEST(DefaultVideoSyncTest, DiscardsStaleGenerationAndPresentsOnePausedFrameAfterSeek) {
+TEST(DefaultVideoSyncTest,
+     DiscardsStaleGenerationAndPresentsFuturePausedFrameAfterSeek) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     auto generation = std::make_shared<Generation>(notifier);
     auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
@@ -227,7 +228,9 @@ TEST(DefaultVideoSyncTest, DiscardsStaleGenerationAndPresentsOnePausedFrameAfter
     }));
 
     const auto new_generation = generation->bump();
-    audio_output->set_position(new_generation, 200'000);
+    // A paused audio clock cannot advance to a slightly later video PTS. The
+    // first frame from the seek generation must still be presented immediately.
+    audio_output->set_position(new_generation, 50'000);
     ASSERT_EQ(rendered_store->try_push(make_frame(2, 100'000, new_generation)),
               VideoRenderedPushResult::Accepted);
 

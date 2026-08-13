@@ -458,6 +458,13 @@ bool DefaultVideoSync::take_pending_frame_if_due(
 
 bool DefaultVideoSync::frame_is_due(const RenderedVideoFrame& frame,
                                     std::optional<std::int64_t>& clock_pts) noexcept {
+    // A paused clock cannot advance to a post-seek frame whose PTS is slightly
+    // later than the first prepared audio PTS. Once the new generation has a
+    // valid clock, present its first video frame immediately and pause again.
+    if (!playback_enabled_ && paused_generation_pending_) {
+        return true;
+    }
+
     const auto frame_pts = frame.rendered().pts_us;
     if (!clock_pts && !options_.audio_master && frame_pts) {
         anchor_local_clock_if_needed(*frame_pts);
