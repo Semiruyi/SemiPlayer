@@ -38,7 +38,6 @@ void handle_open(src):
 
     // ④ 会话状态
     player_state = Ready                // 就绪、未播放
-    target_start_pts = 0                // 默认从头 (Ready 态 seek 可改它)
     current_media = Some(src)
     duration = media_info.duration_us
 
@@ -57,7 +56,7 @@ void handle_open(src):
 | ③ | `audio_decoder.configure(config)` | 用 codec config 自己建音频解码器，并返回实际 decoded PCM format | audio_decoder.md |
 | ③ | `audio_output.configure(options)` | 探测/选择输出设备支持的播放格式，建输出后端上下文，返回 `playback_format` | audio_output.md |
 | ③ | `audio_resampler.configure(input, output)` | 用 decoded PCM → playback PCM 建 SwrContext；自包含，不感知流概念 | audio_resampler.md |
-| ④ | 会话状态 | `player_state=Ready`、`target_start_pts=0`、记 current_media/duration | ApiLayer 内部 |
+| ④ | 会话状态 | `player_state=Ready`、记 current_media/duration | ApiLayer 内部 |
 
 ---
 
@@ -97,17 +96,14 @@ AudioOutput 在 open 阶段根据系统/策略产出 `playback_format`，这份�
 
 ## Ready 态的 seek（调起点）
 
-open 后处于 Ready 态。**Ready 态 seek 合法**，语义是"调整播放起始位置"，但**不启动 demuxer、不做真正 FFmpeg 定位**：
+open 后处于 Ready 态。**Ready 态 seek 合法**，语义是按指定模式调整播放起始关键帧：
 
 ```
-Ready 态 seek(pos):
-    target_start_pts = pos        // 只记目标, 不动 demuxer (管道还是冷的)
+Ready 态 seek(pos, mode):
+    demuxer.seek(pos, mode)       // 执行 FFmpeg 关键帧定位并推进 generation
     player_state 保持 Ready
     handle.resolve(Ok(()))
 ```
-
-当前 `demuxer.seek()` 只记录目标，尚未执行真正的 FFmpeg 定位（`av_seek_frame`）。
-待 `DemuxerBackend` 增加 seek 契约后，再由 ApiLayer 编排定位、generation 推进和下游 flush。
 
 ---
 
@@ -115,8 +111,8 @@ Ready 态 seek(pos):
 
 | 操作 | 做什么 | 不做什么 |
 |------|--------|---------|
-| **open** | 打开文件、探测拿 MediaInfo、建各模块上下文、状态=Ready、target_start_pts=0 | 不填水位、不启动管道、不动 demuxer 读 |
-| **play** | 启动 demuxer/decoder、填到水位、解冻时钟+出声 | 当前不执行 target_start_pts 的 backend 定位；也不管打开/探测（open 已做） |
+| **open** | 打开文件、探测拿 MediaInfo、建各模块上下文、状态=Ready | 不解冻播放时钟、不启动设备播放 |
+| **play** | 启动音频设备和视频同步，解冻播放时钟 | 不管打开、探测或 seek 定位 |
 
 详见 `play.md`。
 
@@ -128,7 +124,7 @@ Ready 态 seek(pos):
 Idle ──open()──▶ Ready
                   │
                   ├── play() ──▶ Playing
-                  ├── seek(pos) [Ready态, 调起点, 只记 target_start_pts]
+                  ├── seek(pos, mode) [Ready态, 执行关键帧定位]
                   └── close() ──▶ Idle
 ```
 
@@ -139,4 +135,4 @@ Idle ──open()──▶ Ready
 - ❌ 各模块 configure/setup 内部实现 → 各模块文档
 - ❌ play 的冷启动填水位 → play.md
 - ❌ close 的资源清理编排 → close.md
-- ❌ Ready 态 seek 的详细语义（target_start_pts 如何被未来的 seek 契约消费）→ play.md
+- ❌ Ready 态 seek 的关键帧方向和 generation 语义 → seek.md

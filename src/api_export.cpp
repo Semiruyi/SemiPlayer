@@ -1,6 +1,7 @@
 #include "semi_player/semi_player.h"
 
 #include "application/api_layer.hpp"
+#include "contracts/demuxer/seek_mode.hpp"
 #include "domain/resource/video_rendered_store/rendered_video_frame.hpp"
 #include "infrastructure/log/log.hpp"
 #include "ioc/ioc_container.hpp"
@@ -160,9 +161,24 @@ semi_handle_t semi_player_pause(void) {
     return layer ? layer->pause() : 0;
 }
 
-semi_handle_t semi_player_seek(long long position_us) {
+semi_handle_t semi_player_seek(long long position_us, semi_seek_mode_t mode) {
     const auto layer = api_layer();
-    return layer ? layer->seek(position_us) : 0;
+    if (!layer) {
+        return 0;
+    }
+    semi::contracts::demuxer::SeekMode internal_mode =
+        semi::contracts::demuxer::SeekMode::Unknown;
+    switch (mode) {
+    case SEMI_SEEK_MODE_PREVIOUS_KEYFRAME:
+        internal_mode = semi::contracts::demuxer::SeekMode::PreviousKeyframe;
+        break;
+    case SEMI_SEEK_MODE_NEXT_KEYFRAME:
+        internal_mode = semi::contracts::demuxer::SeekMode::NextKeyframe;
+        break;
+    default:
+        break;
+    }
+    return layer->seek(position_us, internal_mode);
 }
 
 semi_handle_t semi_player_close(void) {

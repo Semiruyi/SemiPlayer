@@ -25,6 +25,7 @@ public:
     int close_calls = 0;
     int seek_calls = 0;
     std::int64_t last_seek_position = -1;
+    domain::SeekMode last_seek_mode = domain::SeekMode::Unknown;
     bool fail_seek = false;
 
     std::expected<domain::DemuxerOpenResult, domain::DemuxerError>
@@ -65,9 +66,11 @@ public:
         return result;
     }
 
-    std::expected<void, domain::DemuxerError> seek(std::int64_t position_us) override {
+    std::expected<void, domain::DemuxerError>
+    seek(std::int64_t position_us, domain::SeekMode mode) override {
         ++seek_calls;
         last_seek_position = position_us;
+        last_seek_mode = mode;
         if (fail_seek) {
             return std::unexpected(domain::DemuxerError{
                 .code = domain::DemuxerErrorCode::BackendFailure,
@@ -380,11 +383,12 @@ TEST(ApiLayerTest, SeekDelegatesToDemuxerAndPreservesPlaybackState) {
     CommandResult result;
     const auto open = layer.open("movie.mp4");
     ASSERT_EQ(layer.await(open, result), SEMI_OK);
-    const auto seek = layer.seek(1'000'000);
+    const auto seek = layer.seek(1'000'000, domain::SeekMode::NextKeyframe);
     ASSERT_NE(seek, 0U);
     EXPECT_EQ(layer.await(seek, result), SEMI_OK);
     EXPECT_EQ(pipeline.demuxer->seek_calls, 1);
     EXPECT_EQ(pipeline.demuxer->last_seek_position, 1'000'000);
+    EXPECT_EQ(pipeline.demuxer->last_seek_mode, domain::SeekMode::NextKeyframe);
     EXPECT_TRUE(layer.stop());
 }
 
@@ -397,9 +401,23 @@ TEST(ApiLayerTest, SeekMapsBackendFailureToInvalidResource) {
     CommandResult result;
     const auto open = layer.open("movie.mp4");
     ASSERT_EQ(layer.await(open, result), SEMI_OK);
-    const auto seek = layer.seek(1'000'000);
+    const auto seek = layer.seek(1'000'000, domain::SeekMode::PreviousKeyframe);
     ASSERT_NE(seek, 0U);
     EXPECT_EQ(layer.await(seek, result), SEMI_ERR_INVALID_RESOURCE);
+    EXPECT_TRUE(layer.stop());
+}
+
+TEST(ApiLayerTest, RejectsUnknownSeekModeWithoutCallingDemuxer) {
+    FakePipeline pipeline;
+    ApiLayer layer = make_layer(pipeline);
+    ASSERT_TRUE(layer.start());
+
+    CommandResult result;
+    ASSERT_EQ(layer.await(layer.open("movie.mp4"), result), SEMI_OK);
+    const auto seek = layer.seek(1'000'000, domain::SeekMode::Unknown);
+    ASSERT_NE(seek, 0U);
+    EXPECT_EQ(layer.await(seek, result), SEMI_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(pipeline.demuxer->seek_calls, 0);
     EXPECT_TRUE(layer.stop());
 }
 
@@ -433,7 +451,8 @@ TEST(ApiLayerTest, RejectsMediaCommandsThatAreInvalidInIdle) {
 
     const CommandHandle play = layer.play();
     const CommandHandle pause = layer.pause();
-    const CommandHandle seek = layer.seek(1000000);
+    const CommandHandle seek =
+        layer.seek(1000000, domain::SeekMode::PreviousKeyframe);
     ASSERT_NE(play, 0U);
     ASSERT_NE(pause, 0U);
     ASSERT_NE(seek, 0U);

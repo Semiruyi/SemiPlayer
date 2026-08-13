@@ -1,5 +1,6 @@
 #pragma once
 
+#include "contracts/demuxer/seek_mode.hpp"
 #include "contracts/media/media_types.hpp"
 #include "semi_player/status.h"
 
@@ -101,7 +102,8 @@ public:
     [[nodiscard]] CommandHandle open(std::string source);
     [[nodiscard]] CommandHandle play();
     [[nodiscard]] CommandHandle pause();
-    [[nodiscard]] CommandHandle seek(std::int64_t position_us);
+    [[nodiscard]] CommandHandle seek(std::int64_t position_us,
+                                     contracts::demuxer::SeekMode mode);
     [[nodiscard]] CommandHandle close();
     [[nodiscard]] CommandHandle set_volume(std::uint32_t volume);
     [[nodiscard]] CommandHandle configure_video_output(
@@ -125,7 +127,8 @@ private:
     [[nodiscard]] CommandHandle enqueue_open(std::string source);
     [[nodiscard]] CommandHandle enqueue_play();
     [[nodiscard]] CommandHandle enqueue_pause();
-    [[nodiscard]] CommandHandle enqueue_seek(std::int64_t position_us);
+    [[nodiscard]] CommandHandle enqueue_seek(std::int64_t position_us,
+                                             contracts::demuxer::SeekMode mode);
     [[nodiscard]] CommandHandle enqueue_close();
     [[nodiscard]] CommandHandle enqueue_set_volume(std::uint32_t volume);
     [[nodiscard]] CommandHandle

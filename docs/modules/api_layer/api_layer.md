@@ -47,7 +47,7 @@ Queued -> Running -> Completed
 | `open` | 任意状态 | `Ready`；已有媒体时先关闭旧媒体 |
 | `play` | `Ready/Playing/Paused` | `Playing`；`Playing` 下为幂等成功；`Ended` 下暂返回 `SEMI_ERR_INVALID_STATE` |
 | `pause` | `Ready/Playing/Paused/Ended` | `Playing` 时进入 `Paused`，其他合法状态为幂等成功 |
-| `seek` | `Ready/Playing/Paused/Ended` | 保持原播放意图；`Ended` 后续进入 `Paused` |
+| `seek(position_us, mode)` | `Ready/Playing/Paused/Ended` | 按前一/后一关键帧定位并保持原播放意图；`Ended` 后续进入 `Paused` |
 | `close` | 任意状态 | `Idle`；`Idle` 下不访问媒体模块 |
 | `configure_video_output` | `Idle` | 状态不变；原子替换后续 open 使用的视频输出配置 |
 

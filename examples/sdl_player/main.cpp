@@ -337,7 +337,10 @@ private:
         const std::int64_t current = presenter_->current_pts_us();
         const std::int64_t target = std::clamp(
             current + delta_us, std::int64_t{0}, duration_us_);
-        command_awaiter_.submit(semi_player_seek(target), "seek");
+        const semi_seek_mode_t mode = delta_us < 0
+            ? SEMI_SEEK_MODE_PREVIOUS_KEYFRAME
+            : SEMI_SEEK_MODE_NEXT_KEYFRAME;
+        command_awaiter_.submit(semi_player_seek(target, mode), "seek");
     }
 
     bool poll_player_events() noexcept {

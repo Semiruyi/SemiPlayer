@@ -284,7 +284,7 @@ generation 并 reset 自己的 backend。内部时钟不由 ApiLayer 跳点；�
 预读或实际消费新时间线 PCM 时观察到新的不透明 generation：
 
 ```text
-demuxer.seek(position_us) 成功
+demuxer.seek(position_us, mode) 成功
     ↓
 AudioOutput 丢弃旧 generation，reset backend buffer
     ↓

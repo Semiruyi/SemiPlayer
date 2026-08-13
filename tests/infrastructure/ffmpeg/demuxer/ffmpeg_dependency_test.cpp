@@ -147,26 +147,51 @@ TEST(FfmpegDemuxerBackendTest, ProbesCommittedMp4Fixture) {
     backend.close();
 }
 
-TEST(FfmpegDemuxerBackendTest, SeeksCommittedMp4Fixture) {
+TEST(FfmpegDemuxerBackendTest, SeeksToPreviousOrNextVideoKeyframe) {
     semi::infra::ffmpeg::demuxer::FfmpegDemuxerBackend backend;
     const auto opened = backend.open(SEMI_PLAYER_TEST_MEDIA_PATH);
     ASSERT_TRUE(opened.has_value()) << opened.error().message;
 
-    ASSERT_TRUE(backend.seek(1'000'000).has_value());
+    const auto video = std::find_if(
+        opened->streams.begin(), opened->streams.end(), [](const auto& stream) {
+            return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(
+                stream.config);
+        });
+    ASSERT_NE(video, opened->streams.end());
+    const auto video_stream_id = video->id.value;
 
-    bool reached_target = false;
-    for (int index = 0; index < 128 && !reached_target; ++index) {
-        const auto packet = backend.read_packet();
-        ASSERT_TRUE(packet.has_value()) << packet.error().message;
-        if (const auto* media_packet =
-                std::get_if<semi::contracts::demuxer::BackendPacket>(&*packet)) {
-            if (media_packet->packet.pts_us.has_value() && *media_packet->packet.pts_us >= 500'000) {
-                reached_target = true;
+    const auto read_next_video_pts = [&backend, video_stream_id]()
+        -> std::optional<std::int64_t> {
+        for (int index = 0; index < 128; ++index) {
+            const auto packet = backend.read_packet();
+            if (!packet ||
+                std::holds_alternative<semi::contracts::demuxer::BackendEndOfStream>(*packet)) {
+                return std::nullopt;
             }
-        } else {
-            break;
+            const auto* media_packet =
+                std::get_if<semi::contracts::demuxer::BackendPacket>(&*packet);
+            if (media_packet != nullptr && media_packet->stream_id.value == video_stream_id &&
+                media_packet->packet.pts_us.has_value()) {
+                return media_packet->packet.pts_us;
+            }
         }
-    }
-    EXPECT_TRUE(reached_target);
+        return std::nullopt;
+    };
+
+    constexpr std::int64_t target_us = 1'000'000;
+    ASSERT_TRUE(backend.seek(
+        target_us,
+        semi::contracts::demuxer::SeekMode::PreviousKeyframe).has_value());
+    const auto previous_pts = read_next_video_pts();
+    ASSERT_TRUE(previous_pts.has_value());
+    EXPECT_LE(*previous_pts, target_us);
+
+    ASSERT_TRUE(backend.seek(
+        target_us,
+        semi::contracts::demuxer::SeekMode::NextKeyframe).has_value());
+    const auto next_pts = read_next_video_pts();
+    ASSERT_TRUE(next_pts.has_value());
+    EXPECT_GE(*next_pts, target_us);
+    EXPECT_LT(*previous_pts, *next_pts);
     backend.close();
 }

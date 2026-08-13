@@ -36,6 +36,7 @@ struct PlayCommand {};
 struct PauseCommand {};
 struct SeekCommand {
     std::int64_t position_us;
+    contracts::demuxer::SeekMode mode;
 };
 struct CloseCommand {};
 struct SetVolumeCommand {
@@ -551,13 +552,18 @@ CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) 
 }
 
 CommandExecution execute_seek(std::int64_t position_us,
+                               contracts::demuxer::SeekMode mode,
                                PlayerState current_state,
                                ApiLayer::Impl& impl) noexcept {
-    if (position_us < 0 || !impl.demuxer) {
-        return make_failure(position_us < 0 ? SEMI_ERR_INVALID_ARGUMENT : SEMI_ERR_INTERNAL);
+    const bool valid_mode = mode == contracts::demuxer::SeekMode::PreviousKeyframe ||
+                            mode == contracts::demuxer::SeekMode::NextKeyframe;
+    if (position_us < 0 || !valid_mode || !impl.demuxer) {
+        return make_failure(position_us < 0 || !valid_mode
+                                ? SEMI_ERR_INVALID_ARGUMENT
+                                : SEMI_ERR_INTERNAL);
     }
     try {
-        auto result = impl.demuxer->seek(position_us);
+        auto result = impl.demuxer->seek(position_us, mode);
         if (!result) {
             return make_failure(demuxer_status(result.error()));
         }
@@ -629,7 +635,7 @@ CommandExecution execute_command(PlayerState current_state,
                     return execute_pause(current_state, impl);
                 },
                 [&impl, current_state](const SeekCommand& value) {
-                    return execute_seek(value.position_us, current_state, impl);
+                    return execute_seek(value.position_us, value.mode, current_state, impl);
                 },
                 [&impl, current_state](const CloseCommand&) {
                     return execute_close(current_state, impl);
@@ -846,8 +852,9 @@ CommandHandle ApiLayer::enqueue_pause() {
     return enqueue(*impl_, PauseCommand{});
 }
 
-CommandHandle ApiLayer::enqueue_seek(std::int64_t position_us) {
-    return enqueue(*impl_, SeekCommand{position_us});
+CommandHandle ApiLayer::enqueue_seek(std::int64_t position_us,
+                                     contracts::demuxer::SeekMode mode) {
+    return enqueue(*impl_, SeekCommand{position_us, mode});
 }
 
 CommandHandle ApiLayer::enqueue_close() {
@@ -879,8 +886,9 @@ CommandHandle ApiLayer::pause() {
     return enqueue_pause();
 }
 
-CommandHandle ApiLayer::seek(std::int64_t position_us) {
-    return enqueue_seek(position_us);
+CommandHandle ApiLayer::seek(std::int64_t position_us,
+                             contracts::demuxer::SeekMode mode) {
+    return enqueue_seek(position_us, mode);
 }
 
 CommandHandle ApiLayer::close() {

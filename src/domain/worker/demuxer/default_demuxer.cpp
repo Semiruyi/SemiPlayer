@@ -116,9 +116,11 @@ DefaultDemuxer::open(std::string_view source) {
     return completion.get();
 }
 
-std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us) {
+std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us,
+                                                       SeekMode mode) {
     SeekCommand command;
     command.position_us = position_us;
+    command.mode = mode;
     auto completion = command.completion.get_future();
     {
         std::lock_guard lock(mutex_);
@@ -275,17 +277,21 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
         backend = backend_;
     }
 
-    if (!backend || !generation_ || command.position_us < 0) {
+    const bool valid_mode = command.mode == SeekMode::PreviousKeyframe ||
+                            command.mode == SeekMode::NextKeyframe;
+    if (!backend || !generation_ || command.position_us < 0 || !valid_mode) {
         command.completion.set_value(std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
-            .message = command.position_us < 0 ? "seek position must not be negative"
-                                               : "demuxer dependencies are unavailable",
+            .message = command.position_us < 0
+                ? "seek position must not be negative"
+                : (!valid_mode ? "seek mode is invalid"
+                               : "demuxer dependencies are unavailable"),
             .backend_error = std::nullopt,
         }));
         return;
     }
 
-    auto seek_result = backend->seek(command.position_us);
+    auto seek_result = backend->seek(command.position_us, command.mode);
     if (!seek_result) {
         command.completion.set_value(std::unexpected(backend_failure(std::move(seek_result.error()))));
         return;

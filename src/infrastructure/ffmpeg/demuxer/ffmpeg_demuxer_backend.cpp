@@ -9,7 +9,6 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
-#include <limits>
 #include <new>
 #include <utility>
 
@@ -20,6 +19,7 @@ using contracts::demuxer::BackendProbeResult;
 using contracts::demuxer::BackendReadResult;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
+using contracts::demuxer::SeekMode;
 using contracts::demuxer::packet::EncodedPacket;
 using contracts::media::AudioCodecConfig;
 using contracts::media::CodecCommon;
@@ -183,6 +183,7 @@ StreamDescriptor make_stream_descriptor(const AVStream& stream) {
 
 struct FfmpegDemuxerBackend::Impl {
     AvFormatInputContextPtr format_context;
+    int seek_stream_index = -1;
 };
 
 FfmpegDemuxerBackend::FfmpegDemuxerBackend() : impl_(std::make_unique<Impl>()) {}
@@ -218,10 +219,23 @@ FfmpegDemuxerBackend::open(std::string_view source) {
         result.container.duration_us = context->duration;
     }
     result.streams.reserve(context->nb_streams);
+    int seek_stream_index = -1;
+    int first_audio_stream_index = -1;
     for (unsigned int index = 0; index < context->nb_streams; ++index) {
+        const AVMediaType media_type = context->streams[index]->codecpar->codec_type;
+        if (seek_stream_index < 0 && media_type == AVMEDIA_TYPE_VIDEO) {
+            seek_stream_index = static_cast<int>(index);
+        }
+        if (first_audio_stream_index < 0 && media_type == AVMEDIA_TYPE_AUDIO) {
+            first_audio_stream_index = static_cast<int>(index);
+        }
         result.streams.push_back(make_stream_descriptor(*context->streams[index]));
     }
+    if (seek_stream_index < 0) {
+        seek_stream_index = first_audio_stream_index;
+    }
 
+    impl_->seek_stream_index = seek_stream_index;
     impl_->format_context = std::move(context);
     return result;
 }
@@ -279,11 +293,12 @@ FfmpegDemuxerBackend::read_packet() {
 void FfmpegDemuxerBackend::close() noexcept {
     if (impl_) {
         impl_->format_context.reset();
+        impl_->seek_stream_index = -1;
     }
 }
 
 std::expected<void, DemuxerBackendError>
-FfmpegDemuxerBackend::seek(std::int64_t position_us) {
+FfmpegDemuxerBackend::seek(std::int64_t position_us, SeekMode mode) {
     if (impl_->format_context == nullptr) {
         return std::unexpected(DemuxerBackendError{
             .operation = DemuxerBackendOperation::Seek,
@@ -298,11 +313,33 @@ FfmpegDemuxerBackend::seek(std::int64_t position_us) {
             .message = "seek position must not be negative",
         });
     }
+    if (mode != SeekMode::PreviousKeyframe && mode != SeekMode::NextKeyframe) {
+        return std::unexpected(DemuxerBackendError{
+            .operation = DemuxerBackendOperation::Seek,
+            .native_code = AVERROR(EINVAL),
+            .message = "seek mode is invalid",
+        });
+    }
 
-    const int status = avformat_seek_file(impl_->format_context.get(), -1,
-                                          std::numeric_limits<std::int64_t>::min(),
-                                          position_us, std::numeric_limits<std::int64_t>::max(),
-                                          AVSEEK_FLAG_BACKWARD);
+    int stream_index = impl_->seek_stream_index;
+    std::int64_t target_timestamp = position_us;
+    if (stream_index >= 0) {
+        const AVStream& stream = *impl_->format_context->streams[stream_index];
+        if (!valid_time_base(stream.time_base)) {
+            return std::unexpected(DemuxerBackendError{
+                .operation = DemuxerBackendOperation::Seek,
+                .native_code = AVERROR(EINVAL),
+                .message = "FFmpeg seek stream has an invalid time base",
+            });
+        }
+        target_timestamp = av_rescale_q(position_us, AV_TIME_BASE_Q, stream.time_base);
+    } else {
+        stream_index = -1;
+    }
+
+    const int flags = mode == SeekMode::PreviousKeyframe ? AVSEEK_FLAG_BACKWARD : 0;
+    const int status = av_seek_frame(impl_->format_context.get(), stream_index,
+                                     target_timestamp, flags);
     if (status < 0) {
         return std::unexpected(make_error(DemuxerBackendOperation::Seek, status));
     }

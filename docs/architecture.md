@@ -44,15 +44,15 @@ seek 这种跨管道事务，**真正的物理依赖只有两个**：定位只�
 
 ### 世代号在 seek 中的职责
 
-seek 涉及三层数据正确性，世代号只管其中一层：
+精准 seek 涉及三层数据正确性，世代号只管其中一层：
 
 - **第①层 解码器内部残留**（旧参考帧）→ decoder `avcodec_flush_buffers()`
 - **第②层 跨 seek 旧数据**（上次播放残留在队列）→ **世代号**：数据带 generation，消费者丢弃旧世代
-- **第③层 同次 seek 内目标前的帧**（FFmpeg 定位到最近关键帧的副作用）→ decoder PTS 过滤（`frame.pts < target` 丢弃）
+- **第③层 同次 seek 内目标前的帧** → 仅未来精准模式需要 decoder PTS 过滤和音频裁剪；当前关键帧模式不处理
 
 世代号是**全局数据正确性机制**（原则），不是 seek 的编排逻辑。**generation+1 与 Demuxer 定位绑定**（定位完成后才 +1，保证对应新数据）。
 
-→ **SeekCoordinator 模块砍掉**：seek 的具体编排（4 步顺序调用）是 ApiLayer 命令处理细节，见 `docs/modules/api_layer/seek.md`，不属总体架构。
+→ **SeekCoordinator 模块砍掉**：当前 seek 只需 Demuxer 定位并推进 generation，见 `docs/modules/api_layer/seek.md`。
 
 ---
 
@@ -130,7 +130,7 @@ ApiLayer 命令线程串行取 Command:
 
 | 模块 | 线程 | 职责 |
 |------|------|------|
-| **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；新会话和**成功 seek 在此推进 generation**，再读新数据（clock.jump_to 由 ApiLayer 直接调，不经 Demuxer）|
+| **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；新会话和**成功关键帧 seek 在此推进 generation**，再读新数据 |
 | **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解（GPU）→ download 到 CPU → 喂 VideoFrameStore（CPU 原生格式帧）。硬解用注入的 GpuDevice，FFmpeg hwcontext 由 decoder 自构 |
 | **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
 | **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 miniaudio 目标格式 → 喂 playback AudioFrameStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
@@ -175,12 +175,12 @@ ApiLayer 命令线程串行取 Command:
 |------|--------------|---------|
 | Notifier | 无（被所有人依赖）| — |
 | Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程同步调 open()/seek()/close()；open 成功后自动生产，close 终止当前媒体会话，未入队 pending item 可丢弃，Failed 必须 close/open 恢复；阻塞时在自己的 cv 上等，Notifier 回调唤醒 QueueNotFull |
-| VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；查 generation 自 flush；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
+| VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；查 generation 自 reset；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
 | AudioDecoder | AudioPacketSource, AudioFrameSink, Generation, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；configure 后自动消费，背压自然等待；generation 变化时自 flush；Notifier 唤醒（QueueNotEmpty/StoreNotFull）|
-| AudioResampler | AudioFrameStore（decoded / playback）, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；取 decoded AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 playback AudioFrameStore；查 generation 自 flush；Notifier 唤醒（FrameReady/NotFull 等）|
-| SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；Notifier 唤醒（QueueNotEmpty 等）|
-| VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/start()/stop()/seek()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；Notifier 唤醒（FrameReady 等）|
-| SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()/seek()；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
+| AudioResampler | AudioFrameStore（decoded / playback）, Generation, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；取 decoded AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 playback AudioFrameStore；查 generation 自 reset；Notifier 唤醒（FrameReady/NotFull 等）|
+| SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | 观察 generation 丢弃旧事件；Notifier 唤醒（QueueNotEmpty 等）|
+| VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；查 generation 丢旧；Notifier 唤醒（FrameReady 等）|
+| SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | 观察 generation 丢弃旧位图；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
 | Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
 | VideoSync | 最终帧 Source, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()/unconfigure()；回调随 configure 传入，不是构造期 IoC 依赖；Notifier 唤醒（FrameReady 等）|
 | AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock；GenerationChanged 唤醒 stale 维护 |
@@ -228,8 +228,8 @@ ApiLayer 命令线程串行取 Command:
 宿主调用 ──▶ ApiLayer 投递 Command ──▶ 返回 CommandHandle (UI 不阻塞)
 ApiLoop 串行执行 (忠实执行, 不跳过/合并):
   play/pause → 调对应模块 set_paused(); 模块自洽(时钟冻结/miniaudio设备暂停); 队列满背压自然停上游
-  seek(pos)  → ApiLoop 顺序调各模块编排 (demuxer/视频decoder/音频decoder/字幕decoder/clock); 完成才 resolve
-               数据正确性靠世代号(第②层)+flush(第①层)+PTS过滤(第③层); 详见 api_layer/seek.md
+  seek(pos, mode) → Demuxer 按前一/后一关键帧定位；成功后推进 generation，完成才 resolve
+                    下游观察 generation 后自行丢旧和 reset；当前不提供精准 PTS 过滤
                字幕侧同走世代号自洽 flush (SubtitleDecoder/SubtitleRenderer 旧世代事件/位图被丢弃)
   open/close/shutdown → 同步探测/汇聚释放后 resolve (含启动/停止字幕线程)
 ```

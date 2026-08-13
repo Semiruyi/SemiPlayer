@@ -29,6 +29,7 @@ using contracts::demuxer::BackendProbeResult;
 using contracts::demuxer::BackendReadResult;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
+using contracts::demuxer::SeekMode;
 using contracts::demuxer::packet::EncodedPacket;
 
 using BackendReadExpected = std::expected<BackendReadResult, DemuxerBackendError>;
@@ -53,9 +54,11 @@ public:
         return result;
     }
 
-    std::expected<void, DemuxerBackendError> seek(std::int64_t position_us) override {
+    std::expected<void, DemuxerBackendError>
+    seek(std::int64_t position_us, SeekMode mode) override {
         ++seek_calls;
         last_seek_position = position_us;
+        last_seek_mode = mode;
         if (fail_seek) {
             return std::unexpected(DemuxerBackendError{
                 .operation = DemuxerBackendOperation::Seek,
@@ -84,6 +87,7 @@ public:
     std::atomic_int read_calls = 0;
     std::atomic_int seek_calls = 0;
     std::atomic<std::int64_t> last_seek_position = -1;
+    SeekMode last_seek_mode = SeekMode::Unknown;
     bool fail_seek = false;
 
 private:
@@ -166,7 +170,7 @@ TEST(DefaultDemuxerTest, CompletesControlCommandsThroughTheWorker) {
     ASSERT_FALSE(opened.has_value());
     EXPECT_EQ(opened.error().code, DemuxerErrorCode::InvalidState);
 
-    const auto seek = demuxer.seek(1'000'000);
+    const auto seek = demuxer.seek(1'000'000, SeekMode::PreviousKeyframe);
     ASSERT_FALSE(seek.has_value());
     EXPECT_EQ(seek.error().code, DemuxerErrorCode::InvalidState);
 
@@ -244,10 +248,11 @@ TEST(DefaultDemuxerTest, SeeksBackendAndStartsANewGeneration) {
 
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
     const auto before = generation->current();
-    const auto seek = demuxer.seek(2'000'000);
+    const auto seek = demuxer.seek(2'000'000, SeekMode::NextKeyframe);
     ASSERT_TRUE(seek.has_value());
     EXPECT_EQ(backend->seek_calls, 1);
     EXPECT_EQ(backend->last_seek_position, 2'000'000);
+    EXPECT_EQ(backend->last_seek_mode, SeekMode::NextKeyframe);
     EXPECT_EQ(generation->current(), before + 1);
     demuxer.close();
 }
@@ -260,7 +265,7 @@ TEST(DefaultDemuxerTest, RejectsNegativeSeek) {
     DefaultDemuxer demuxer(backend, queue, nullptr, generation);
 
     ASSERT_TRUE(demuxer.open("movie.mp4").has_value());
-    const auto seek = demuxer.seek(-1);
+    const auto seek = demuxer.seek(-1, SeekMode::PreviousKeyframe);
     ASSERT_FALSE(seek.has_value());
     EXPECT_EQ(seek.error().code, DemuxerErrorCode::InvalidState);
     EXPECT_EQ(backend->seek_calls, 0);

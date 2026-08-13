@@ -33,9 +33,17 @@ extern "C" {
 typedef unsigned long long semi_handle_t;
 
 typedef uint32_t semi_video_pixel_format_t;
+typedef uint32_t semi_seek_mode_t;
 
 enum {
     SEMI_VIDEO_PIXEL_FORMAT_RGBA8888 = 1
+};
+
+enum {
+    /* Closest keyframe at or before the requested position. */
+    SEMI_SEEK_MODE_PREVIOUS_KEYFRAME = 1,
+    /* Closest keyframe at or after the requested position. */
+    SEMI_SEEK_MODE_NEXT_KEYFRAME = 2
 };
 
 typedef struct semi_video_plane {
@@ -107,7 +115,7 @@ SEMI_API int semi_player_shutdown(void);
 SEMI_API semi_handle_t semi_player_open(const char *src);
 SEMI_API semi_handle_t semi_player_play(void);
 SEMI_API semi_handle_t semi_player_pause(void);
-SEMI_API semi_handle_t semi_player_seek(long long position_us);
+SEMI_API semi_handle_t semi_player_seek(long long position_us, semi_seek_mode_t mode);
 SEMI_API semi_handle_t semi_player_close(void);
 /* Copies config into the normal command queue. Returns 0 when no task can be
  * created; otherwise await the handle for SEMI_OK or SEMI_ERR_*. */

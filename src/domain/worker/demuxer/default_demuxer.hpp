@@ -36,7 +36,7 @@ public:
     open(std::string_view source) override;
 
     [[nodiscard]] std::expected<void, DemuxerError>
-    seek(std::int64_t position_us) override;
+    seek(std::int64_t position_us, SeekMode mode) override;
 
     void close() noexcept override;
 
@@ -89,6 +89,7 @@ private:
 
     struct SeekCommand {
         std::int64_t position_us = 0;
+        SeekMode mode = SeekMode::Unknown;
         std::promise<std::expected<void, DemuxerError>> completion;
     };
 

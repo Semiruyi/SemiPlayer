@@ -23,6 +23,6 @@ cmake --build --preset windows-all
 Controls:
 
 - Space: play or pause
-- Left/Right: seek backward or forward five seconds
+- Left/Right: request five seconds backward/forward, landing on the previous/next keyframe
 - F11: toggle fullscreen
 - Escape: quit

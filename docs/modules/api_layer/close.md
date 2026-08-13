@@ -45,7 +45,6 @@ void handle_close():
     // ⑤ 会话状态
     player_state = Idle
     current_media = None
-    target_start_pts = 0
 
     handle.resolve(Ok(()))
 ```

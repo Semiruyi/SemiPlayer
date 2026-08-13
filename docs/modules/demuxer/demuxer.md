@@ -25,7 +25,7 @@ public:
     open(std::string_view source) = 0;
 
     virtual std::expected<void, DemuxerError>
-    seek(std::int64_t position_us) = 0;
+    seek(std::int64_t position_us, SeekMode mode) = 0;
 
     virtual void close() noexcept = 0;
 };
@@ -45,7 +45,7 @@ public:
 | 方法 | 前置状态 | 完成后的状态 | 失败行为 |
 |------|----------|--------------|----------|
 | `open(source)` | `Closed` | `Running` | 保持 `Closed`，必要时关闭 backend |
-| `seek(position)` | `Running` 或 `Exhausted` | `Running` | 返回结构化错误，不修改当前会话 |
+| `seek(position, mode)` | `Running` 或 `Exhausted` | `Running` | 返回结构化错误，不修改当前会话 |
 | `close()` | 任意会话状态 | `Closed` | `noexcept`，尽力完成清理 |
 
 默认不支持在已有媒体上直接 `open()` 替换。调用方应先 `close()`，再 `open()`。
@@ -60,8 +60,8 @@ open(source)
   └─OpenCommand ──同步等待──> worker.open/probe/select
                               └─Running，开始 read_packet
 
-seek(position)
-  └─SeekCommand ──同步等待──> worker reset/seek，继续 Running
+seek(position, mode)
+  └─SeekCommand ──同步等待──> worker 按前一/后一关键帧定位，继续 Running
 
 close()
   └─CloseCommand ──同步等待──> 停止当前会话并 backend.close，回到 Closed

@@ -16,6 +16,7 @@ using contracts::demuxer::BackendPacket;
 using contracts::demuxer::DemuxerBackend;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
+using contracts::demuxer::SeekMode;
 using contracts::media::AudioCodecConfig;
 using contracts::media::CodecCommon;
 using contracts::media::ContainerInfo;
@@ -65,10 +66,8 @@ public:
     [[nodiscard]] virtual std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) = 0;
 
-    // Records a seek target on the opened media. Actual backend repositioning
-    // is not implemented by the current demuxer backend.
     [[nodiscard]] virtual std::expected<void, DemuxerError>
-    seek(std::int64_t position_us) = 0;
+    seek(std::int64_t position_us, SeekMode mode) = 0;
 
     virtual void close() noexcept = 0;
 

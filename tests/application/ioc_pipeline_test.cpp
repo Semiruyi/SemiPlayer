@@ -36,7 +36,8 @@ TEST(IoCPipelineTest, SeeksThenPlaysSampleThroughConfiguredAudioOutput) {
     CommandResult result;
     open_sample(api_layer, result);
 
-    const auto seek = api_layer->seek(1'000'000);
+    const auto seek =
+        api_layer->seek(1'000'000, contracts::demuxer::SeekMode::NextKeyframe);
     ASSERT_NE(seek, 0U);
     EXPECT_EQ(api_layer->await(seek, result), SEMI_OK);
 
@@ -72,10 +73,13 @@ TEST(IoCPipelineTest, SerializesRepeatedSeeksWithPauseAndResumeWhilePlaying) {
     open_sample(api_layer, result);
 
     const CommandHandle play = api_layer->play();
-    const CommandHandle first_seek = api_layer->seek(500'000);
-    const CommandHandle second_seek = api_layer->seek(1'250'000);
+    const CommandHandle first_seek =
+        api_layer->seek(500'000, contracts::demuxer::SeekMode::NextKeyframe);
+    const CommandHandle second_seek =
+        api_layer->seek(1'250'000, contracts::demuxer::SeekMode::NextKeyframe);
     const CommandHandle pause = api_layer->pause();
-    const CommandHandle final_seek = api_layer->seek(2'000'000);
+    const CommandHandle final_seek =
+        api_layer->seek(2'000'000, contracts::demuxer::SeekMode::PreviousKeyframe);
     const CommandHandle resume = api_layer->play();
     ASSERT_NE(play, 0U);
     ASSERT_NE(first_seek, 0U);

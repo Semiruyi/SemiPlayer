@@ -113,6 +113,12 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     semi_command_result_t consumed_result{};
     EXPECT_EQ(semi_player_handle_await(open, &consumed_result), SEMI_ERR_INVALID_HANDLE);
 
+    semi_command_result_t invalid_seek_result{};
+    const semi_handle_t invalid_seek = semi_player_seek(500'000, 999U);
+    ASSERT_NE(invalid_seek, 0U);
+    EXPECT_EQ(semi_player_handle_await(invalid_seek, &invalid_seek_result),
+              SEMI_ERR_INVALID_ARGUMENT);
+
     const semi_handle_t play = semi_player_play();
     await_ok(play);
     {
@@ -132,10 +138,13 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
                   static_cast<std::uint64_t>(capture.stride) * capture.height);
     }
 
-    const semi_handle_t first_seek = semi_player_seek(500'000);
-    const semi_handle_t second_seek = semi_player_seek(1'250'000);
+    const semi_handle_t first_seek =
+        semi_player_seek(500'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
+    const semi_handle_t second_seek =
+        semi_player_seek(1'250'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
     const semi_handle_t pause = semi_player_pause();
-    const semi_handle_t final_seek = semi_player_seek(2'000'000);
+    const semi_handle_t final_seek =
+        semi_player_seek(2'000'000, SEMI_SEEK_MODE_PREVIOUS_KEYFRAME);
     const semi_handle_t resume = semi_player_play();
     await_ok(first_seek);
     await_ok(second_seek);

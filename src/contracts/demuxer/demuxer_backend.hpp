@@ -1,6 +1,7 @@
 #pragma once
 
 #include "contracts/demuxer/packet/packet_read_result.hpp"
+#include "contracts/demuxer/seek_mode.hpp"
 #include "contracts/media/media_types.hpp"
 
 #include <cstdint>
@@ -58,7 +59,7 @@ public:
     read_packet() = 0;
 
     [[nodiscard]] virtual std::expected<void, DemuxerBackendError>
-    seek(std::int64_t position_us) = 0;
+    seek(std::int64_t position_us, SeekMode mode) = 0;
 
     virtual void close() noexcept = 0;
 
