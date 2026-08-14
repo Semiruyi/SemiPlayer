@@ -22,10 +22,23 @@
       "cacheVariables": {
         "SEMI_USE_NULL_AUDIO_OUTPUT": "ON"
       }
+    },
+    {
+      "name": "windows-release",
+      "displayName": "Windows UCRT64 Release (DLL + SDL host)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-windows-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "SEMI_BUILD_DLL": "ON",
+        "SEMI_BUILD_TESTS": "OFF",
+        "SEMI_BUILD_SDL_PLAYER": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "windows-all", "configurePreset": "windows-all" },
-    { "name": "windows-ci", "configurePreset": "windows-ci" }
+    { "name": "windows-ci", "configurePreset": "windows-ci" },
+    { "name": "windows-release", "configurePreset": "windows-release" }
   ]
 }

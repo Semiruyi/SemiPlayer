@@ -23,3 +23,7 @@ if(WIN32)
         COMMENT "Copy runtime libraries next to the SDL player host"
     )
 endif()
+
+install(TARGETS semi_player_sdl
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

@@ -11,7 +11,8 @@ add_library(semi_player_core STATIC)
 target_compile_features(semi_player_core PUBLIC cxx_std_23)
 target_include_directories(semi_player_core
     PUBLIC
-        ${CMAKE_SOURCE_DIR}/include      # C ABI 公共头给消费者
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include> # C ABI 公共头给构建树消费者
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}> # 安装树公共头
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}      # 内部头根 src/：使 include 形如 domain/.../x.hpp 生效
 )
@@ -36,7 +37,8 @@ if(SEMI_BUILD_DLL)
     target_compile_features(semi_player PUBLIC cxx_std_23)
     target_include_directories(semi_player
         PUBLIC
-            ${CMAKE_SOURCE_DIR}/include
+            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
         PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
@@ -49,4 +51,10 @@ if(SEMI_BUILD_DLL)
     if(WIN32)
         set_target_properties(semi_player PROPERTIES PREFIX "")
     endif()
+
+    install(TARGETS semi_player
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    )
 endif()

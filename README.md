@@ -95,6 +95,34 @@ ctest --test-dir build-windows
 按空格播放/暂停，左右方向键前后跳转 5 秒，F11 切换全屏，Esc 退出。详细设计与线程边界见
 [`examples/sdl_player/README.md`](examples/sdl_player/README.md)。
 
+### Release 构建与安装目录
+
+`windows-release` preset 只构建 Release 版本的 C ABI 动态库和 SDL3 示例宿主，
+不构建测试程序：
+
+```sh
+cmake --preset windows-release
+cmake --build --preset windows-release
+cmake --install build-windows-release --prefix out/SemiPlayer
+```
+
+安装完成后的自产物布局如下：
+
+```text
+out/SemiPlayer/
+├── bin/
+│   ├── semi_player.dll
+│   └── semi_player_sdl.exe
+├── include/semi_player/
+│   ├── semi_player.h
+│   └── status.h
+└── lib/
+    └── libsemi_player.dll.a
+```
+
+这个安装目录目前只包含 SemiPlayer 自身产物；SDL3、FFmpeg、MinGW runtime 等
+第三方运行库将在后续 portable 打包步骤中递归收集。
+
 ### CI 无声卡构建
 
 GitHub Actions 使用独立的 `windows-ci` preset，将 composition root 切换为

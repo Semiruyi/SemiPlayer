@@ -5,6 +5,8 @@ project(SemiPlayer
     LANGUAGES CXX
 )
 
+include(GNUInstallDirs)
+
 # ---- C++ standard ----
 # C++20: std::atomic<std::shared_ptr> (AudioClock / decoder target_pts 快照)、
 #         std::any + std::type_index (Notifier 异构槽) 都需要。
@@ -79,3 +81,10 @@ if(SEMI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
 endif()
+
+# ---- Public headers ----
+install(
+    DIRECTORY include/semi_player
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    FILES_MATCHING PATTERN "*.h"
+)
