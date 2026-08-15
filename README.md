@@ -137,6 +137,16 @@ portable 安装会将 SDL3、FFmpeg、spdlog、MinGW runtime 及其非系统传�
 启用了大量可选组件，因此目录仍然较大；正式分发前还需要完成许可证审计和精简
 FFmpeg 构建。
 
+生成带版本号且只包含运行组件的 portable ZIP：
+
+```sh
+cmake --build --preset windows-portable --target package
+```
+
+产物位于
+`out/packages/SemiPlayer-0.1.0-windows-x64-portable.zip`，解压后双击
+`bin/semi_player_sdl.exe` 即可播放随包示例。
+
 ### CI 无声卡构建
 
 GitHub Actions 使用独立的 `windows-ci` preset，将 composition root 切换为

@@ -33,9 +33,16 @@ add_custom_command(TARGET semi_player_sdl POST_BUILD
 
 install(TARGETS semi_player_sdl
     RUNTIME_DEPENDENCY_SET semi_player_runtime_dependencies
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime
 )
 
 install(FILES sample.mp4
     DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT Runtime
+)
+
+install(FILES PORTABLE_README.md
+    DESTINATION .
+    RENAME README.md
+    COMPONENT Runtime
 )

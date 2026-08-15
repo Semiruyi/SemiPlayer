@@ -112,6 +112,7 @@ if(SEMI_INSTALL_RUNTIME_DEPENDENCIES)
         POST_EXCLUDE_REGEXES
             "^[A-Za-z]:[/\\\\][Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\].*"
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+                COMPONENT Runtime
     )
 endif()
 
@@ -119,5 +120,19 @@ endif()
 install(
     DIRECTORY include/semi_player
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+    COMPONENT Development
     FILES_MATCHING PATTERN "*.h"
 )
+
+if(SEMI_INSTALL_RUNTIME_DEPENDENCIES)
+    set(CPACK_GENERATOR ZIP)
+    set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
+    set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+    set(CPACK_PACKAGE_FILE_NAME
+        "${PROJECT_NAME}-${PROJECT_VERSION}-windows-x64-portable")
+    set(CPACK_PACKAGE_DIRECTORY "${PROJECT_SOURCE_DIR}/out/packages")
+    set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+    set(CPACK_INSTALL_CMAKE_PROJECTS
+        "${CMAKE_BINARY_DIR};${PROJECT_NAME};Runtime;/")
+    include(CPack)
+endif()
