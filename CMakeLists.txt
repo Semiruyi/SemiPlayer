@@ -124,7 +124,30 @@ install(
     FILES_MATCHING PATTERN "*.h"
 )
 
+install(FILES
+    LICENSE
+    NOTICE
+    THIRD_PARTY_NOTICES.md
+    DESTINATION .
+    COMPONENT Runtime
+)
+
 if(SEMI_INSTALL_RUNTIME_DEPENDENCIES)
+    get_filename_component(SEMI_TOOLCHAIN_ROOT
+        "${SEMI_TOOLCHAIN_RUNTIME_DIRECTORY}" DIRECTORY)
+    get_filename_component(SEMI_MSYS_ROOT "${SEMI_TOOLCHAIN_ROOT}" DIRECTORY)
+    get_filename_component(SEMI_TOOLCHAIN_NAME "${SEMI_TOOLCHAIN_ROOT}" NAME)
+    set(SEMI_TOOLCHAIN_PREFIX "/${SEMI_TOOLCHAIN_NAME}")
+    set(SEMI_PACMAN_EXECUTABLE "${SEMI_MSYS_ROOT}/usr/bin/pacman.exe")
+    find_program(SEMI_POWERSHELL_EXECUTABLE powershell REQUIRED)
+    configure_file(
+        cmake/InstallThirdPartyLicenses.cmake.in
+        ${CMAKE_BINARY_DIR}/InstallThirdPartyLicenses.cmake
+        @ONLY
+    )
+    install(SCRIPT ${CMAKE_BINARY_DIR}/InstallThirdPartyLicenses.cmake
+        COMPONENT Runtime)
+
     set(CPACK_GENERATOR ZIP)
     set(CPACK_PACKAGE_NAME ${PROJECT_NAME})
     set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})

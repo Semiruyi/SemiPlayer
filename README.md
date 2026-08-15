@@ -7,6 +7,13 @@ FFmpeg 解封装/解码、miniaudio 播音频，单例全局 + 命令队列/句�
 架构见 `docs/` 下设计文档（architecture / lifecycle / 各模块）。
 错误约定见 `docs/error_convention.md`，状态码见 `include/semi_player/status.h`。
 
+## License
+
+SemiPlayer is licensed under the GNU General Public License version 3 or later
+(`GPL-3.0-or-later`). See [`LICENSE`](LICENSE). Binary releases include a
+generated [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the license
+files shipped by their exact MSYS2 runtime packages.
+
 ## Windows 构建（MSYS2 UCRT64 + Ninja）
 
 ### 1. 安装 MSYS2

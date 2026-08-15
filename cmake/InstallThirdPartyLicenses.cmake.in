@@ -1,0 +1,20 @@
+execute_process(
+    COMMAND "@SEMI_POWERSHELL_EXECUTABLE@"
+        -NoProfile
+        -ExecutionPolicy Bypass
+        -File "@PROJECT_SOURCE_DIR@/cmake/CollectThirdPartyLicenses.ps1"
+        -RuntimeDirectory "${CMAKE_INSTALL_PREFIX}/@CMAKE_INSTALL_BINDIR@"
+        -OutputDirectory "${CMAKE_INSTALL_PREFIX}/licenses"
+        -NoticesPath "${CMAKE_INSTALL_PREFIX}/THIRD_PARTY_NOTICES.md"
+        -PacmanExecutable "@SEMI_PACMAN_EXECUTABLE@"
+        -ToolchainPrefix "@SEMI_TOOLCHAIN_PREFIX@"
+        -MsysRoot "@SEMI_MSYS_ROOT@"
+        -AdditionalPackages "mingw-w64-ucrt-x86_64-miniaudio"
+    RESULT_VARIABLE SEMI_LICENSE_RESULT
+)
+
+if(NOT SEMI_LICENSE_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "Collecting third-party license metadata failed with exit code "
+        "${SEMI_LICENSE_RESULT}")
+endif()
