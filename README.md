@@ -12,6 +12,17 @@ miniaudio 音频输出和音视频同步封装在动态库中，通过 C ABI 向
 · [查看 v0.1.0 Release](https://github.com/Semiruyi/SemiPlayer/releases/tag/v0.1.0)
 · [阅读架构设计](docs/architecture.md)
 
+## 64 秒演示
+
+[![SemiPlayer 60 秒演示](docs/assets/SemiPlayer-demo-poster.png)](docs/assets/SemiPlayer-demo.mp4)
+
+[下载 / 观看演示视频](docs/assets/SemiPlayer-demo.mp4)
+
+演示流程：播放 → 暂停 → 在暂停状态下 Seek 到约 60 秒 → 保持暂停 → 恢复播放。
+视频画面来自 SemiPlayer C ABI 的真实 RGBA 帧回调；演示素材为
+[Big Buck Bunny](https://video.blender.org/w/dmhvQNzwBnrWy1iYzVv5g7)，
+© Blender Foundation，采用 [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) 授权。
+
 ## 开箱运行
 
 1. 下载并解压 Windows x64 便携包。
