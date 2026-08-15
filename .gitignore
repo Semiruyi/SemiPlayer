@@ -3,6 +3,12 @@
 /out/
 /build-*/
 /logs/
+/.tmp/benchmark-media/
+/.tmp/benchmark-tmp/
+/.tmp/benchmark-results.csv
+/.tmp/big-buck-bunny-benchmark.csv
+/benchmarks/results/*
+!/benchmarks/results/.gitkeep
 
 # ---- CMake ----
 CMakeUserPresets.json
@@ -16,6 +22,7 @@ cmake_install.cmake
 *.a
 *.lib
 *.exp
+benchmarks/media/*.mp4
 
 # ---- IDE / tooling ----
 .vs/

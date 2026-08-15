@@ -43,12 +43,22 @@
       "cacheVariables": {
         "SEMI_INSTALL_RUNTIME_DEPENDENCIES": "ON"
       }
+    },
+    {
+      "name": "windows-benchmark",
+      "inherits": "windows-portable",
+      "displayName": "Windows UCRT64 Performance Benchmark",
+      "binaryDir": "${sourceDir}/build-windows-benchmark",
+      "cacheVariables": {
+        "SEMI_BUILD_BENCHMARKS": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "windows-all", "configurePreset": "windows-all" },
     { "name": "windows-ci", "configurePreset": "windows-ci" },
     { "name": "windows-release", "configurePreset": "windows-release" },
-    { "name": "windows-portable", "configurePreset": "windows-portable" }
+    { "name": "windows-portable", "configurePreset": "windows-portable" },
+    { "name": "windows-benchmark", "configurePreset": "windows-benchmark" }
   ]
 }

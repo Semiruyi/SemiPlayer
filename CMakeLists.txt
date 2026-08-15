@@ -36,6 +36,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 option(SEMI_BUILD_DLL    "Build the C ABI shared library for Dart FFI" ON)
 option(SEMI_BUILD_TESTS  "Build unit tests (links the static core, not the DLL)" OFF)
 option(SEMI_BUILD_SDL_PLAYER "Build the SDL3 playback example host" OFF)
+option(SEMI_BUILD_BENCHMARKS "Build the performance benchmark host" OFF)
 option(SEMI_USE_NULL_AUDIO_OUTPUT
        "Use the headless null audio backend in the composition root"
        OFF)
@@ -96,6 +97,16 @@ endif()
 if(SEMI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(SEMI_BUILD_BENCHMARKS)
+    if(NOT WIN32)
+        message(FATAL_ERROR "SEMI_BUILD_BENCHMARKS currently supports Windows only")
+    endif()
+    if(NOT SEMI_BUILD_DLL)
+        message(FATAL_ERROR "SEMI_BUILD_BENCHMARKS requires SEMI_BUILD_DLL=ON")
+    endif()
+    add_subdirectory(benchmarks)
 endif()
 
 # A portable Windows install keeps every non-system runtime dependency beside

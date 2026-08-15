@@ -14,7 +14,7 @@ miniaudio 音频输出和音视频同步封装在动态库中，通过 C ABI 向
 
 ## 64 秒演示
 
-[![SemiPlayer 60 秒演示](docs/assets/SemiPlayer-demo-poster.png)](docs/assets/SemiPlayer-demo.mp4)
+[![SemiPlayer 64 秒演示](docs/assets/SemiPlayer-demo-poster.png)](docs/assets/SemiPlayer-demo.mp4)
 
 [下载 / 观看演示视频](docs/assets/SemiPlayer-demo.mp4)
 
@@ -26,7 +26,7 @@ miniaudio 音频输出和音视频同步封装在动态库中，通过 C ABI 向
 ## 开箱运行
 
 1. 下载并解压 Windows x64 便携包。
-2. 双击 `bin/semi_player_sdl.exe`，程序会自动播放随包提供的 5 秒合成样例。
+2. 双击 `bin/semi_player_sdl.exe`，程序会自动播放随包提供的 5 秒默认示例媒体。
 3. 也可以把本地媒体文件拖到程序上，或在命令行中传入媒体路径。
 
 ```powershell
@@ -121,14 +121,42 @@ flowchart LR
 | Release 验收 | Clean Release 构建、全新解压、限制系统 `PATH` 后播放内置样例 |
 | 发布合规材料 | GPL 项目许可证、第三方清单及随包许可证文件 |
 
-项目暂不在缺少统一测试媒体和硬件条件时宣称具体性能数字。后续基准将固定测试机器、
-媒体参数和测量方法，优先覆盖启动至首帧、Seek 恢复、CPU、内存及音视频同步误差。
+项目已建立可复现的 Release 性能基准；性能数字绑定测试机器、媒体参数和运行环境，
+不作为跨设备的绝对承诺。
+
+## 性能基准结果
+
+以下结果来自官方 [Big Buck Bunny 1080p60](https://video.blender.org/w/dmhvQNzwBnrWy1iYzVv5g7)
+素材，使用 `windows-benchmark` Release 构建，在 Windows 11 / AMD Ryzen 9 7945HX
+上执行 1 次预热、5 次正式测量，持续播放场景每次 60 秒：
+
+| 场景 | 结果 |
+|---|---|
+| 启动到首帧 | 中位数 27.7 ms，P95 44.1 ms |
+| 暂停后 Seek 25% / 50% / 75% | 中位数 134.9 / 136.1 / 129.3 ms；P95 136.2 / 143.5 / 132.4 ms |
+| 暂停保持 | 15/15 次 Seek 后均未继续交付视频帧 |
+| 持续播放 CPU | 中位数 37.6%，P95 40.9% |
+| 峰值工作集 | 约 348 MiB |
+
+当前 Seek 使用 `PREVIOUS_KEYFRAME`，因此实际首帧可能早于目标时间戳；这反映的是关键帧
+定位策略，不是首帧响应延迟。持续播放测试收到的 RGBA 回调约为 58.0–58.5 fps，低于
+素材标称的 60 fps，后续需要进一步区分实际丢帧与回调统计口径。
+
+复现实验：
+
+```powershell
+.\tools\benchmark\download-bbb.ps1
+.\tools\benchmark\run-release.ps1 `
+    -MediaPath .\.tmp\benchmark-media\big-buck-bunny-1080p.mp4 `
+    -Runs 5 -Warmups 1 -SteadySeconds 60
+```
 
 ## 文档导航
 
 | 文档 | 内容 |
 |---|---|
 | [架构设计](docs/architecture.md) | 模块边界、数据流、Generation 和命令模型的设计演进 |
+| [性能基准](docs/performance.md) | Release 基准架构、测试场景、媒体清单和结果解释 |
 | [路线图](docs/roadmap.md) | 精确 Seek、字幕、GPU、跨平台和性能基准计划 |
 | [生命周期](docs/lifecycle.md) | 初始化、关闭、状态机和释放顺序 |
 | [ApiLayer](docs/modules/api_layer/api_layer.md) | 命令队列、任务状态与会话状态机 |
@@ -208,7 +236,7 @@ GitHub Actions 使用 `windows-ci` 预设和 `NullAudioOutputBackend`，避免�
 - 当前视频帧经过 CPU 像素格式转换并回调宿主，尚未实现 GPU 零拷贝链路。
 - 当前不渲染字幕，播放重点是音频与视频主链路。
 - MSYS2 的完整 FFmpeg 构建包含较多可选依赖；后续可定制 FFmpeg 以缩小发布包。
-- 后续计划见 [项目路线图](docs/roadmap.md)，包括真实运行演示、可复现性能基准和
+- 后续计划见 [项目路线图](docs/roadmap.md)，包括精确 Seek、字幕、GPU 零拷贝和
   更多平台的构建验证。
 
 ## 许可证

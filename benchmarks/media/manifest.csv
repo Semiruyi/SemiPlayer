@@ -1,0 +1,2 @@
+id,filename,source_url,sha256,width,height,video_codec,profile,level,pix_fmt,fps,audio_codec,audio_profile,audio_sample_rate,audio_channels,duration_seconds,size_bytes,license,notes
+big-buck-bunny-1080p60,big-buck-bunny-1080p.mp4,https://video.blender.org/object-storage/web_videos/6402b77c-b61f-4a06-96ca-c8420a2becf4-1080.mp4,91768E73427FB1E4A3D3A419CB173E7A9D97340190734C361AC56FE2BB6C8A0D,1920,1080,h264,High,3.1,yuv420p,60,aac,LC,48000,6,634.667,276266905,CC-BY-3.0,official Blender Foundation MP4; no transcode
