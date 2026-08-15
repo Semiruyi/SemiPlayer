@@ -297,6 +297,16 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
             VideoRendererBackendOperation::Render,
             "rendered video buffer size overflows"));
     }
+    const auto output_size = stride * output_height_size;
+    // libswscale may use aligned SIMD stores that touch a small tail beyond
+    // the logical image. Keep that tail private to the conversion buffer and
+    // expose only the tightly packed image through the media contract.
+    constexpr std::size_t kSwscaleOutputPadding = 64;
+    if (output_size > std::numeric_limits<std::size_t>::max() - kSwscaleOutputPadding) {
+        return std::unexpected(make_state_error(
+            VideoRendererBackendOperation::Render,
+            "rendered video buffer size overflows"));
+    }
 
     try {
         RenderedVideo output{
@@ -304,7 +314,7 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
             .width = output_width,
             .height = output_height,
             .stride_bytes = static_cast<std::uint32_t>(stride),
-            .pixels = std::vector<std::byte>(stride * output_height_size),
+            .pixels = std::vector<std::byte>(output_size + kSwscaleOutputPadding),
             .pts_us = input.pts_us,
         };
 
@@ -332,6 +342,7 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
                 VideoRendererBackendOperation::Render,
                 "FFmpeg video scaling returned an incomplete frame"));
         }
+        output.pixels.resize(output_size);
         return output;
     } catch (const std::bad_alloc&) {
         return std::unexpected(make_error(VideoRendererBackendOperation::Render,
