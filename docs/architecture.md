@@ -1,280 +1,274 @@
-# SemiPlayer 模块架构设计
+# SemiPlayer 当前实现架构
 
-## Context
+本文描述 `v0.1.0` 源码已经落地的架构，是阅读代码的当前事实基线。
+尚未实现的字幕、GPU 链路、精确 Seek 等方向单独记录在
+[roadmap.md](roadmap.md)，不在本文中作为已有能力描述。
 
-SemiPlayer 是一个 C++ 实现的跨平台播放器：FFmpeg 解封装/解码、miniaudio 播音频、最终导出 C ABI 供上层宿主调用。经多轮讨论，架构演进为：
+## 1. 系统定位
 
-- **单例全局**，对外接口无需 handle
-- **时钟与音频播放都在 C++**：miniaudio 回调里建立音频主时钟，视频同步线程读它
-- **解耦管道**：demux→decode 用 `std::condition_variable`+`std::mutex` 有界队列；decode→声卡用无锁 SPSC 环形队列 + 生产方 sleep 背压 + 回调 try/静音
-- **命令队列 + 句柄（对外控制模型）**：上层调用 → 往 ApiLayer 私有命令队列投递命令 → 立即返回句柄（UI 永不阻塞）。ApiLayer 的唯一命令线程串行执行命令；`await` 消费结果和 handle，`cancel` 只请求取消尚未开始的任务。控制信号不走通知中心
-- **去中心化状态**：不用上帝模块控制全局状态，每个模块自管状态
-- **依赖注入（DI）**：IoCContainer 作为装配期装配器，按 DAG 拓扑顺序构造所有模块，构造时注入 `std::shared_ptr<依赖>`。依赖图无真循环（资源/基础设施不反向依赖工作模块），故全部 `std::shared_ptr` 注入，无需 `std::weak_ptr` 破环
-- **世代号（generation）机制**：seek/取消进行中的事务靠"数据标记识别"而非"时序协调"，消除主动清理和模块间顺序依赖，规避死锁
-- **宿主帧同步借用回调**：VideoSync 到点后在自己的工作线程同步调用宿主回调；回调只读借用最终 CPU 帧，返回前须完成 GPU 上传或复制，返回后播放器立即销毁帧。C ABI 视图不额外复制像素
+SemiPlayer 是进程内单例的 C++23 播放器内核。它负责媒体探测、解封装、音视频
+解码、音频重采样与输出、视频格式转换和音视频同步，通过 C ABI 将控制接口和
+RGBA 视频帧回调暴露给宿主。
 
-本阶段**只确定模块清单、职责、依赖关系**这张地基图。后续阶段再细化：(1) 每个模块的状态机与事件响应；(2) 对外 API；(3) 内部实现。
+当前经过发布验证的宿主是 SDL3 示例，平台是 Windows x64；核心代码按后端契约
+隔离 FFmpeg、miniaudio 等技术实现，为后续平台适配保留边界。
 
----
+## 2. 分层与职责
 
-## 世代号机制（核心，贯穿全架构）
+| 层次 | 当前模块 | 职责 |
+|---|---|---|
+| 进程边界 | `api_export.cpp`、公开 C 头文件 | 生命周期、参数转换、状态码映射、C ABI 导出 |
+| 应用层 | `ApiLayer` | 命令队列、句柄表、会话状态机、音视频管道编排 |
+| 领域 Worker | Demuxer、AudioDecoder、AudioResampler、AudioOutput、VideoDecoder、VideoRenderer、VideoSync | 每个模块维护自己的会话状态和工作线程 |
+| 领域资源 | PacketQueue、FrameStore、Generation | 有界数据传递、输入结束标记和跨会话数据隔离 |
+| 后端契约 | `src/contracts/` | 将领域流程与 FFmpeg、音频设备实现解耦 |
+| 基础设施 | FFmpeg 后端、miniaudio/NullAudio 后端、Notifier、日志 | 技术能力和平台接入 |
+| 装配层 | `IoCContainer` | 构造期注入依赖、启动 ApiLayer、逆序释放模块 |
 
-seek 这种跨管道事务，**真正的物理依赖只有两个**：定位只能在最上游做（Demuxer 持文件句柄）、flush 必须在新数据到达前。其余"必须按顺序清空各队列"的需求是**假依赖**，可被世代号消除。
+构建时，`semi_player_core` 是包含内部实现的静态库；`semi_player` 动态库只增加
+C ABI 导出层并链接核心库。测试可以直接链接静态核心，ABI 测试则通过动态库边界
+调用公开接口。
 
-### 机制
+关键源码：
 
-- 由 IoC 创建一个共享的 `Generation` 实例（内部使用原子值），注入 Demuxer、各 Decoder 和后续管道模块。
-- 每次成功打开新的媒体会话时推进一次；成功 seek 定位后也推进一次。
-- 所有跨模块传递的数据（packet、视频帧、音频 PCM 块）**携带 generation 标记**。
-- 消费者使用数据前**检查 generation**：等于当前则用，不等于则丢弃。
+- [C ABI 导出](../src/api_export.cpp)
+- [应用层命令中枢](../src/application/api_layer.cpp)
+- [IoC 装配](../src/ioc/ioc_container.cpp)
+- [公开接口](../include/semi_player/semi_player.h)
 
-### 效果
+## 3. 当前数据流
 
-| 旧思路（命令式协调） | 新思路（世代号识别） |
-|------|------|
-| 协调者命令队列"现在清空" | 队列不用清，旧数据消费时自动丢弃 |
-| 必须在正确时刻清空 → 死锁风险 | 时刻无所谓，识别靠标记 → 无死锁 |
-| 资源持有者要响应 seek、改逻辑 | **资源持有者逻辑零改动** |
+```mermaid
+flowchart LR
+    Media["媒体文件"] --> Demuxer["Demuxer\nFFmpeg 解封装"]
 
-> **世代号的职责边界**：只管"数据正确性"——保证 seek 后旧世代数据（解码器残留帧、队列里旧包）不与新数据混杂。它**不承担"取消进行中的 seek 命令"职责**——那是使用方用 cancel 做的。两者正交：世代号防数据混杂，cancel 防旧命令执行。
+    Demuxer --> VPQ["VideoPacketQueue\n容量 64"]
+    VPQ --> VD["VideoDecoder\nFFmpeg 解码"]
+    VD --> VFS["VideoFrameStore\n容量 64"]
+    VFS --> VR["VideoRenderer\nswscale 转 RGBA"]
+    VR --> VRS["VideoRenderedStore\n容量 8"]
+    VRS --> VS["VideoSync\n按播放时钟选帧"]
+    VS -->|"借用 RGBA 帧"| Host["宿主"]
 
-### 不变式（必须全局遵守）
+    Demuxer --> APQ["AudioPacketQueue\n容量 64"]
+    APQ --> AD["AudioDecoder\nFFmpeg 解码"]
+    AD --> AFD["AudioFrameStore\n原始 PCM，容量 64"]
+    AFD --> AR["AudioResampler\nswresample"]
+    AR --> AFP["AudioFrameStore\n播放 PCM，容量 64"]
+    AFP --> AO["AudioOutput Worker"]
+    AO --> Ring["SPSC 字节环\n约 2 秒"]
+    Ring --> Callback["miniaudio 实时回调"]
+    Callback --> Device["音频设备"]
+    Callback --> Clock["AudioPlaybackClock"]
+    Clock --> VS
 
-> 所有跨模块数据带 generation；所有消费者消费前检查 generation。漏标或漏检任一处，机制失效。这是局部规则（每处加两行），不涉及跨模块协调。
-
-### 世代号在 seek 中的职责
-
-精准 seek 涉及三层数据正确性，世代号只管其中一层：
-
-- **第①层 解码器内部残留**（旧参考帧）→ decoder `avcodec_flush_buffers()`
-- **第②层 跨 seek 旧数据**（上次播放残留在队列）→ **世代号**：数据带 generation，消费者丢弃旧世代
-- **第③层 同次 seek 内目标前的帧** → 仅未来精准模式需要 decoder PTS 过滤和音频裁剪；当前关键帧模式不处理
-
-世代号是**全局数据正确性机制**（原则），不是 seek 的编排逻辑。**generation+1 与 Demuxer 定位绑定**（定位完成后才 +1，保证对应新数据）。
-
-→ **SeekCoordinator 模块砍掉**：当前 seek 只需 Demuxer 定位并推进 generation，见 `docs/modules/api_layer/seek.md`。
-
----
-
-## 命令与句柄机制（对外控制模型）
-
-上层宿主（UI 线程）与 C++ 的交互统一走"投递命令 + 句柄"，保证 UI 永不阻塞、控制权清晰。
-
-### 基准原则
-
-1. **命令模式**：所有宿主调用 → 往 ApiLayer 命令队列投递命令 → 立即返回句柄。UI 线程不阻塞。
-2. **串行执行**：ApiLayer 的唯一命令线程串行执行命令队列，一条一条来，天然无跨命令并发竞争。
-3. **句柄能力**：每个句柄可 `await`（拿结果、消费 handle）+ 可 `cancel`。
-4. **忠诚执行**：播放器忠实执行队列里的每条命令，**不擅自跳过/合并**。所有命令一视同仁——进队列、忠实执行、完成才 resolve，无中间态。"聪明"的事（节流、合并、跳过旧 seek）由使用方用 cancel/await 自行控制。seek 是昂贵操作，使用方应清楚其成本并主动管理频率。
-5. **取消语义**：队列里未开始的命令 → `cancel` 标为取消请求，但仍由命令线程取出并完成取消通知；已开始执行的命令 → 让它跑完（FFmpeg 操作不可打断）。**使用方用 cancel 实现"只保留最新 seek"等策略**，而非播放器内建覆盖。
-6. **非法顺序检查**：命令执行前校验状态（未 open 就 play 等），非法则返回错误不执行。
-7. **业务侧自治**：命令数量/节奏/时延由上层业务侧自行控制，C++ 忠实执行不替它决策。
-
-### 句柄设计
-
-```
-CommandHandle {
-  id: uint64_t,             // 命令唯一 id
-  cancel 标志/通道,         // 宿主调 handle.cancel() → 设标志
-  done: std::promise/std::future,    // 宿主可 await 拿结果(如 open 的 MediaInfo) 或 () 或错误
-}
+    Generation["Generation"] -.-> VPQ
+    Generation -.-> APQ
+    Generation -.-> VFS
+    Generation -.-> AFD
+    Generation -.-> VRS
 ```
 
-ApiLayer 命令线程执行每条命令前检查取消标志；执行完写入结果并通知 `await`。
+音频和视频输入结束也作为带 `generation` 的队列数据项顺序传递，而不是通过一个
+可能抢先到达的全局 EOF 控制信号。末端分别确认完成后，`ApiLayer` 才发布一次
+`PlaybackFinished` 事件。
 
-### 控制流
+相关实现：
 
-```
-宿主调用 ──▶ ApiLayer 投递 Command 到队列 ──▶ 立即返回 CommandHandle
-ApiLayer 命令线程串行取 Command:
-  - 检查 cancel → 取消则跳过
-  - 检查状态合法性 → 非法则 done.resolve(Err)
-  - 派发给对应模块执行(Demuxer/控制), 重活在工作线程
-  - 完成 → done.resolve(结果/())
+- [音频包队列](../src/domain/resource/audio_packet_queue/audio_packet_queue.hpp)
+- [视频包队列](../src/domain/resource/video_packet_queue/video_packet_queue.hpp)
+- [音频帧 Store](../src/domain/resource/audio_frame_store/audio_frame_store.hpp)
+- [视频帧 Store](../src/domain/resource/video_frame_store/video_frame_store.hpp)
+- [渲染帧 Store](../src/domain/resource/video_rendered_store/video_rendered_store.hpp)
 
-```
+## 4. 控制模型
 
-→ 控制信号走命令队列串行派发。状态通知（队列满/空、错误、时钟跳点等）由 Notifier 通知中心承担，与控制命令分离、互不混入。输入结束通过队列中的有序结束项传递。
+宿主控制和媒体数据不共用通道。C ABI 的 `open`、`play`、`pause`、`seek`、`close`
+和视频输出配置会创建任务并立即返回非零句柄；`ApiLayer` 的唯一命令线程按入队顺序
+执行任务。
 
----
+```mermaid
+sequenceDiagram
+    participant Host as 宿主线程
+    participant ABI as C ABI
+    participant Queue as ApiLayer 命令队列
+    participant Worker as 命令线程
+    participant Pipeline as 领域 Worker
 
-## 模块清单（24 个）
-
-> **顶层是 `Player`（lifecycle 层）**，不属于模块清单——它管整个模块体系的生灭（`init` 装配所有模块、`shutdown` 逆序释放）。详见 `docs/lifecycle.md`。以下模块均由 `Player.init` 经 IoCContainer 装配。
-
-### 🎛️ 基础设施层
-
-| 模块 | 类型 | 职责 |
-|------|------|------|
-| **IoCContainer** | 装配器（无线程） | init 时按 DAG 拓扑顺序构造所有模块、构造时注入 `std::shared_ptr<依赖>`；shutdown 时逆序释放。装配完成后持有各模块 shared_ptr 供 ApiLayer 取用。纯装配，不提供运行时服务定位 |
-| **Notifier** | 通知中心（无线程） | 通用通知中心。模块注册感兴趣的通知类型（QueueNotFull/QueueNotEmpty/Error 等），状态变化方发送通知。**取代资源队列自带 cv**：队列状态变（满→非满等）发通知，注册者被回调唤醒。承担状态通知职责；有序输入结束通过队列数据项传递；控制命令仍由 ApiLayer 私有队列处理 |
-| **Generation** | 共享原子标量（无线程） | IoC 创建一个 `std::shared_ptr<Generation>` 并注入各工作模块；新媒体会话和成功 seek 后推进，所有数据携带、所有消费者检查 |
-| **GpuDevice** | GPU 设备契约（无线程） | 抽象"一个 GPU 设备"的共性(设备 + 内存)，屏蔽 D3D11/Vulkan/OpenGL 等 API 差异。**纯契约不依赖 FFmpeg、不感知业务**。IoC 装配期按平台选实现(MVP: D3D11GpuDevice)。提供 api_type/device_handle/acquire_buffer 三个接口。copy-back 路下仅 FfmpegVideoDecoder 消费(硬解+download) |
-
-### 📦 资源管理者层（无线程，seek 逻辑零改动）
-
-| 模块 | 持有 | 生产者 | 消费者 |
-|------|------|--------|--------|
-| **VideoPacketQueue** | 视频压缩包队列（每包带 generation） | Demuxer | VideoDecoder |
-| **AudioPacketQueue** | 音频压缩包队列（每个包和有序 `AudioPacketEndOfInput` 都带 generation） | Demuxer | AudioDecoder |
-| **SubtitlePacketQueue** | 字幕压缩包队列（每包带 generation） | Demuxer | SubtitleDecoder |
-| **VideoFrameStore** | 视频帧（硬解 download 后的 CPU 原生格式 NV12/P010 + PTS + generation） | VideoDecoder | VideoRenderer |
-| **AudioFrameStore** | 音频 PCM / EndOfInput（有界 SPSC FIFO + mutex，每项带 generation，PCM 带 pts） | AudioDecoder | AudioResampler |
-| **AudioFrameStore（playback）** | 重采样后音频 PCM（miniaudio 目标格式，每块带 pts + generation） | AudioResampler | AudioOutput |
-| **VideoRenderedStore** | 渲染好的视频帧（宿主格式 RGBA/BGRA，CPU buffer + PTS + generation） | VideoRenderer | Compositor |
-| **SubtitleFrameStore** | 渲染好的字幕位图（带 alpha 的 RGBA + 有效时间窗 + generation） | SubtitleRenderer | Compositor |
-| **FinalFrameStore** | 合成后的最终画面（宿主格式 + PTS + generation） | Compositor | VideoSync |
-| **PlaybackClock** | AudioOutput 内部的 pts↔Instant 映射 | AudioOutput（写） | VideoSync（只读）；不是独立 IoC 资源，seek 后由新音频消费事件重建 |
-
-### ⚙️ 工作模块层（有线程，各自管状态）
-
-| 模块 | 线程 | 职责 |
-|------|------|------|
-| **Demuxer** | 1 个 loop 线程 | 读文件 → 分流喂 Video/Audio/SubtitlePacketQueue；新会话和**成功关键帧 seek 在此推进 generation**，再读新数据 |
-| **VideoDecoder** | 1 个 loop 线程 | 取视频 packet → 查 generation 变化时自 flush → 硬解（GPU）→ download 到 CPU → 喂 VideoFrameStore（CPU 原生格式帧）。硬解用注入的 GpuDevice，FFmpeg hwcontext 由 decoder 自构 |
-| **AudioDecoder** | 1 个 loop 线程 | 取音频 packet → 查 generation 变化时自 flush → 解码 → 喂 AudioFrameStore |
-| **AudioResampler** | 1 个 loop 线程 | 取 AudioFrameStore（解码原始 PCM）→ `swr_convert` 转成 miniaudio 目标格式 → 喂 playback AudioFrameStore。**纯格式转换**，不解码不输出。seek 时 flush 内部残留 + gen 丢旧。变速不变调（set_speed）预留落点 |
-| **SubtitleDecoder** | 1 个 loop 线程 | 取字幕 packet → 解析成字幕事件（SRT/ASS/PGS…）→ 维护当前 PTS 该显示的事件。**只解析+时间轴匹配，不出像素** |
-| **VideoRenderer** | 1 个 loop 线程 | 从 VideoFrameStore 取 CPU 原生格式帧（NV12/P010）→ `sws_scale` 转 RGBA（CPU）→ 喂 VideoRenderedStore。**纯 CPU 转换，不碰 GPU、不碰字幕** |
-| **SubtitleRenderer** | 1 个 loop 线程 | 字幕事件变化时用 libass 光栅化成带 alpha 的 RGBA 位图 → 喂 SubtitleFrameStore。**异步、只在事件变化时渲染**（缓存位图），避免拖慢合成 |
-| **Compositor** | 1 个 loop 线程 | 从 VideoRenderedStore 取视频帧 + 从 SubtitleFrameStore 取（按 PTS 的）字幕位图 → 合成一张最终画面 → 喂 FinalFrameStore。**只合成，不转换不渲染**。依赖两个 rendered Store |
-| **VideoSync** | 1 个 loop 线程 | 读 PlaybackClock → 从最终帧输入选帧（丢弃旧 generation 帧）→ 在本工作线程同步调用宿主帧回调。**回归纯粹末端消费者，不再驱动渲染/合成** |
-| **AudioOutput** | 1 个 worker + miniaudio 实时回调 | 取重采样 PCM（丢弃旧 generation）→ 送声卡；内部维护 PlaybackClock |
-
-### 🚪 接口层
-
-| 模块 | 线程 | 职责 |
-|------|------|------|
-| **ApiLayer** | 1 个命令线程 | 对外 open/play/pause/seek/close/configure_video_output 并立即返回句柄；私有队列、任务表和命令线程均内聚于此。维护内部 PlayerState，校验命令合法性并派发给业务模块 |
-
-宿主在 `Idle` 中通过普通异步命令配置格式、尺寸和回调。ApiLayer 在后续 `open` 时把格式/尺寸传给 VideoRenderer，把回调传给 VideoSync；不装配独立的 VideoOutput 模块。每个到期帧只在同步回调期间借用，宿主必须在回调返回前完成 GPU 上传或复制，不存在帧 release 接口。具体契约见 [`modules/video_output/video_output.md`](modules/video_output/video_output.md)。
-
----
-
-## 依赖关系
-
-依赖图是 DAG（资源/基础设施层不反向依赖工作模块），无真循环依赖。模块在**构造期**由 IoCContainer 注入 `std::shared_ptr<依赖>`，运行时直接持有使用，不再查找容器。装配拓扑顺序：
-
-```
-第0层(无依赖, 先构造): Generation, Notifier, GpuDevice,
-        VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue,
-        VideoFrameStore, AudioFrameStore（decoded / playback 两个实例）, 
-        VideoRenderedStore, SubtitleFrameStore, FinalFrameStore
-第1层: Demuxer, VideoDecoder, AudioDecoder, AudioResampler, SubtitleDecoder   (注入第0层)
-第2层: VideoRenderer, SubtitleRenderer   (注入第1层产物 Store + 第0层下游 Store)
-第3层: Compositor   (注入 VideoRenderedStore + SubtitleFrameStore + FinalFrameStore)
-第4层: VideoSync, AudioOutput   (VideoSync 注入只读 PlaybackClock；AudioOutput 消费重采样 PCM)
-接口层: ApiLayer（注入第1-4层模块，内部拥有命令队列和唯一命令线程）
+    Host->>ABI: semi_player_open(path)
+    ABI->>Queue: 创建并入队任务
+    ABI-->>Host: semi_handle_t
+    Worker->>Queue: 串行取出任务
+    Worker->>Pipeline: 探测并配置音视频管道
+    Pipeline-->>Worker: 结果
+    Worker-->>Queue: 完成任务
+    Host->>ABI: semi_player_handle_await(handle)
+    ABI-->>Host: 状态码 + MediaInfo
 ```
 
-> 渲染/合成链比原设计多出两层（VideoRenderer/SubtitleRenderer 在第 2 层，Compositor 在第 3 层），故 VideoSync 下沉到第 4 层。原因：字幕与视频各自独立渲染成像素后，才由 Compositor 合成、VideoSync 选帧交付，存在"先渲染后合成再选帧"的串行数据依赖。
+控制模型的具体语义：
 
-各资源队列**无 cv**——状态变化通过 Notifier 发送通知，注册者被回调唤醒。控制由 ApiLayer 命令线程串行派发，直接调用模块方法。
+- 最多保留 1024 个排队、运行或尚未消费结果的任务。
+- `await` 阻塞到任务终态，复制结果并消费句柄。
+- `cancel` 只接受尚未开始的任务；已经开始的 FFmpeg 操作会执行完成。
+- 命令线程忠实执行队列，不自动合并连续 Seek。需要“只保留最新 Seek”时由宿主取消
+  仍在排队的旧任务。
+- `PlayerState` 当前包含 `Idle`、`Ready`、`Playing`、`Paused`、`Ended` 和 `Error`，
+  命令执行前会检查状态合法性。
 
-| 模块 | 构造注入的依赖（`std::shared_ptr`） | 控制来源 / 唤醒 |
-|------|--------------|---------|
-| Notifier | 无（被所有人依赖）| — |
-| Demuxer | VideoPacketQueue, AudioPacketQueue, SubtitlePacketQueue, Generation, Notifier | ApiLayer 命令线程同步调 open()/seek()/close()；open 成功后自动生产，close 终止当前媒体会话，未入队 pending item 可丢弃，Failed 必须 close/open 恢复；阻塞时在自己的 cv 上等，Notifier 回调唤醒 QueueNotFull |
-| VideoDecoder | VideoPacketQueue, VideoFrameStore, Generation, GpuDevice, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；查 generation 自 reset；用 GpuDevice 硬解+download 喂 VideoFrameStore；Notifier 唤醒（QueueNotEmpty 等）|
-| AudioDecoder | AudioPacketSource, AudioFrameSink, Generation, FFmpeg 解码器, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；configure 后自动消费，背压自然等待；generation 变化时自 flush；Notifier 唤醒（QueueNotEmpty/StoreNotFull）|
-| AudioResampler | AudioFrameStore（decoded / playback）, Generation, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；取 decoded AudioFrameStore 经 swr_convert 转 miniaudio 输出格式喂 playback AudioFrameStore；查 generation 自 reset；Notifier 唤醒（FrameReady/NotFull 等）|
-| SubtitleDecoder | SubtitlePacketQueue, Generation, Notifier | 观察 generation 丢弃旧事件；Notifier 唤醒（QueueNotEmpty 等）|
-| VideoRenderer | VideoFrameStore, VideoRenderedStore, Generation, Notifier | ApiLayer 命令线程调 configure()/unconfigure()；从 VideoFrameStore 取 CPU 帧 sws_scale 转 RGBA 喂 VideoRenderedStore；查 generation 丢旧；Notifier 唤醒（FrameReady 等）|
-| SubtitleRenderer | SubtitleDecoder(查事件), SubtitleFrameStore, Generation, Notifier | 观察 generation 丢弃旧位图；事件变化时 libass 渲染位图喂 SubtitleFrameStore |
-| Compositor | VideoRenderedStore, SubtitleFrameStore, FinalFrameStore, Generation, Notifier | ApiLayer 命令线程调 start()/stop()；从两个 rendered Store 取帧合成喂 FinalFrameStore；Notifier 唤醒（RenderedReady 等）|
-| VideoSync | 最终帧 Source, PlaybackClock, Generation, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()/unconfigure()；回调随 configure 传入，不是构造期 IoC 依赖；Notifier 唤醒（FrameReady 等）|
-| AudioOutput | 重采样 AudioFrameStore, Generation, AudioOutputBackend, Notifier | ApiLayer 命令线程调 configure()/start_playback()/pause_playback()；worker 提交 PCM，实时回调维护内部 PlaybackClock；GenerationChanged 唤醒 stale 维护 |
-| Generation | Notifier | `bump()` 原子递增后发送一次 GenerationChanged；通知只是唤醒 hint，消费者仍比较 current() |
-| ApiLayer | 各工作模块 `std::shared_ptr` | 内部队列和命令线程 |
-| IoCContainer | 无（持有所有人） | — |
+任务与状态机实现见 [ApiLayer](../src/application/api_layer.hpp)；公开句柄契约见
+[C ABI 头文件](../include/semi_player/semi_player.h)。
 
-> **资源队列无 cv，全靠 Notifier**：资源队列（PacketQueue/FrameStore）状态变化（满→非满、空→非空）时，通过 Notifier 发送边界通知；generation 改变时由 Generation 额外发送一次 GenerationChanged。通知只负责唤醒，worker 必须通过状态谓词确认实际条件。控制命令不经过 Notifier，而是由 ApiLayer 私有队列串行处理。
+## 5. Open、Play 与 Close 编排
 
-### 数据流
+### Open
 
-```
-文件 →[Demuxer]→ VideoPacketQueue(gen) →[VideoDecoder](硬解GPU+download)→ VideoFrameStore(gen,CPU原生帧NV12/P010)
-            │                                                            ↓
-            │                                              [VideoRenderer](CPU sws_scale:NV12→RGBA/BGRA)
-            │                                                            ↓
-            │                                              VideoRenderedStore(gen,CPU) ──┐
-            │                                                                        │
-            └─→ SubtitlePacketQueue(gen) →[SubtitleDecoder]→ 字幕事件(PTS匹配)      │
-                                              ↓                                      │
-                                 [SubtitleRenderer](libass光栅化,仅变化时渲染)        │
-                                              ↓                                      │
-                                 SubtitleFrameStore(gen,带alpha位图+时间窗) ─────────┤
-                                                                                    ▼
-                                                                            [Compositor](按视频帧PTS取字幕位图,合成)
-                                                                                    ↓
-                                                                            FinalFrameStore(gen)
-                                                                                    ↓
-                                                                            [VideoSync](读PlaybackClock选帧)→ 宿主同步帧回调
+1. 如果已有媒体，先按 Close 路径解除旧管道配置。
+2. Demuxer 打开并探测媒体，选择默认音视频流；成功后推进 `Generation`。
+3. 视频流依次配置 VideoRenderer、VideoDecoder 和 VideoSync。
+4. 音频流依次配置 AudioDecoder、AudioOutput，再用解码格式和设备播放格式配置
+   AudioResampler。
+5. 保存本次媒体信息与预期完成的流，状态进入 `Ready`。
 
-            └─→ AudioPacketQueue(gen) →[AudioDecoder]→ AudioFrameStore(gen,解码原始PCM) →[AudioResampler]→ AudioFrameStore(gen,输出格式) →[AudioOutput]→ 声卡
-       ↑new open / successful seek: gen+1                                       │
-       │                                                                        ▼
-    Generation                                                            AudioOutput 内部 PlaybackClock
-                                                                                  ▲
-                                                                        VideoSync 只读
-```
+### Play / Pause
 
-> **字幕位图按 PTS 被动拉取**：Compositor 合成每帧时，按当前视频帧 PTS 从 SubtitleFrameStore 取有效时间窗内的字幕位图。字幕变化频率远低于视频帧率，SubtitleRenderer 仅在事件变化时渲染一次并缓存。
-> **Compositor 依赖两个 rendered Store**：VideoRenderedStore（视频帧，已转换）+ SubtitleFrameStore（字幕位图，已渲染）。它只合成，不做转换/渲染。
+解码和转换 Worker 在配置完成后按队列可用性推进。`play` 与 `pause` 主要打开或关闭
+末端消费阀门：AudioOutput 控制音频设备和消费，VideoSync 控制视频交付；上游最终
+由有界队列背压自然停下或恢复。
 
-### 控制流（命令串行派发）
+重复 `play`、`pause` 和 `close` 是幂等成功，减少宿主状态抖动带来的额外分支。
 
-```
-宿主调用 ──▶ ApiLayer 投递 Command ──▶ 返回 CommandHandle (UI 不阻塞)
-ApiLoop 串行执行 (忠实执行, 不跳过/合并):
-  play/pause → 调对应模块 set_paused(); 模块自洽(时钟冻结/miniaudio设备暂停); 队列满背压自然停上游
-  seek(pos, mode) → Demuxer 按前一/后一关键帧定位；成功后推进 generation，完成才 resolve
-                    下游观察 generation 后自行丢旧和 reset；当前不提供精准 PTS 过滤
-               字幕侧同走世代号自洽 flush (SubtitleDecoder/SubtitleRenderer 旧世代事件/位图被丢弃)
-  open/close/shutdown → 同步探测/汇聚释放后 resolve (含启动/停止字幕线程)
-```
+### Close
 
-> **字幕线程随 play 启动、随 close 停止**：SubtitleDecoder/SubtitleRenderer/VideoRenderer/Compositor 都是工作线程，play 时启动、close 时停止（和现有 decoder/sync 一致）。seek 时靠世代号让字幕侧自动丢弃旧事件/位图，无需专门协调。具体编排细节见下一阶段各模块文档。
+Close 先停止 VideoSync 的帧交付，再关闭 Demuxer 停止新数据生产，随后解除视频
+解码/转换与音频解码/重采样/输出配置。模块对象和它们的常驻 Worker 不销毁，因此
+下一次 Open 可以复用同一套装配；只有 `shutdown` 才停止命令线程并逆序释放整套模块。
 
----
+详细编排见 [Open](modules/api_layer/open.md)、[Play/Pause](modules/api_layer/play.md)
+和 [Close](modules/api_layer/close.md)。
 
-## 关键设计原则
+## 6. 线程模型
 
-1. **去中心化状态**：每个工作/资源模块有自己的 `enum class State`（如 `Running/Paused`），无全局上帝状态。ApiLayer 仅维护用于命令合法性校验的会话状态。
+| 执行上下文 | 数量 | 主要职责 | 阻塞规则 |
+|---|---:|---|---|
+| 宿主调用线程 | 宿主决定 | 投递命令、等待句柄、轮询事件 | C ABI 投递本身不等待媒体操作 |
+| ApiLayer 命令线程 | 1 | 串行执行控制命令和会话编排 | 可以等待领域控制命令完成 |
+| Demuxer Worker | 1 | 读取并分流压缩包 | 输出队列满时等待 |
+| AudioDecoder Worker | 1 | 解码音频 | 输入为空或输出满时等待 |
+| AudioResampler Worker | 1 | 转换为设备播放格式 | 输入为空或输出满时等待 |
+| AudioOutput Worker | 1 | 把 PCM 提交到 SPSC 环 | 环满时等待唤醒 |
+| VideoDecoder Worker | 1 | 解码视频帧 | 输入为空或输出满时等待 |
+| VideoRenderer Worker | 1 | 转换为宿主 RGBA 帧 | 输入为空或输出满时等待 |
+| VideoSync Worker | 1 | 按时钟等待、选帧、调用宿主回调 | 不在持锁状态执行宿主回调 |
+| miniaudio 回调 | 设备提供 | 从 SPSC 环取样并更新消费进度 | 不加业务锁、不等待；缺数据时输出静音 |
 
-2. **数据标记 > 时序协调**：跨模块数据正确性靠 generation 标记识别，不靠"在正确时刻清空"。这是规避死锁、实现"资源持有者零改动"、让取消 seek 免费的关键。
+领域 Worker 各自维护 `WorkerState` 和 `SessionState`，控制命令通过模块私有队列进入
+对应线程。状态不会集中到一个“上帝对象”；`ApiLayer` 的状态只用于对外命令合法性
+和跨流完成汇聚。
 
-3. **命令串行 + 句柄**：控制走命令队列串行派发。宿主投递命令拿句柄、UI 不阻塞、可 await 可 cancel。并发节奏由业务侧自治。
+## 7. Generation：跨会话数据隔离
 
-4. **依赖注入（DI）**：模块构造期由 IoCContainer 注入 `std::shared_ptr<依赖>`，依赖关系写在构造函数签名里显式可见、可单测 mock。依赖图是 DAG 无真环，全部 `std::shared_ptr` 注入，无 `std::weak_ptr`、无运行时服务定位。
+Seek 或媒体替换时，旧包、旧解码帧和旧 PCM 可能仍在多个有界队列中。若要求一个
+协调者在精确时刻依次清空所有队列，会引入跨线程顺序依赖。
 
-5. **seek 无专门协调者**：世代号消除假依赖后，seek 不直接操作播放时钟；AudioOutput 在观察到新 generation 后预读首块 PCM 建立暂停态 Prepared 锚点，实际消费时再建立运行时 PlaybackClock。无 SeekCoordinator，无握手死锁。
+当前实现采用共享原子世代号：
 
-6. **AudioOutput 特殊性**：拥有 worker，并复用 miniaudio 实时回调；回调遵守实时约束——零阻塞、try 取、空则静音。
+1. 成功 Open 或 Demuxer 完成关键帧定位后调用 `Generation::bump()`。
+2. Packet、Frame、PCM 和 EndOfInput 项都携带生成时的 `generation`。
+3. 每个消费者在使用数据前与当前值比较，旧世代数据直接丢弃。
+4. Worker 观察到世代变化时重置 FFmpeg 内部缓存、待输出项和本地时钟状态。
 
----
+Notifier 发送的 `GenerationChanged` 只是唤醒提示；即使某次通知没有被观察到，Worker
+仍会比较原子当前值，因此正确性不依赖通知必达。
 
-## 范围边界（本阶段只做地基，不实现）
+Generation 只解决数据隔离，不等同于命令取消。Seek 已经开始后会运行完成；取消仍
+只针对 ApiLayer 队列中尚未开始的任务。
 
-- ❌ 各模块状态机与事件响应的细节（下一阶段讨论）
-- ❌ 对外 API 函数签名（待地基确认后）
-- ❌ demux/decode/miniaudio/同步内部实现
-- ❌ 宿主侧 GPU 上传、纹理管理与窗口呈现
-- ❌ 各宿主语言的绑定与胶水
+实现见 [Generation](../src/domain/resource/generation/generation.cpp) 和
+[Seek 编排](modules/api_layer/seek.md)。
 
----
+## 8. 背压与通知
 
-## 待确认项
+默认队列容量如下：
 
-- [x] ~~对外控制模型~~ → 命令队列 + 句柄（投递即返回、可 await 可 cancel、串行执行、seek 破例）
-- [x] ~~字幕/合成是否独立模块~~ → 独立。字幕侧拆为 SubtitleDecoder（解析+PTS匹配）+ SubtitleRenderer（libass光栅化）；视频侧拆出 VideoRenderer（格式转换）；末端 Compositor 只合成；各产出经 Store 解耦
-- [x] ~~字幕位图如何传给合成~~ → Compositor 按视频帧 PTS 从 SubtitleFrameStore 被动拉取（SubtitleRenderer 仅事件变化时渲染缓存）
-- [x] ~~显示流水线谁驱动~~ → 渲染/合成/选帧各自独立线程、靠 Store 解耦；VideoSync 回归纯粹末端消费者
-- [x] ~~CPU 帧如何交付宿主~~ → VideoSync 工作线程同步调用只读借用回调；回调返回后销毁帧，不新增 VideoOutput 模块，不提供 retain/release
-- [x] ~~外挂字幕是否支持~~ → 本阶段不做，只支持 demuxer 解出的内嵌字幕流
-- [x] ~~VideoRenderer 转换路径~~ → copy-back（硬解在 GPU，download 后 sws_scale 转 RGBA 在 CPU；合成 CPU）。GPU 直通作未来优化，GpuDevice 抽象基类留扩展点
-- [x] ~~图形上下文归属~~ → 抽基础设施层 GpuDevice 契约（D3D11/Vulkan/OpenGL 实现），copy-back 路下仅 FfmpegVideoDecoder 依赖
-- [ ] **SubtitleDecoder → SubtitleRenderer 的事件传递**：SubtitleDecoder 检测到该显示的事件变化时主动推、SubtitleRenderer 被唤醒才渲染（事件驱动，倾向此），还是 SubtitleRenderer 轮询查询
-- [ ] 字幕轨选择/切换（多字幕轨、set_subtitle_track 命令）——本阶段暂不考虑，单轨
-- [ ] 各 rendered Store（VideoRenderedStore/SubtitleFrameStore/FinalFrameStore）的内部实现：有界队列 vs 单帧快照（copy-back 路下均为 CPU buffer，无 GPU 句柄池化）
-- [ ] 进入下一阶段：逐模块讨论状态机与命令响应（当前进行中：Demuxer）
+| 资源 | 默认容量 |
+|---|---:|
+| AudioPacketQueue | 64 项 |
+| VideoPacketQueue | 64 项 |
+| decoded AudioFrameStore | 64 项 |
+| playback AudioFrameStore | 64 项 |
+| VideoFrameStore | 64 项 |
+| VideoRenderedStore | 8 项 |
+| miniaudio SPSC 字节环 | 48 kHz、双声道、F32 下约 2 秒 |
+
+所有 Queue/Store 的写入都是“整项接受或拒绝”，不会部分写入。上游保留待输出项并
+等待 `NotFull`，下游等待 `NotEmpty`，从而把内存上界和流速控制落在局部模块。
+
+普通 Worker 使用类型化 `Notifier` 发送边界变化。通知回调只设置 hint 并唤醒模块
+自己的条件变量，Worker 醒来后必须重新检查真实谓词，所以通知不是数据通道。
+
+miniaudio 实时回调不使用普通 Notifier，而通过固定单订阅者的实时通知器发布已消费
+帧数；AudioOutput 的实时 sink 直接更新只含原子字段的播放时钟，并唤醒 Worker 处理
+普通位置事件，避免实时线程进入通用分发和业务锁。
+
+## 9. 音视频同步
+
+有音频流时，AudioOutput 维护音频主时钟：首块 PCM 的 PTS 建立时间锚点，miniaudio
+回调确认的已消费帧数推进位置。时钟状态使用原子字段发布，VideoSync 可以无业务锁
+读取一致快照。
+
+VideoSync 读取渲染帧 PTS 与当前播放位置：
+
+- 帧时间未到：记录下一唤醒时刻并等待。
+- 一次醒来已有多帧到期：保留最新到期帧，旧帧自然被丢弃。
+- 暂停：冻结时钟和帧交付。
+- Seek：采纳新 generation，丢弃 pending frame，并等待新音频位置。
+- 纯视频媒体：使用 `steady_clock` 建立本地时钟。
+- 音频先结束：从最后音频位置切换到本地时钟，让剩余视频继续播放。
+
+具体实现见 [AudioPlaybackClock](../src/domain/worker/audio_output/audio_playback_clock.cpp)
+和 [VideoSync](../src/domain/worker/video_sync/default_video_sync.cpp)。
+
+## 10. 宿主视频帧边界
+
+VideoRenderer 当前输出单平面 RGBA8888 CPU 帧。VideoSync 到点后同步调用宿主回调，
+C ABI 只构造只读视图，不复制像素：
+
+- `semi_video_frame_t` 和 plane 数据只在回调期间有效。
+- 宿主必须在回调返回前完成纹理上传或复制。
+- 回调运行在 VideoSync Worker，不应反向等待播放器控制命令。
+- SDL3 示例先复制到宿主持有的 latest-frame mailbox，再向 SDL 主线程投递用户事件；
+  SDL 渲染 API 始终留在主线程。
+
+这条边界避免每帧在 C ABI 层额外复制，同时把 GPU/窗口线程规则留给宿主处理。详见
+[视频输出契约](modules/video_output/video_output.md) 和
+[SDL3 示例](../examples/sdl_player/README.md)。
+
+## 11. 依赖装配与释放
+
+`IoCContainer` 只在初始化阶段构造依赖，不作为运行时服务定位器：
+
+1. 构造 Notifier、实时通知器、Generation、Queue 和 Store。
+2. 构造 FFmpeg 与音频输出后端。
+3. 将资源和后端契约注入 7 个领域 Worker。
+4. 将领域模块注入 ApiLayer 并启动命令线程。
+5. `shutdown` 时先停止 ApiLayer，再按依赖反序释放 Worker、资源和基础设施。
+
+CI 通过编译选项将音频后端替换为 `NullAudioOutputBackend`，领域层和测试流程无需感知
+机器是否存在声卡。这也是当前依赖反转边界的直接验证。
+
+生命周期细节见 [lifecycle.md](lifecycle.md) 和
+[IoCContainer](../src/ioc/ioc_container.cpp)。
+
+## 12. 当前范围边界
+
+`v0.1.0` 当前不包含：
+
+- 字幕解码、光栅化与合成；
+- GPU 硬件解码或 GPU 零拷贝帧交付；
+- 目标时间戳级的精确 Seek；
+- 倍速、音轨/字幕轨选择和公开音量控制；
+- Windows x64 之外经过持续集成验证的发布包；
+- 已公开的可复现性能基准。
+
+这些方向的动机、阶段和验收条件见 [roadmap.md](roadmap.md)。

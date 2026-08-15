@@ -187,9 +187,6 @@ GpuDevice 抽象"GPU 设备共性"(设备 + 内存),不讲任何具体 API。具
 ### 为什么 device_handle 暴露原始句柄可接受
 契约必然要暴露底层句柄给 decoder(否则没法构造 hwcontext)。用 `DeviceHandle` 枚举包着是"受控暴露",比直接吐裸指针有结构。约束靠文档约定:只用于构造第三方桥接,不得用于业务渲染。消费者只有 FfmpegVideoDecoder,可控。这是把 FFmpeg 桥接移到 decoder 的必然代价,换来 GpuDevice 纯净 + decoder 可换后端,值得。
 
-### 为什么 MVP 只 D3D11 后端
-跨平台 GPU 抽象的复杂度大多在"胶水"(D3D11/Vulkan/Metal 各一套 + 跨平台纹理共享),对"音视频理解"目标 ROI 低。D3D11 单后端能跑硬解 + 出画面,够展示能力。多后端留抽象基类/枚举扩展点,面试时讲"MVP 选单后端 D3D11,抽象基类留多 API 扩展,因为跨平台 GPU 胶水 ROI 低"——体现取舍判断。
-
 ### 为什么 copy-back 而非 GPU 直通
 copy-back:硬解在 GPU(download 是单次拷贝),格式转换/合成在 CPU。已拿到硬解主要收益(解码卸载到专用芯片),且全链路 CPU 可跑、可单测、跨平台简单。GPU 直通的合成/共享复杂度在跨平台胶水,ROI 低。详见"为什么硬解只用于解码"。
 

@@ -118,6 +118,7 @@ flowchart LR
 | 文档 | 内容 |
 |---|---|
 | [架构设计](docs/architecture.md) | 模块边界、数据流、Generation 和命令模型的设计演进 |
+| [路线图](docs/roadmap.md) | 精确 Seek、字幕、GPU、跨平台和性能基准计划 |
 | [生命周期](docs/lifecycle.md) | 初始化、关闭、状态机和释放顺序 |
 | [ApiLayer](docs/modules/api_layer/api_layer.md) | 命令队列、任务状态与会话状态机 |
 | [Seek 编排](docs/modules/api_layer/seek.md) | 关键帧定位和世代号推进顺序 |
@@ -186,7 +187,8 @@ GitHub Actions 使用 `windows-ci` 预设和 `NullAudioOutputBackend`，避免�
 - 当前视频帧经过 CPU 像素格式转换并回调宿主，尚未实现 GPU 零拷贝链路。
 - 当前不渲染字幕，播放重点是音频与视频主链路。
 - MSYS2 的完整 FFmpeg 构建包含较多可选依赖；后续可定制 FFmpeg 以缩小发布包。
-- 后续将补充真实运行演示、可复现性能基准和更多平台的构建验证。
+- 后续计划见 [项目路线图](docs/roadmap.md)，包括真实运行演示、可复现性能基准和
+  更多平台的构建验证。
 
 ## 许可证
 
