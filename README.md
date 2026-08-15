@@ -1,167 +1,196 @@
 # SemiPlayer
 
 [![Windows 持续集成](https://github.com/Semiruyi/SemiPlayer/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Semiruyi/SemiPlayer/actions/workflows/windows-ci.yml)
+[![最新版本](https://img.shields.io/github/v/release/Semiruyi/SemiPlayer?display_name=tag)](https://github.com/Semiruyi/SemiPlayer/releases/latest)
+[![许可证](https://img.shields.io/github/license/Semiruyi/SemiPlayer)](LICENSE)
 
-C++ 跨平台播放器内核，导出 C ABI 供上层宿主调用。
-FFmpeg 解封装/解码、miniaudio 播音频，单例全局 + 命令队列/句柄控制模型。
-架构、生命周期及各模块设计见 `docs/` 下的设计文档。
-错误约定见 `docs/error_convention.md`，状态码见 `include/semi_player/status.h`。
+使用 C++23 编写的媒体播放器内核。SemiPlayer 将 FFmpeg 解封装与解码、
+miniaudio 音频输出和音视频同步封装在动态库中，通过 C ABI 向桌面或跨语言宿主
+提供异步播放能力；仓库同时包含一个基于 SDL3 的可运行示例。
 
-## 许可证
+[下载 Windows x64 便携版](https://github.com/Semiruyi/SemiPlayer/releases/download/v0.1.0/SemiPlayer-0.1.0-windows-x64-portable.zip)
+· [查看 v0.1.0 Release](https://github.com/Semiruyi/SemiPlayer/releases/tag/v0.1.0)
+· [阅读架构设计](docs/architecture.md)
 
-SemiPlayer 采用 GNU 通用公共许可证第 3 版或更高版本（`GPL-3.0-or-later`），
-详见 [`LICENSE`](LICENSE)。二进制发布包包含自动生成的
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)，以及对应 MSYS2 运行时包
-提供的许可证文件。
+## 开箱运行
 
-## Windows 构建（MSYS2 UCRT64 + Ninja）
-
-### 1. 安装 MSYS2
-
-先安装 MSYS2，然后从开始菜单打开 `MSYS2 UCRT64` 终端。
-
-如果你更习惯命令行，也可以用 `winget`：
+1. 下载并解压 Windows x64 便携包。
+2. 双击 `bin/semi_player_sdl.exe`，程序会自动播放随包提供的 5 秒合成样例。
+3. 也可以把本地媒体文件拖到程序上，或在命令行中传入媒体路径。
 
 ```powershell
-winget install -e --id MSYS2.MSYS2
+.\bin\semi_player_sdl.exe
+.\bin\semi_player_sdl.exe D:\media\example.mp4
 ```
 
-### 2. 更新系统并安装工具链
+| 按键 | 功能 |
+|---|---|
+| 空格 | 播放 / 暂停 |
+| ← / → | 向前 / 向后跳转 5 秒，落到相邻关键帧 |
+| F11 | 切换全屏 |
+| Esc | 退出 |
 
-打开 MSYS2 窗口，将示例中的项目路径替换为自己的项目路径：
+## 已实现能力
 
-```sh
-C:\msys64\msys2_shell.cmd -ucrt64 -where C:\y-s\project\SemiPlayer
+- FFmpeg 媒体探测、音视频分流、解码、音频重采样和视频像素格式转换。
+- miniaudio 音频输出，以实际消费进度建立播放时钟。
+- 视频根据音频主时钟选帧，并通过只读借用回调交给宿主显示。
+- `open`、`play`、`pause`、关键帧 `seek`、`close` 和播放结束事件。
+- C ABI 动态库与异步命令句柄，支持等待结果以及取消尚未开始的命令。
+- SDL3 示例宿主，负责窗口、输入、帧上传、画面比例和全屏切换。
+- Windows x64 便携发布包，自动收集运行库和对应的第三方许可证。
+
+## 当前实现架构
+
+控制面和数据面相互分离：宿主调用先进入 `ApiLayer` 的私有命令队列，由唯一命令
+线程串行编排；音频和视频数据则沿各自的有界管道并行处理。
+
+```mermaid
+flowchart LR
+    Host["宿主 / SDL3 示例"] -->|"C ABI 命令"| API["ApiLayer\n命令队列 + 句柄"]
+    API -->|"open / seek / close"| Demuxer
+
+    Media["媒体文件"] --> Demuxer["Demuxer\nFFmpeg 解封装"]
+
+    Demuxer --> VPacket["VideoPacketQueue"]
+    VPacket --> VDecoder["VideoDecoder\nFFmpeg 解码"]
+    VDecoder --> VFrame["VideoFrameStore"]
+    VFrame --> VRenderer["VideoRenderer\nFFmpeg 像素转换"]
+    VRenderer --> VRendered["VideoRenderedStore"]
+    VRendered --> VSync["VideoSync\n按音频时钟选帧"]
+    VSync -->|"RGBA 借用回调"| Host
+
+    API -.->|"配置 / 播放控制"| VDecoder
+    API -.-> VRenderer
+    API -.-> VSync
+
+    Demuxer --> APacket["AudioPacketQueue"]
+    APacket --> ADecoder["AudioDecoder\nFFmpeg 解码"]
+    ADecoder --> ADecoded["AudioFrameStore\n解码 PCM"]
+    ADecoded --> Resampler["AudioResampler\nFFmpeg 重采样"]
+    Resampler --> APlayback["AudioFrameStore\n播放格式 PCM"]
+    APlayback --> AOutput["AudioOutput\nminiaudio"]
+    AOutput --> Device["音频设备"]
+    AOutput -->|"PlaybackClock"| VSync
+
+    API -.-> ADecoder
+    API -.-> Resampler
+    API -.-> AOutput
+
+    Generation["Generation\n丢弃旧会话数据"] -.-> VPacket
+    Generation -.-> APacket
+    Generation -.-> VFrame
+    Generation -.-> ADecoded
 ```
 
-在 `MSYS2 UCRT64` 里执行：
+### 关键设计
+
+- **异步 C ABI**：控制调用立即返回不透明句柄，耗时操作在播放器内部执行；宿主可
+  `await` 结果，也可以取消仍在队列中等待的命令。
+- **串行控制、并行数据**：`ApiLayer` 串行处理状态变更，避免跨命令竞争；解封装、
+  解码、重采样、输出和视频同步分别由工作线程推进。
+- **有界队列与背压**：PacketQueue 和 FrameStore 限制在途数据量，上游在下游饱和
+  时自然等待，避免播放长媒体时内存持续增长。
+- **世代号隔离**：新媒体会话或成功 Seek 后推进 `Generation`；数据携带世代号，
+  消费者丢弃旧世代数据，减少跨模块清队列的时序协调。
+- **音频主时钟**：播放时钟来自音频设备实际消费进度，`VideoSync` 据此选择、等待
+  或丢弃视频帧。
+- **依赖反转**：领域 Worker 依赖后端契约，FFmpeg、miniaudio 和无声卡测试后端位于
+  Infrastructure；IoC 仅在装配期构建依赖图。
+- **实时线程边界**：miniaudio 回调不执行阻塞操作，音频数据通过 SPSC 字节环传递；
+  视频回调的数据只在回调期间有效，宿主需立即上传或复制。
+
+## 质量与验证
+
+| 项目 | 当前结果 |
+|---|---|
+| 自动化测试 | 264 项通过 |
+| 覆盖层次 | 领域逻辑、资源队列、后端契约、FFmpeg 后端、IoC 管道、C ABI 动态库边界 |
+| 持续集成 | Windows UCRT64 无声卡构建与测试 |
+| Release 验收 | Clean Release 构建、全新解压、限制系统 `PATH` 后播放内置样例 |
+| 发布合规材料 | GPL 项目许可证、第三方清单及随包许可证文件 |
+
+项目暂不在缺少统一测试媒体和硬件条件时宣称具体性能数字。后续基准将固定测试机器、
+媒体参数和测量方法，优先覆盖启动至首帧、Seek 恢复、CPU、内存及音视频同步误差。
+
+## 文档导航
+
+| 文档 | 内容 |
+|---|---|
+| [架构设计](docs/architecture.md) | 模块边界、数据流、Generation 和命令模型的设计演进 |
+| [生命周期](docs/lifecycle.md) | 初始化、关闭、状态机和释放顺序 |
+| [ApiLayer](docs/modules/api_layer/api_layer.md) | 命令队列、任务状态与会话状态机 |
+| [Seek 编排](docs/modules/api_layer/seek.md) | 关键帧定位和世代号推进顺序 |
+| [音频输出](docs/modules/audio_output/audio_output.md) | 背压、实时回调和播放时钟 |
+| [视频同步](docs/modules/video_sync/video_sync.md) | 音频主时钟下的选帧策略 |
+| [C ABI 头文件](include/semi_player/semi_player.h) | 对外数据结构和函数接口 |
+| [SDL3 示例](examples/sdl_player/README.md) | 宿主线程边界、帧邮箱和运行方法 |
+
+## Windows 构建
+
+当前经过验证的开发环境是 Windows、MSYS2 UCRT64、CMake 和 Ninja。
+
+### 安装依赖
+
+安装 [MSYS2](https://www.msys2.org/)，打开 `MSYS2 UCRT64` 终端并执行：
 
 ```sh
 pacman -Syu
+pacman -S --needed \
+  mingw-w64-ucrt-x86_64-gcc \
+  mingw-w64-ucrt-x86_64-cmake \
+  mingw-w64-ucrt-x86_64-ninja \
+  mingw-w64-ucrt-x86_64-spdlog \
+  mingw-w64-ucrt-x86_64-gtest \
+  mingw-w64-ucrt-x86_64-ffmpeg \
+  mingw-w64-ucrt-x86_64-miniaudio \
+  mingw-w64-ucrt-x86_64-sdl3 \
+  git
 ```
 
-如果提示关闭窗口，重新打开 `MSYS2 UCRT64` 后再执行一次：
-
-```sh
-pacman -Syu
-```
-
-安装构建依赖：
-
-```sh
-pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-spdlog mingw-w64-ucrt-x86_64-gtest mingw-w64-ucrt-x86_64-ffmpeg mingw-w64-ucrt-x86_64-miniaudio mingw-w64-ucrt-x86_64-sdl3 git
-```
-
-如果下载慢，可先设置你自己的代理再执行上面的命令：
-
-```sh
-export http_proxy=http://127.0.0.1:7890
-export https_proxy=http://127.0.0.1:7890
-export all_proxy=http://127.0.0.1:7890
-```
-
-### 3. 配置并构建
-
-在项目根目录执行：
+### 构建与测试
 
 ```sh
 cmake --preset windows-all
 cmake --build --preset windows-all
+ctest --test-dir build-windows --output-on-failure
 ```
 
-`windows-all` 会一次性构建：
-
-- `semi_player_core` 静态库
-- `semi_player.dll` C ABI 动态库
-- `semi_player_tests` 单元测试
-- `semi_player_abi_tests` C ABI 动态库边界测试
-- `semi_player_sdl.exe` SDL3 播放示例宿主
-
-产物：
-
-- `build-windows/lib/libsemi_player_core.a`
-- `build-windows/bin/semi_player.dll`
-- `build-windows/bin/semi_player_tests.exe`
-- `build-windows/bin/semi_player_abi_tests.exe`
-- `build-windows/bin/semi_player_sdl.exe`
-
-### 4. 运行测试和播放宿主
-
-运行单元测试：
+运行 SDL3 示例：
 
 ```sh
-ctest --test-dir build-windows
+./build-windows/bin/semi_player_sdl.exe
+./build-windows/bin/semi_player_sdl.exe path/to/media.mp4
 ```
 
-运行 SDL3 播放宿主：
+`windows-all` 会构建静态核心库、C ABI 动态库、测试程序和 SDL3 示例。主要产物位于
+`build-windows/bin/` 与 `build-windows/lib/`。
 
-```sh
-./build-windows/bin/semi_player_sdl
-./build-windows/bin/semi_player_sdl path/to/media.mp4
-```
-
-不传媒体路径时会播放随示例安装的合成 `sample.mp4`；也可以把媒体文件拖到
-`semi_player_sdl.exe` 上打开。按空格播放/暂停，左右方向键前后跳转 5 秒，F11
-切换全屏，Esc 退出。详细设计与线程边界见
-[`examples/sdl_player/README.md`](examples/sdl_player/README.md)。
-
-### 发布版本构建与安装目录
-
-`windows-release` 预设只构建发布版本的 C ABI 动态库和 SDL3 示例宿主，
-不构建测试程序：
-
-```sh
-cmake --preset windows-release
-cmake --build --preset windows-release
-cmake --install build-windows-release --prefix out/SemiPlayer
-```
-
-安装完成后的自产物布局如下：
-
-```text
-out/SemiPlayer/
-├── bin/
-│   ├── semi_player.dll
-│   └── semi_player_sdl.exe
-├── include/semi_player/
-│   ├── semi_player.h
-│   └── status.h
-└── lib/
-    └── libsemi_player.dll.a
-```
-
-这个安装目录目前只包含 SemiPlayer 自身产物；SDL3、FFmpeg、MinGW 运行库等
-第三方依赖由独立的 `windows-portable` 预设在安装时递归收集：
+### 发布版本与便携包
 
 ```sh
 cmake --preset windows-portable
-cmake --build --preset windows-portable
-cmake --install build-windows-portable --prefix out/SemiPlayer-portable
-```
-
-便携版安装会将 SDL3、FFmpeg、spdlog、MinGW 运行库及其非系统传递依赖复制到
-`out/SemiPlayer-portable/bin/`。Windows 系统 DLL 会被排除。当前 MSYS2 FFmpeg
-启用了大量可选组件，因此目录仍然较大；后续可以通过定制 FFmpeg 构建进一步
-缩小发布包体积。
-
-生成带版本号且只包含运行组件的便携版 ZIP：
-
-```sh
 cmake --build --preset windows-portable --target package
 ```
 
-产物位于
-`out/packages/SemiPlayer-0.1.0-windows-x64-portable.zip`，解压后双击
-`bin/semi_player_sdl.exe` 即可播放随包示例。
+生成的 ZIP 位于 `out/packages/`。便携版会递归收集 SDL3、FFmpeg、spdlog、MinGW
+运行库及其非系统传递依赖，并在安装阶段生成实际依赖对应的第三方许可证清单。
 
-### 持续集成（CI）无声卡构建
+GitHub Actions 使用 `windows-ci` 预设和 `NullAudioOutputBackend`，避免持续集成环境
+依赖真实音频设备；本地 `windows-all` 与发布预设仍使用 miniaudio。
 
-GitHub Actions 使用独立的 `windows-ci` 预设，将组合根切换为
-`NullAudioOutputBackend`，避免依赖运行器的音频设备；默认 `windows-all` 仍使用
-miniaudio：
+## 当前限制与路线图
 
-```sh
-cmake --preset windows-ci
-cmake --build --preset windows-ci
-ctest --test-dir build-windows-ci --output-on-failure
-```
+- 当前只发布并持续验证 Windows x64 版本。
+- Seek 定位到相邻关键帧，尚未实现目标时间戳前的视频过滤和音频裁剪。
+- 当前视频帧经过 CPU 像素格式转换并回调宿主，尚未实现 GPU 零拷贝链路。
+- 当前不渲染字幕，播放重点是音频与视频主链路。
+- MSYS2 的完整 FFmpeg 构建包含较多可选依赖；后续可定制 FFmpeg 以缩小发布包。
+- 后续将补充真实运行演示、可复现性能基准和更多平台的构建验证。
+
+## 许可证
+
+SemiPlayer 采用 GNU 通用公共许可证第 3 版或更高版本（`GPL-3.0-or-later`），
+详见 [LICENSE](LICENSE)。二进制发布包包含自动生成的
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，以及对应 MSYS2 运行时包提供的
+许可证文件。
