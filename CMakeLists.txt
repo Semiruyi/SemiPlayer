@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.21)
 
+# CMake 4.4+: normalize runtime dependency paths before applying filters, so
+# Windows system DLLs can be excluded reliably from portable installs.
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
+
 project(SemiPlayer
     VERSION 0.1.0
     LANGUAGES CXX
@@ -33,6 +39,16 @@ option(SEMI_BUILD_SDL_PLAYER "Build the SDL3 playback example host" OFF)
 option(SEMI_USE_NULL_AUDIO_OUTPUT
        "Use the headless null audio backend in the composition root"
        OFF)
+option(SEMI_INSTALL_RUNTIME_DEPENDENCIES
+       "Install third-party runtime DLLs for a portable Windows layout"
+       OFF)
+
+if(SEMI_INSTALL_RUNTIME_DEPENDENCIES AND
+   (NOT WIN32 OR NOT SEMI_BUILD_DLL OR NOT SEMI_BUILD_SDL_PLAYER))
+    message(FATAL_ERROR
+        "SEMI_INSTALL_RUNTIME_DEPENDENCIES requires a Windows build with "
+        "SEMI_BUILD_DLL=ON and SEMI_BUILD_SDL_PLAYER=ON")
+endif()
 
 # ---- 符号可见性（全局默认）----
 # 非 Windows(ELF/Mach-O)：默认隐藏，只有头里 SEMI_API(=visibility("default")) 才导出，
@@ -80,6 +96,23 @@ endif()
 if(SEMI_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# A portable Windows install keeps every non-system runtime dependency beside
+# the executable. The compiler directory provides the UCRT64 runtime search
+# location; dependencies are resolved recursively by CMake at install time.
+if(SEMI_INSTALL_RUNTIME_DEPENDENCIES)
+    get_filename_component(SEMI_TOOLCHAIN_RUNTIME_DIRECTORY
+        "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    install(RUNTIME_DEPENDENCY_SET semi_player_runtime_dependencies
+        DIRECTORIES "${SEMI_TOOLCHAIN_RUNTIME_DIRECTORY}"
+        PRE_EXCLUDE_REGEXES
+            "^[Aa][Pp][Ii]-[Mm][Ss]-[Ww][Ii][Nn]-.*"
+            "^[Ee][Xx][Tt]-[Mm][Ss]-[Ww][Ii][Nn]-.*"
+        POST_EXCLUDE_REGEXES
+            "^[A-Za-z]:[/\\\\][Ww][Ii][Nn][Dd][Oo][Ww][Ss][/\\\\].*"
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
 endif()
 
 # ---- Public headers ----

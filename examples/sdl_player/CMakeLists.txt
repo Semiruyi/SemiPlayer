@@ -25,5 +25,6 @@ if(WIN32)
 endif()
 
 install(TARGETS semi_player_sdl
+    RUNTIME_DEPENDENCY_SET semi_player_runtime_dependencies
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

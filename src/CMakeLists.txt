@@ -53,6 +53,7 @@ if(SEMI_BUILD_DLL)
     endif()
 
     install(TARGETS semi_player
+        RUNTIME_DEPENDENCY_SET semi_player_runtime_dependencies
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

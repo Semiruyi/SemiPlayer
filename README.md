@@ -121,7 +121,18 @@ out/SemiPlayer/
 ```
 
 这个安装目录目前只包含 SemiPlayer 自身产物；SDL3、FFmpeg、MinGW runtime 等
-第三方运行库将在后续 portable 打包步骤中递归收集。
+第三方运行库由独立的 `windows-portable` preset 在安装时递归收集：
+
+```sh
+cmake --preset windows-portable
+cmake --build --preset windows-portable
+cmake --install build-windows-portable --prefix out/SemiPlayer-portable
+```
+
+portable 安装会将 SDL3、FFmpeg、spdlog、MinGW runtime 及其非系统传递依赖复制到
+`out/SemiPlayer-portable/bin/`。Windows 系统 DLL 会被排除。当前 MSYS2 FFmpeg
+启用了大量可选组件，因此目录仍然较大；正式分发前还需要完成许可证审计和精简
+FFmpeg 构建。
 
 ### CI 无声卡构建
 

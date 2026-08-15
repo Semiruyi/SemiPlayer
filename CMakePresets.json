@@ -34,11 +34,21 @@
         "SEMI_BUILD_TESTS": "OFF",
         "SEMI_BUILD_SDL_PLAYER": "ON"
       }
+    },
+    {
+      "name": "windows-portable",
+      "inherits": "windows-release",
+      "displayName": "Windows UCRT64 Portable (Release + runtime DLLs)",
+      "binaryDir": "${sourceDir}/build-windows-portable",
+      "cacheVariables": {
+        "SEMI_INSTALL_RUNTIME_DEPENDENCIES": "ON"
+      }
     }
   ],
   "buildPresets": [
     { "name": "windows-all", "configurePreset": "windows-all" },
     { "name": "windows-ci", "configurePreset": "windows-ci" },
-    { "name": "windows-release", "configurePreset": "windows-release" }
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    { "name": "windows-portable", "configurePreset": "windows-portable" }
   ]
 }
