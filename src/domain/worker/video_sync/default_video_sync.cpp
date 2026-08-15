@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <exception>
 #include <chrono>
 #include <string>
 #include <utility>
@@ -14,6 +15,13 @@
 
 namespace semi::domain {
 namespace {
+
+void require_state_transition(bool succeeded) noexcept {
+    assert(succeeded);
+    if (!succeeded) [[unlikely]] {
+        std::terminate();
+    }
+}
 
 VideoSyncError invalid_state(std::string message) {
     return VideoSyncError{
@@ -146,8 +154,7 @@ void DefaultVideoSync::unconfigure() noexcept {
 void DefaultVideoSync::worker_main() noexcept {
     std::unique_lock lock(mutex_);
     if (worker_state_ == WorkerState::Starting) {
-        const bool started = transition_worker_locked(WorkerEvent::Started);
-        assert(started);
+        require_state_transition(transition_worker_locked(WorkerEvent::Started));
     }
     cv_.notify_all();
 
@@ -183,8 +190,7 @@ void DefaultVideoSync::worker_main() noexcept {
         }
     }
 
-    const bool stopped = transition_worker_locked(WorkerEvent::Stopped);
-    assert(stopped);
+    require_state_transition(transition_worker_locked(WorkerEvent::Stopped));
     cv_.notify_all();
 }
 
@@ -194,8 +200,7 @@ void DefaultVideoSync::shutdown_worker() noexcept {
         if (worker_state_ == WorkerState::Stopped) {
             return;
         }
-        const bool requested = transition_worker_locked(WorkerEvent::ShutdownRequested);
-        assert(requested);
+        require_state_transition(transition_worker_locked(WorkerEvent::ShutdownRequested));
     }
     cv_.notify_one();
     if (worker_.joinable()) {
@@ -217,8 +222,7 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
     if (!video_rendered_source_ || !notifier_ || !generation_ ||
         (command.options.audio_master && !audio_output_)) {
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::ConfigureFailed));
         command.completion.set_value(
             std::unexpected(internal_error("video sync dependencies are unavailable")));
         return;
@@ -242,8 +246,7 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
         pending_frame_.reset();
         next_wake_deadline_.reset();
         reset_local_clock();
-        const bool succeeded = transition_session_locked(SessionEvent::ConfigureSucceeded);
-        assert(succeeded);
+        require_state_transition(transition_session_locked(SessionEvent::ConfigureSucceeded));
         command.completion.set_value(std::expected<void, VideoSyncError>{});
     }
 }
@@ -291,8 +294,7 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
         return;
     }
 
-    const bool requested = transition_session_locked(SessionEvent::UnconfigureRequested);
-    assert(requested);
+    require_state_transition(transition_session_locked(SessionEvent::UnconfigureRequested));
     playback_enabled_ = false;
     paused_generation_pending_ = false;
     input_not_empty_hint_ = false;
@@ -308,8 +310,7 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
     next_wake_deadline_.reset();
     active_generation_ = 0;
     reset_local_clock();
-    const bool succeeded = transition_session_locked(SessionEvent::UnconfigureSucceeded);
-    assert(succeeded);
+    require_state_transition(transition_session_locked(SessionEvent::UnconfigureSucceeded));
     command.completion.set_value();
 }
 

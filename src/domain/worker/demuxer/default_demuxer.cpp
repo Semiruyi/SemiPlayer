@@ -5,12 +5,20 @@
 #include "domain/worker/demuxer/demuxer_events.hpp"
 
 #include <cassert>
+#include <exception>
 #include <concepts>
 #include <variant>
 #include <utility>
 
 namespace semi::domain {
 namespace {
+
+void require_state_transition(bool succeeded) noexcept {
+    assert(succeeded);
+    if (!succeeded) [[unlikely]] {
+        std::terminate();
+    }
+}
 
 template <typename... Functions>
 struct Overloaded : Functions... {
@@ -144,8 +152,7 @@ void DefaultDemuxer::close() noexcept {
 void DefaultDemuxer::worker_main() noexcept {
     std::unique_lock lock(mutex_);
     if (worker_state_ == WorkerState::Starting) {
-        const bool started = transition_worker_locked(WorkerEvent::Started);
-        assert(started);
+        require_state_transition(transition_worker_locked(WorkerEvent::Started));
     }
     cv_.notify_all();
     for (;;) {
@@ -172,8 +179,7 @@ void DefaultDemuxer::worker_main() noexcept {
             lock.lock();
         }
     }
-    const bool stopped = transition_worker_locked(WorkerEvent::Stopped);
-    assert(stopped);
+    require_state_transition(transition_worker_locked(WorkerEvent::Stopped));
     cv_.notify_all();
 }
 
@@ -183,8 +189,7 @@ void DefaultDemuxer::shutdown_worker() noexcept {
         if (worker_state_ == WorkerState::Stopped) {
             return;
         }
-        const bool requested = transition_worker_locked(WorkerEvent::ShutdownRequested);
-        assert(requested);
+        require_state_transition(transition_worker_locked(WorkerEvent::ShutdownRequested));
     }
     cv_.notify_one();
     if (worker_.joinable()) {
@@ -210,8 +215,7 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
 
     if (!backend || !generation_) {
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::OpenFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::OpenFailed));
         command.completion.set_value(std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = "demuxer dependencies are unavailable",
@@ -224,8 +228,7 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
     if (!probe) {
         backend->close();
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::OpenFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::OpenFailed));
         command.completion.set_value(std::unexpected(backend_failure(std::move(probe.error()))));
         return;
     }
@@ -234,8 +237,7 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
     if (result.audio && !audio_packet_sink_) {
         backend->close();
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::OpenFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::OpenFailed));
         command.completion.set_value(std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = "audio packet sink is unavailable",
@@ -259,8 +261,7 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
         video_end_of_input_accepted_ = false;
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
         video_queue_not_full_hint_.store(false, std::memory_order_release);
-        const bool opened = transition_session_locked(SessionEvent::OpenSucceeded);
-        assert(opened);
+        require_state_transition(transition_session_locked(SessionEvent::OpenSucceeded));
     }
     command.completion.set_value(std::move(result));
 }
@@ -309,8 +310,7 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
         video_end_of_input_accepted_ = false;
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
         video_queue_not_full_hint_.store(false, std::memory_order_release);
-        const bool resumed = transition_session_locked(SessionEvent::SeekSucceeded);
-        assert(resumed);
+        require_state_transition(transition_session_locked(SessionEvent::SeekSucceeded));
     }
     command.completion.set_value({});
 }
@@ -320,8 +320,7 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Closed) {
-            const bool requested = transition_session_locked(SessionEvent::CloseRequested);
-            assert(requested);
+            require_state_transition(transition_session_locked(SessionEvent::CloseRequested));
             backend = backend_;
         }
     }
@@ -341,8 +340,7 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
         audio_queue_not_full_hint_.store(false, std::memory_order_release);
         video_queue_not_full_hint_.store(false, std::memory_order_release);
         if (session_state_ == SessionState::Closing) {
-            const bool closed = transition_session_locked(SessionEvent::Closed);
-            assert(closed);
+            require_state_transition(transition_session_locked(SessionEvent::Closed));
         }
     }
     command.completion.set_value();
@@ -582,8 +580,7 @@ void DefaultDemuxer::maybe_transition_to_exhausted_locked() noexcept {
         return;
     }
 
-    const bool exhausted = transition_session_locked(SessionEvent::InputExhausted);
-    assert(exhausted);
+    require_state_transition(transition_session_locked(SessionEvent::InputExhausted));
 }
 
 void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
@@ -593,8 +590,7 @@ void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
         if (worker_state_ != WorkerState::ShuttingDown &&
             session_state_ == SessionState::Running) {
             pending_output_.reset();
-            const bool failed = transition_session_locked(SessionEvent::BackendFailed);
-            assert(failed);
+            require_state_transition(transition_session_locked(SessionEvent::BackendFailed));
             should_notify = true;
         }
     }

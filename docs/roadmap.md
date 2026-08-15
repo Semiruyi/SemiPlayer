@@ -23,16 +23,6 @@
 
 ## 近期：质量与可交付性
 
-### 无警告 Release 构建
-
-当前 Release 模式会报告部分仅供 `assert` 检查的局部变量未使用。目标不是简单屏蔽
-所有警告，而是让状态转换失败在 Debug 和 Release 中都具有清晰语义。
-
-验收标准：
-
-- GCC/Clang 的 `-Wall -Wextra -Wpedantic` Release 构建无项目源码警告。
-- 现有自动化测试保持通过。
-
 ### 自动化 Release
 
 将当前本地打包流程迁移到标签触发的 GitHub Actions：

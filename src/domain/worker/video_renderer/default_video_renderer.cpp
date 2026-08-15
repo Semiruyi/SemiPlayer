@@ -5,6 +5,7 @@
 #include "domain/worker/video_renderer/video_renderer_events.hpp"
 
 #include <cassert>
+#include <exception>
 #include <optional>
 #include <string>
 #include <utility>
@@ -12,6 +13,13 @@
 
 namespace semi::domain {
 namespace {
+
+void require_state_transition(bool succeeded) noexcept {
+    assert(succeeded);
+    if (!succeeded) [[unlikely]] {
+        std::terminate();
+    }
+}
 
 VideoRendererError invalid_state(std::string message) {
     return VideoRendererError{
@@ -107,8 +115,7 @@ void DefaultVideoRenderer::unconfigure() noexcept {
 void DefaultVideoRenderer::worker_main() noexcept {
     std::unique_lock lock(mutex_);
     if (worker_state_ == WorkerState::Starting) {
-        const bool started = transition_worker_locked(WorkerEvent::Started);
-        assert(started);
+        require_state_transition(transition_worker_locked(WorkerEvent::Started));
     }
     cv_.notify_all();
     for (;;) {
@@ -136,8 +143,7 @@ void DefaultVideoRenderer::worker_main() noexcept {
             lock.lock();
         }
     }
-    const bool stopped = transition_worker_locked(WorkerEvent::Stopped);
-    assert(stopped);
+    require_state_transition(transition_worker_locked(WorkerEvent::Stopped));
     cv_.notify_all();
 }
 
@@ -147,8 +153,7 @@ void DefaultVideoRenderer::shutdown_worker() noexcept {
         if (worker_state_ == WorkerState::Stopped) {
             return;
         }
-        const bool requested = transition_worker_locked(WorkerEvent::ShutdownRequested);
-        assert(requested);
+        require_state_transition(transition_worker_locked(WorkerEvent::ShutdownRequested));
     }
     cv_.notify_one();
     if (worker_.joinable()) {
@@ -169,8 +174,7 @@ void DefaultVideoRenderer::process_command(ConfigureCommand& command) noexcept {
 
     if (!backend_ || !video_frame_source_ || !video_rendered_sink_ || !notifier_ || !generation_) {
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::ConfigureFailed));
         command.completion.set_value(
             std::unexpected(invalid_state("video renderer dependencies are unavailable")));
         return;
@@ -187,8 +191,7 @@ void DefaultVideoRenderer::process_command(ConfigureCommand& command) noexcept {
     if (!configured) {
         backend_->unconfigure();
         std::lock_guard lock(mutex_);
-        const bool failed = transition_session_locked(SessionEvent::ConfigureFailed);
-        assert(failed);
+        require_state_transition(transition_session_locked(SessionEvent::ConfigureFailed));
         command.completion.set_value(std::unexpected(VideoRendererError{
             .code = VideoRendererErrorCode::BackendFailure,
             .message = configured.error().message,
@@ -203,8 +206,7 @@ void DefaultVideoRenderer::process_command(ConfigureCommand& command) noexcept {
     input_exhausted_ = false;
     input_not_empty_hint_ = true;
     output_not_full_hint_ = true;
-    const bool succeeded = transition_session_locked(SessionEvent::ConfigureSucceeded);
-    assert(succeeded);
+    require_state_transition(transition_session_locked(SessionEvent::ConfigureSucceeded));
     command.completion.set_value(std::expected<void, VideoRendererError>{});
 }
 
@@ -215,8 +217,7 @@ void DefaultVideoRenderer::process_command(UnconfigureCommand& command) noexcept
             command.completion.set_value();
             return;
         }
-        const bool requested = transition_session_locked(SessionEvent::UnconfigureRequested);
-        assert(requested);
+        require_state_transition(transition_session_locked(SessionEvent::UnconfigureRequested));
     }
 
     if (backend_) {
@@ -229,8 +230,7 @@ void DefaultVideoRenderer::process_command(UnconfigureCommand& command) noexcept
     input_exhausted_ = false;
     input_not_empty_hint_ = false;
     output_not_full_hint_ = false;
-    const bool succeeded = transition_session_locked(SessionEvent::UnconfigureSucceeded);
-    assert(succeeded);
+    require_state_transition(transition_session_locked(SessionEvent::UnconfigureSucceeded));
     command.completion.set_value();
 }
 
@@ -439,8 +439,7 @@ void DefaultVideoRenderer::handle_backend_failure(VideoRendererBackendError erro
             pending_outputs_.clear();
             input_not_empty_hint_ = false;
             output_not_full_hint_ = false;
-            const bool failed = transition_session_locked(SessionEvent::BackendFailed);
-            assert(failed);
+            require_state_transition(transition_session_locked(SessionEvent::BackendFailed));
             should_notify = true;
         }
     }
