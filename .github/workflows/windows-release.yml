@@ -1,0 +1,141 @@
+name: Windows Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package-and-release:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Preserve repository line endings
+        shell: pwsh
+        run: git config --global core.autocrlf input
+
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up MSYS2 UCRT64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-spdlog
+            mingw-w64-ucrt-x86_64-gtest
+            mingw-w64-ucrt-x86_64-ffmpeg
+            mingw-w64-ucrt-x86_64-miniaudio
+            mingw-w64-ucrt-x86_64-sdl3
+
+      - name: Report toolchain versions
+        run: |
+          c++ --version
+          cmake --version
+          ninja --version
+          ffmpeg -version | head -n 1
+
+      - name: Check release version
+        run: |
+          set -euo pipefail
+          tag_version="${GITHUB_REF_NAME#v}"
+          project_version="$(sed -nE 's/^[[:space:]]*VERSION[[:space:]]+([0-9][0-9A-Za-z.-]*).*$/\1/p' CMakeLists.txt | head -n 1)"
+          if [ -z "$project_version" ] || [ "$tag_version" != "$project_version" ]; then
+            echo "Release tag $GITHUB_REF_NAME must match CMake project version $project_version" >&2
+            exit 1
+          fi
+
+      - name: Configure test build
+        run: cmake --preset windows-ci
+
+      - name: Build test target
+        run: cmake --build --preset windows-ci
+
+      - name: Run tests
+        run: ctest --test-dir build-windows-ci --output-on-failure --no-tests=error
+
+      - name: Configure portable release
+        run: cmake --preset windows-portable
+
+      - name: Build portable package
+        run: cmake --build --preset windows-portable --target package
+
+      - name: Generate package checksums
+        run: |
+          set -euo pipefail
+          packages=(out/packages/*.zip)
+          if [ ! -f "${packages[0]}" ]; then
+            echo "No portable package was generated" >&2
+            exit 1
+          fi
+          (
+            cd out/packages
+            sha256sum *.zip > SHA256SUMS.txt
+          )
+          ls -lh out/packages
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SemiPlayer-${{ github.ref_name }}
+          path: |
+            out/packages/*.zip
+            out/packages/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME
+          $packageDirectory = Join-Path $env:GITHUB_WORKSPACE 'out/packages'
+          $assets = @(
+              Get-ChildItem -LiteralPath $packageDirectory -File |
+                  Where-Object { $_.Extension -eq '.zip' -or $_.Name -eq 'SHA256SUMS.txt' } |
+                  Sort-Object Name |
+                  ForEach-Object { $_.FullName }
+          )
+          if ($assets.Count -lt 2) {
+              throw "Expected a ZIP package and SHA256SUMS.txt in $packageDirectory"
+          }
+
+          & gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+              $uploadArgs = @('release', 'upload', $tag) + $assets + @(
+                  '--clobber',
+                  '--repo', $env:GITHUB_REPOSITORY
+              )
+              & gh @uploadArgs
+          }
+          else {
+              $createArgs = @('release', 'create', $tag) + $assets + @(
+                  '--verify-tag',
+                  '--repo', $env:GITHUB_REPOSITORY,
+                  '--title', "SemiPlayer $tag",
+                  '--generate-notes'
+              )
+              & gh @createArgs
+          }
+          if ($LASTEXITCODE -ne 0) {
+              throw "GitHub Release operation failed with exit code $LASTEXITCODE"
+          }

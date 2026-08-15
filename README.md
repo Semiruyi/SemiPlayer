@@ -177,6 +177,16 @@ cmake --build --preset windows-portable --target package
 生成的 ZIP 位于 `out/packages/`。便携版会递归收集 SDL3、FFmpeg、spdlog、MinGW
 运行库及其非系统传递依赖，并在安装阶段生成实际依赖对应的第三方许可证清单。
 
+推送与 `CMakeLists.txt` 中项目版本一致的 `v*` 标签，会触发 GitHub Actions 自动发布：
+
+```sh
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+工作流会先执行完整测试，再生成 Windows x64 便携 ZIP、`SHA256SUMS.txt`，并将它们上传到
+对应的 GitHub Release。创建新标签前，请先同步更新 `CMakeLists.txt` 的 `project(VERSION ...)`。
+
 GitHub Actions 使用 `windows-ci` 预设和 `NullAudioOutputBackend`，避免持续集成环境
 依赖真实音频设备；本地 `windows-all` 与发布预设仍使用 miniaudio。
 
