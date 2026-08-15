@@ -24,7 +24,18 @@ if(WIN32)
     )
 endif()
 
+add_custom_command(TARGET semi_player_sdl POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/sample.mp4
+        $<TARGET_FILE_DIR:semi_player_sdl>/sample.mp4
+    COMMENT "Copy the bundled sample next to the SDL player host"
+)
+
 install(TARGETS semi_player_sdl
     RUNTIME_DEPENDENCY_SET semi_player_runtime_dependencies
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+install(FILES sample.mp4
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
 )

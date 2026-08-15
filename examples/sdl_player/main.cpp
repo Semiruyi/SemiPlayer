@@ -13,6 +13,7 @@
 #include <exception>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <string_view>
 #include <thread>
 
@@ -406,14 +407,31 @@ private:
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: %s <media-file>\n", argc > 0 ? argv[0] : "semi_player_sdl");
+    if (argc > 2) {
+        std::fprintf(stderr, "usage: %s [media-file]\n",
+                     argc > 0 ? argv[0] : "semi_player_sdl");
         return 2;
+    }
+
+    std::string bundled_media_path;
+    const char* media_path = nullptr;
+    if (argc == 2) {
+        media_path = argv[1];
+    } else {
+        const char* base_path = SDL_GetBasePath();
+        if (base_path == nullptr) {
+            std::fprintf(stderr, "[sdl host] could not locate bundled sample: %s\n",
+                         SDL_GetError());
+            return 1;
+        }
+        bundled_media_path = std::string(base_path) + "sample.mp4";
+        media_path = bundled_media_path.c_str();
+        std::printf("[sdl host] playing bundled sample: %s\n", media_path);
     }
 
     try {
         SdlPlayerApplication application;
-        if (!application.initialize(argv[1])) {
+        if (!application.initialize(media_path)) {
             return 1;
         }
         return application.run();

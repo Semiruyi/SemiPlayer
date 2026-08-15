@@ -17,7 +17,22 @@ Install SDL3 together with the other UCRT64 dependencies:
 pacman -S --needed mingw-w64-ucrt-x86_64-sdl3
 cmake --preset windows-all
 cmake --build --preset windows-all
+./build-windows/bin/semi_player_sdl.exe
 ./build-windows/bin/semi_player_sdl.exe path/to/media.mp4
+```
+
+With no media argument, the host plays the synthetic `sample.mp4` copied next
+to the executable. Passing a path, including by dragging a media file onto the
+executable on Windows, plays that file instead.
+
+The bundled sample contains only FFmpeg-generated test video and a sine wave.
+It can be reproduced with:
+
+```sh
+ffmpeg -f lavfi -i "testsrc2=size=640x360:rate=30" \
+  -f lavfi -i "sine=frequency=440:sample_rate=48000" -t 5 \
+  -c:v libx264 -preset veryfast -crf 28 -pix_fmt yuv420p \
+  -c:a aac -b:a 96k -movflags +faststart sample.mp4
 ```
 
 Controls:

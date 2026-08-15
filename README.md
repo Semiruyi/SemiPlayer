@@ -89,10 +89,13 @@ ctest --test-dir build-windows
 运行 SDL3 播放宿主：
 
 ```sh
+./build-windows/bin/semi_player_sdl
 ./build-windows/bin/semi_player_sdl path/to/media.mp4
 ```
 
-按空格播放/暂停，左右方向键前后跳转 5 秒，F11 切换全屏，Esc 退出。详细设计与线程边界见
+不传媒体路径时会播放随示例安装的合成 `sample.mp4`；也可以把媒体文件拖到
+`semi_player_sdl.exe` 上打开。按空格播放/暂停，左右方向键前后跳转 5 秒，F11
+切换全屏，Esc 退出。详细设计与线程边界见
 [`examples/sdl_player/README.md`](examples/sdl_player/README.md)。
 
 ### Release 构建与安装目录
