@@ -7,6 +7,7 @@
 #include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/video_sync/video_sync.hpp"
 #include "domain/worker/video_sync/video_sync_events.hpp"
+#include "domain/worker/video_sync/video_sync_telemetry.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <chrono>
@@ -28,7 +29,8 @@ public:
     DefaultVideoSync(std::shared_ptr<VideoRenderedSource> video_rendered_source,
                      std::shared_ptr<AudioOutput> audio_output,
                      std::shared_ptr<infra::Notifier> notifier,
-                     std::shared_ptr<Generation> generation);
+                     std::shared_ptr<Generation> generation,
+                     std::shared_ptr<VideoSyncTelemetry> telemetry = nullptr);
     ~DefaultVideoSync() override;
 
     DefaultVideoSync(const DefaultVideoSync&) = delete;
@@ -130,7 +132,8 @@ private:
     void pause_local_clock() noexcept;
     void resume_local_clock() noexcept;
     void reset_local_clock() noexcept;
-    void present_frame(RenderedVideoFrame&& frame) noexcept;
+    void present_frame(RenderedVideoFrame&& frame,
+                       std::optional<std::int64_t> clock_pts) noexcept;
     void notify_playback_finished_if_needed() noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
@@ -140,6 +143,7 @@ private:
     std::shared_ptr<AudioOutput> audio_output_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<Generation> generation_;
+    std::shared_ptr<VideoSyncTelemetry> telemetry_;
 
     std::shared_ptr<infra::Notifier::Subscription>
         video_rendered_store_not_empty_subscription_;

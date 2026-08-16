@@ -14,6 +14,7 @@
 #include "domain/worker/video_decoder/default_video_decoder.hpp"
 #include "domain/worker/video_renderer/default_video_renderer.hpp"
 #include "domain/worker/video_sync/default_video_sync.hpp"
+#include "domain/worker/video_sync/video_sync_metrics.hpp"
 #include "infrastructure/audio_output/miniaudio_audio_output_backend.hpp"
 #include "infrastructure/audio_output/null_audio_output_backend.hpp"
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
@@ -82,8 +83,9 @@ bool IoCContainer::assemble() noexcept {
             video_packet_queue, video_frame_store, video_decoder_backend, notifier, generation);
         auto video_renderer = std::make_shared<domain::DefaultVideoRenderer>(
             video_frame_store, video_rendered_store, video_renderer_backend, notifier, generation);
+        auto video_sync_metrics = std::make_shared<domain::VideoSyncMetrics>();
         auto video_sync = std::make_shared<domain::DefaultVideoSync>(
-            video_rendered_store, audio_output, notifier, generation);
+            video_rendered_store, audio_output, notifier, generation, video_sync_metrics);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
             demuxer,
