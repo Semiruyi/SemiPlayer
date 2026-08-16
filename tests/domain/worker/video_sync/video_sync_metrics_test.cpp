@@ -18,6 +18,9 @@ TEST(VideoSyncMetricsTest, AccumulatesPresentationAndSchedulingFacts) {
     metrics.on_wait_scheduled(1'000);
     metrics.on_wait_scheduled(3'000);
     metrics.on_wait_overshoot(40);
+    metrics.on_wakeup_error(120, 80);
+    metrics.on_wakeup_error(-40, 20);
+    metrics.on_busy_wait(300);
     metrics.on_frame_presented(VideoSyncPresentationObservation{
         .frame_pts_us = 100,
         .clock_pts_us = 250,
@@ -41,6 +44,16 @@ TEST(VideoSyncMetricsTest, AccumulatesPresentationAndSchedulingFacts) {
     EXPECT_EQ(snapshot.wait_overshoot_total_us, 40U);
     EXPECT_EQ(snapshot.max_wait_overshoot_us, 40U);
     EXPECT_DOUBLE_EQ(snapshot.wait_overshoot_average_us, 40.0);
+    EXPECT_EQ(snapshot.wakeup_error_events, 2U);
+    EXPECT_EQ(snapshot.wakeup_error_total_us, 80);
+    EXPECT_EQ(snapshot.max_wakeup_lateness_us, 120U);
+    EXPECT_EQ(snapshot.max_wakeup_earliness_us, 40U);
+    EXPECT_DOUBLE_EQ(snapshot.wakeup_error_average_us, 40.0);
+    EXPECT_EQ(snapshot.wakeup_compensation_us, 20);
+    EXPECT_EQ(snapshot.busy_wait_events, 1U);
+    EXPECT_EQ(snapshot.busy_wait_total_us, 300U);
+    EXPECT_EQ(snapshot.max_busy_wait_us, 300U);
+    EXPECT_DOUBLE_EQ(snapshot.busy_wait_average_us, 300.0);
     EXPECT_EQ(snapshot.presented_late_frames, 1U);
     EXPECT_EQ(snapshot.presented_lateness_total_us, 150U);
     EXPECT_EQ(snapshot.max_presented_lateness_us, 150U);

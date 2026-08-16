@@ -31,6 +31,18 @@ struct VideoSyncMetricsSnapshot final {
     std::uint64_t max_wait_overshoot_us = 0;
     double wait_overshoot_average_us = 0.0;
 
+    std::uint64_t wakeup_error_events = 0;
+    std::int64_t wakeup_error_total_us = 0;
+    std::uint64_t max_wakeup_lateness_us = 0;
+    std::uint64_t max_wakeup_earliness_us = 0;
+    double wakeup_error_average_us = 0.0;
+    std::int64_t wakeup_compensation_us = 0;
+
+    std::uint64_t busy_wait_events = 0;
+    std::uint64_t busy_wait_total_us = 0;
+    std::uint64_t max_busy_wait_us = 0;
+    double busy_wait_average_us = 0.0;
+
     std::uint64_t presented_late_frames = 0;
     std::uint64_t presented_lateness_total_us = 0;
     std::uint64_t max_presented_lateness_us = 0;
@@ -57,6 +69,9 @@ public:
     void on_audio_clock_unavailable() noexcept override;
     void on_wait_scheduled(std::uint64_t target_us) noexcept override;
     void on_wait_overshoot(std::uint64_t overshoot_us) noexcept override;
+    void on_wakeup_error(std::int64_t error_us,
+                         std::int64_t compensation_us) noexcept override;
+    void on_busy_wait(std::uint64_t duration_us) noexcept override;
     void on_frame_presented(
         const VideoSyncPresentationObservation& observation) noexcept override;
     void on_session_finished(std::string_view reason) noexcept override;
@@ -83,6 +98,16 @@ private:
     std::uint64_t wait_overshoot_events_ = 0;
     std::uint64_t wait_overshoot_total_us_ = 0;
     std::uint64_t max_wait_overshoot_us_ = 0;
+
+    std::uint64_t wakeup_error_events_ = 0;
+    std::int64_t wakeup_error_total_us_ = 0;
+    std::uint64_t max_wakeup_lateness_us_ = 0;
+    std::uint64_t max_wakeup_earliness_us_ = 0;
+    std::int64_t wakeup_compensation_us_ = 0;
+
+    std::uint64_t busy_wait_events_ = 0;
+    std::uint64_t busy_wait_total_us_ = 0;
+    std::uint64_t max_busy_wait_us_ = 0;
 
     std::uint64_t presented_late_frames_ = 0;
     std::uint64_t presented_lateness_total_us_ = 0;

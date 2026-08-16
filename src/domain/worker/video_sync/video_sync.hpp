@@ -1,7 +1,9 @@
 #pragma once
 
 #include "domain/resource/video_rendered_store/video_rendered_store_source.hpp"
+#include "domain/worker/video_sync/video_sync_wakeup.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -25,6 +27,7 @@ struct VideoSyncOptions {
     // Audio is the master clock when the opened media has an audio stream.
     // Video-only media uses the local monotonic clock fallback.
     bool audio_master = true;
+    VideoSyncWakeupOptions wakeup{};
     std::function<void(const RenderedVideoFrame&)> on_frame;
 };
 

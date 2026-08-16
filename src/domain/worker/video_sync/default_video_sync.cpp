@@ -182,8 +182,23 @@ void DefaultVideoSync::worker_main() noexcept {
             return worker_state_ == WorkerState::ShuttingDown || !commands_.empty() ||
                    should_process_data_locked();
         };
-        if (const auto next_wake_deadline = scheduler_.next_wake_deadline()) {
-            cv_.wait_until(lock, *next_wake_deadline, predicate);
+        if (const auto presentation_deadline =
+                scheduler_.next_presentation_deadline()) {
+            const auto wake_deadline = wakeup_.wake_deadline(*presentation_deadline);
+            const auto wait_status = cv_.wait_until(lock, wake_deadline);
+            const auto actual_wakeup = Clock::now();
+            const bool interrupted_by_event =
+                wait_status == std::cv_status::no_timeout &&
+                (worker_state_ == WorkerState::ShuttingDown ||
+                 !commands_.empty() || generation_changed_hint_ ||
+                 audio_position_ready_hint_ || audio_playback_finished_hint_ ||
+                 input_.has_available_hint());
+            if (!interrupted_by_event) {
+                if (const auto observation = wakeup_.observe_timer_wakeup(
+                        *presentation_deadline, actual_wakeup)) {
+                    record_wakeup_observation(*observation);
+                }
+            }
         } else {
             cv_.wait(lock, predicate);
         }
@@ -242,6 +257,7 @@ void DefaultVideoSync::process_command(ConfigureCommand& command) noexcept {
         input_.mark_available();
         clock_.configure(options_.audio_master, active_generation_);
         scheduler_.reset();
+        wakeup_.configure(options_.wakeup);
         require_state_transition(transition_session_locked(SessionEvent::ConfigureSucceeded));
         command.completion.set_value(std::expected<void, VideoSyncError>{});
     }
@@ -260,6 +276,7 @@ void DefaultVideoSync::process_command(StartPlaybackCommand& command) noexcept {
         playback_enabled_ = true;
         input_.mark_available();
         scheduler_.on_playback_started();
+        wakeup_.clear_active_plan();
         clock_.resume();
         command.completion.set_value(std::expected<void, VideoSyncError>{});
     }
@@ -279,6 +296,7 @@ void DefaultVideoSync::process_command(PausePlaybackCommand& command) noexcept {
     }
     playback_enabled_ = false;
     scheduler_.on_playback_paused();
+    wakeup_.clear_active_plan();
     command.completion.set_value(std::expected<void, VideoSyncError>{});
 }
 
@@ -299,6 +317,7 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
         active_generation_ = 0;
         input_.reset();
         scheduler_.reset();
+        wakeup_.reset();
         clock_.reset();
         require_state_transition(transition_session_locked(SessionEvent::UnconfigureSucceeded));
     }
@@ -306,7 +325,7 @@ void DefaultVideoSync::process_command(UnconfigureCommand& command) noexcept {
     command.completion.set_value();
 }
 
-bool DefaultVideoSync::should_process_data_locked() const noexcept {
+bool DefaultVideoSync::should_process_data_locked() noexcept {
     if (session_state_ != SessionState::Configured) {
         return false;
     }
@@ -329,8 +348,9 @@ bool DefaultVideoSync::should_process_data_locked() const noexcept {
         if (scheduler_.waiting_for_resume()) {
             return playback_enabled_;
         }
-        if (const auto next_wake_deadline = scheduler_.next_wake_deadline()) {
-            return Clock::now() >= *next_wake_deadline;
+        if (const auto presentation_deadline =
+                scheduler_.next_presentation_deadline()) {
+            return Clock::now() >= wakeup_.wake_deadline(*presentation_deadline);
         }
         return true;
     }
@@ -354,12 +374,21 @@ void DefaultVideoSync::process_data_step() noexcept {
         return;
     }
 
+    if (const auto presentation_deadline =
+            scheduler_.next_presentation_deadline()) {
+        if (const auto busy_wait_us =
+                wakeup_.wait_for_target(*presentation_deadline)) {
+            telemetry_->on_busy_wait(*busy_wait_us);
+        }
+    }
+
     auto result = scheduler_.step(input_, clock_, active_generation_, playback_enabled_);
     record_schedule_observations(result);
     if (result.frame) {
         present_frame(std::move(*result.frame), result.presentation_clock_pts_us);
         scheduler_.on_frame_presented(playback_enabled_);
     }
+    wakeup_.clear_active_plan();
     notify_playback_finished_if_needed();
 }
 
@@ -393,6 +422,7 @@ void DefaultVideoSync::adopt_generation_if_needed() noexcept {
     input_.mark_available();
     clock_.on_generation_changed(active_generation_);
     scheduler_.on_generation_changed(playback_enabled_);
+    wakeup_.clear_active_plan();
 }
 
 void DefaultVideoSync::adopt_audio_playback_finished_if_needed() noexcept {
@@ -405,7 +435,14 @@ void DefaultVideoSync::adopt_audio_playback_finished_if_needed() noexcept {
     audio_playback_finished_hint_ = false;
     clock_.on_audio_playback_finished(playback_enabled_);
     scheduler_.on_audio_playback_finished();
+    wakeup_.clear_active_plan();
     input_.mark_available();
+}
+
+void DefaultVideoSync::record_wakeup_observation(
+    const VideoSyncWakeupObservation& observation) noexcept {
+    telemetry_->on_wakeup_error(observation.error_us,
+                                observation.compensation_us);
 }
 
 void DefaultVideoSync::record_schedule_observations(

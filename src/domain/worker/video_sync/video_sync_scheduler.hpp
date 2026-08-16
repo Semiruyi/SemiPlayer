@@ -25,8 +25,10 @@ struct VideoSyncScheduleResult final {
 };
 
 // Chooses which rendered frame should be presented next. It owns only
-// worker-thread scheduling state: the pending frame, catch-up policy and wake
-// deadline. It does not know about Notifier, host callbacks or metrics.
+// worker-thread scheduling state: the pending frame, catch-up policy and
+// presentation deadline. It does not know about Notifier, host callbacks or
+// metrics. The wakeup controller may wait before this deadline to compensate
+// for timer latency.
 class VideoFrameScheduler final {
 public:
     using Clock = std::chrono::steady_clock;
@@ -57,7 +59,7 @@ public:
     [[nodiscard]] bool waiting_for_audio_position() const noexcept;
     [[nodiscard]] bool waiting_for_resume() const noexcept;
     [[nodiscard]] std::optional<Clock::time_point>
-    next_wake_deadline() const noexcept;
+    next_presentation_deadline() const noexcept;
 
 private:
     [[nodiscard]] bool frame_is_due(const RenderedVideoFrame& frame,
@@ -70,7 +72,7 @@ private:
                        bool playback_enabled) noexcept;
 
     std::optional<RenderedVideoFrame> pending_frame_;
-    std::optional<Clock::time_point> next_wake_deadline_;
+    std::optional<Clock::time_point> next_presentation_deadline_;
     bool paused_generation_pending_ = false;
     bool waiting_for_audio_position_ = false;
     bool waiting_for_resume_ = false;

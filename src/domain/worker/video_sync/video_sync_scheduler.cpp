@@ -40,7 +40,7 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
         }
 
         waiting_for_audio_position_ = true;
-        next_wake_deadline_.reset();
+        next_presentation_deadline_.reset();
         return result;
     }
 
@@ -55,9 +55,9 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
             return result;
         }
 
-        if (next_wake_deadline_) {
+        if (next_presentation_deadline_) {
             const auto overshoot = std::chrono::duration_cast<std::chrono::microseconds>(
-                Clock::now() - *next_wake_deadline_);
+                Clock::now() - *next_presentation_deadline_);
             if (overshoot.count() > 0) {
                 result.wait_overshoot_observed = true;
                 result.wait_overshoot_us = static_cast<std::uint64_t>(overshoot.count());
@@ -66,7 +66,7 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
 
         candidate.emplace(std::move(*pending_frame_));
         pending_frame_.reset();
-        next_wake_deadline_.reset();
+        next_presentation_deadline_.reset();
     }
 
     const bool can_drain_multiple = playback_enabled;
@@ -108,7 +108,7 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
 
 void VideoFrameScheduler::reset(bool paused_generation_pending) noexcept {
     pending_frame_.reset();
-    next_wake_deadline_.reset();
+    next_presentation_deadline_.reset();
     paused_generation_pending_ = paused_generation_pending;
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
@@ -122,13 +122,13 @@ void VideoFrameScheduler::on_playback_started() noexcept {
     paused_generation_pending_ = false;
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
-    next_wake_deadline_.reset();
+    next_presentation_deadline_.reset();
 }
 
 void VideoFrameScheduler::on_playback_paused() noexcept {
     waiting_for_audio_position_ = false;
     waiting_for_resume_ = false;
-    next_wake_deadline_.reset();
+    next_presentation_deadline_.reset();
 }
 
 void VideoFrameScheduler::on_audio_position_ready() noexcept {
@@ -137,7 +137,7 @@ void VideoFrameScheduler::on_audio_position_ready() noexcept {
 
 void VideoFrameScheduler::on_audio_playback_finished() noexcept {
     waiting_for_audio_position_ = false;
-    next_wake_deadline_.reset();
+    next_presentation_deadline_.reset();
 }
 
 void VideoFrameScheduler::on_frame_presented(bool playback_enabled) noexcept {
@@ -163,8 +163,8 @@ bool VideoFrameScheduler::waiting_for_resume() const noexcept {
 }
 
 std::optional<VideoFrameScheduler::Clock::time_point>
-VideoFrameScheduler::next_wake_deadline() const noexcept {
-    return next_wake_deadline_;
+VideoFrameScheduler::next_presentation_deadline() const noexcept {
+    return next_presentation_deadline_;
 }
 
 bool VideoFrameScheduler::frame_is_due(const RenderedVideoFrame& frame,
@@ -195,13 +195,13 @@ void VideoFrameScheduler::schedule_wait(std::int64_t frame_pts,
                                         bool playback_enabled) noexcept {
     if (!playback_enabled) {
         waiting_for_resume_ = true;
-        next_wake_deadline_.reset();
+        next_presentation_deadline_.reset();
         return;
     }
 
     waiting_for_resume_ = false;
     waiting_for_audio_position_ = false;
-    next_wake_deadline_ =
+    next_presentation_deadline_ =
         Clock::now() + std::chrono::microseconds(frame_pts - clock_pts);
 }
 

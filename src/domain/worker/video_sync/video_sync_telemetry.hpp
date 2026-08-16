@@ -35,6 +35,9 @@ public:
     virtual void on_audio_clock_unavailable() noexcept = 0;
     virtual void on_wait_scheduled(std::uint64_t target_us) noexcept = 0;
     virtual void on_wait_overshoot(std::uint64_t overshoot_us) noexcept = 0;
+    virtual void on_wakeup_error(std::int64_t error_us,
+                                 std::int64_t compensation_us) noexcept = 0;
+    virtual void on_busy_wait(std::uint64_t duration_us) noexcept = 0;
     virtual void on_frame_presented(
         const VideoSyncPresentationObservation& observation) noexcept = 0;
     virtual void on_session_finished(std::string_view reason) noexcept = 0;
@@ -54,6 +57,8 @@ public:
     void on_audio_clock_unavailable() noexcept override {}
     void on_wait_scheduled(std::uint64_t) noexcept override {}
     void on_wait_overshoot(std::uint64_t) noexcept override {}
+    void on_wakeup_error(std::int64_t, std::int64_t) noexcept override {}
+    void on_busy_wait(std::uint64_t) noexcept override {}
     void on_frame_presented(
         const VideoSyncPresentationObservation&) noexcept override {}
     void on_session_finished(std::string_view) noexcept override {}

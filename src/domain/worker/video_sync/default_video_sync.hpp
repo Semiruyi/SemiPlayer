@@ -10,6 +10,7 @@
 #include "domain/worker/video_sync/video_sync_input.hpp"
 #include "domain/worker/video_sync/video_sync_scheduler.hpp"
 #include "domain/worker/video_sync/video_sync_telemetry.hpp"
+#include "domain/worker/video_sync/video_sync_wakeup.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <chrono>
@@ -109,7 +110,7 @@ private:
     void process_command(UnconfigureCommand& command) noexcept;
     void shutdown_worker() noexcept;
 
-    [[nodiscard]] bool should_process_data_locked() const noexcept;
+    [[nodiscard]] bool should_process_data_locked() noexcept;
     void process_data_step() noexcept;
     [[nodiscard]] bool begin_data_step() noexcept;
     void adopt_generation_if_needed() noexcept;
@@ -117,6 +118,8 @@ private:
     void present_frame(RenderedVideoFrame&& frame,
                        std::optional<std::int64_t> clock_pts) noexcept;
     void notify_playback_finished_if_needed() noexcept;
+    void record_wakeup_observation(
+        const VideoSyncWakeupObservation& observation) noexcept;
     void record_schedule_observations(
         const VideoSyncScheduleResult& result) noexcept;
 
@@ -129,6 +132,7 @@ private:
     VideoSyncInput input_;
     VideoSyncClock clock_;
     VideoFrameScheduler scheduler_;
+    VideoSyncWakeupController wakeup_;
 
     std::shared_ptr<infra::Notifier::Subscription>
         video_rendered_store_not_empty_subscription_;

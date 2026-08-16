@@ -55,6 +55,27 @@ void VideoSyncMetrics::on_wait_overshoot(std::uint64_t overshoot_us) noexcept {
     max_wait_overshoot_us_ = std::max(max_wait_overshoot_us_, overshoot_us);
 }
 
+void VideoSyncMetrics::on_wakeup_error(
+    std::int64_t error_us,
+    std::int64_t compensation_us) noexcept {
+    ++wakeup_error_events_;
+    wakeup_error_total_us_ += error_us;
+    wakeup_compensation_us_ = compensation_us;
+    if (error_us > 0) {
+        max_wakeup_lateness_us_ = std::max(
+            max_wakeup_lateness_us_, static_cast<std::uint64_t>(error_us));
+    } else if (error_us < 0) {
+        max_wakeup_earliness_us_ = std::max(
+            max_wakeup_earliness_us_, static_cast<std::uint64_t>(-error_us));
+    }
+}
+
+void VideoSyncMetrics::on_busy_wait(std::uint64_t duration_us) noexcept {
+    ++busy_wait_events_;
+    busy_wait_total_us_ += duration_us;
+    max_busy_wait_us_ = std::max(max_busy_wait_us_, duration_us);
+}
+
 void VideoSyncMetrics::on_frame_presented(
     const VideoSyncPresentationObservation& observation) noexcept {
     ++frames_presented_;
@@ -92,6 +113,14 @@ VideoSyncMetricsSnapshot VideoSyncMetrics::snapshot() const noexcept {
         .wait_overshoot_events = wait_overshoot_events_,
         .wait_overshoot_total_us = wait_overshoot_total_us_,
         .max_wait_overshoot_us = max_wait_overshoot_us_,
+        .wakeup_error_events = wakeup_error_events_,
+        .wakeup_error_total_us = wakeup_error_total_us_,
+        .max_wakeup_lateness_us = max_wakeup_lateness_us_,
+        .max_wakeup_earliness_us = max_wakeup_earliness_us_,
+        .wakeup_compensation_us = wakeup_compensation_us_,
+        .busy_wait_events = busy_wait_events_,
+        .busy_wait_total_us = busy_wait_total_us_,
+        .max_busy_wait_us = max_busy_wait_us_,
         .presented_late_frames = presented_late_frames_,
         .presented_lateness_total_us = presented_lateness_total_us_,
         .max_presented_lateness_us = max_presented_lateness_us_,
@@ -117,6 +146,16 @@ VideoSyncMetricsSnapshot VideoSyncMetrics::snapshot() const noexcept {
         result.wait_overshoot_average_us =
             static_cast<double>(result.wait_overshoot_total_us) /
             static_cast<double>(result.wait_overshoot_events);
+    }
+    if (result.wakeup_error_events > 0) {
+        result.wakeup_error_average_us =
+            static_cast<double>(result.wakeup_error_total_us) /
+            static_cast<double>(result.wakeup_error_events);
+    }
+    if (result.busy_wait_events > 0) {
+        result.busy_wait_average_us =
+            static_cast<double>(result.busy_wait_total_us) /
+            static_cast<double>(result.busy_wait_events);
     }
     if (result.presented_late_frames > 0) {
         result.presented_lateness_average_us =
@@ -146,6 +185,14 @@ void VideoSyncMetrics::reset() noexcept {
     wait_overshoot_events_ = 0;
     wait_overshoot_total_us_ = 0;
     max_wait_overshoot_us_ = 0;
+    wakeup_error_events_ = 0;
+    wakeup_error_total_us_ = 0;
+    max_wakeup_lateness_us_ = 0;
+    max_wakeup_earliness_us_ = 0;
+    wakeup_compensation_us_ = 0;
+    busy_wait_events_ = 0;
+    busy_wait_total_us_ = 0;
+    max_busy_wait_us_ = 0;
     presented_late_frames_ = 0;
     presented_lateness_total_us_ = 0;
     max_presented_lateness_us_ = 0;
@@ -162,6 +209,9 @@ void VideoSyncMetrics::log_snapshot(std::string_view reason) const noexcept {
         "wait_target_max_us={} wait_overshoot_avg_us={:.3f} "
         "wait_overshoot_max_us={} presented_late={} "
         "presented_lateness_avg_us={:.3f} presented_lateness_max_us={} "
+        "wakeup_events={} wakeup_error_avg_us={:.3f} wakeup_late_max_us={} "
+        "wakeup_early_max_us={} wakeup_compensation_us={} "
+        "busy_wait_avg_us={:.3f} busy_wait_max_us={} "
         "callback_avg_us={:.3f} callback_max_us={}",
         reason,
         metrics.generation,
@@ -181,6 +231,13 @@ void VideoSyncMetrics::log_snapshot(std::string_view reason) const noexcept {
         metrics.presented_late_frames,
         metrics.presented_lateness_average_us,
         metrics.max_presented_lateness_us,
+        metrics.wakeup_error_events,
+        metrics.wakeup_error_average_us,
+        metrics.max_wakeup_lateness_us,
+        metrics.max_wakeup_earliness_us,
+        metrics.wakeup_compensation_us,
+        metrics.busy_wait_average_us,
+        metrics.max_busy_wait_us,
         metrics.callback_duration_average_us,
         metrics.max_callback_duration_us);
 }
