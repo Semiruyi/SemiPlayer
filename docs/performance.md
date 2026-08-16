@@ -11,7 +11,8 @@ PowerShell Runner
         -> SemiPlayer C ABI / DLL
         -> FrameObserver
         -> Windows ProcessSampler
-    -> raw.csv + metadata.json
+    -> raw.csv + sync.csv + metadata.json
+    -> logs/semi_player.log + benchmark.stdout.log
     -> summary.md
 ```
 
@@ -33,8 +34,10 @@ Worker 的阶段耗时伪装成端到端指标。
     -MediaPath .\.tmp\benchmark-media\big-buck-bunny-1080p.mp4
 ```
 
-脚本会使用 `windows-benchmark` preset，生成 `metadata.json`、原始 `raw.csv`，并
-记录媒体 SHA-256、Git commit 和测试参数。
+脚本会使用 `windows-benchmark` preset，生成 `metadata.json`、原始 `raw.csv`、
+VideoSync telemetry `sync.csv`、隔离的 `logs/semi_player.log` 和 `summary.md`，并
+记录媒体 SHA-256、Git commit 和测试参数。`sync.csv` 的 session 数量会按
+`(Warmups + Runs) × 场景数` 校验，避免日志缺失时生成看似完整的结果。
 
 ## 测试场景
 
@@ -52,7 +55,10 @@ Worker 的阶段耗时伪装成端到端指标。
 
 ### Steady playback
 
-播放固定时间窗口，记录进程 CPU 平均值、CPU P95、峰值工作集和视频回调帧数。
+播放固定时间窗口，记录进程 CPU 平均值、CPU P95、峰值工作集和视频回调帧数；同时
+从 VideoSync 日志记录 FPS、catch-up/stale drop、wait overshoot、wakeup late、
+呈现延迟、回调耗时和 busy-wait 耗时。汇总时会排除 warmup，只统计正式 steady
+playback session。
 
 ## 结果解释
 
@@ -63,6 +69,8 @@ Worker 的阶段耗时伪装成端到端指标。
 - 测试媒体的完整参数与 SHA-256；
 - 预热次数、正式次数和测试时间；
 - 中位数与 P95，而不是只报告一次最好成绩。
+- VideoSync 的 FPS 下限、catch-up drops、wait overshoot 和 wakeup late；
+- 需要区分 session 聚合指标与逐事件指标，不能仅凭 overshoot 最大值断言每次丢帧原因。
 
 结果汇总：
 
@@ -70,6 +78,10 @@ Worker 的阶段耗时伪装成端到端指标。
 .\tools\benchmark\summarize-results.ps1 `
     -CsvPath .\benchmarks\results\<timestamp>\raw.csv
 ```
+
+如果 `sync.csv` 与 `raw.csv` 位于同一结果目录，脚本会自动发现它；也可以显式传入
+`-SyncCsvPath`。正式结果目录应保留 `raw.csv`、`sync.csv`、`summary.md`、
+`metadata.json` 和对应日志，便于复核。
 
 ## 媒体授权
 
