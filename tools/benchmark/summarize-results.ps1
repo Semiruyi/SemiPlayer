@@ -60,6 +60,24 @@ foreach ($group in $groups) {
     $p95 = Get-Percentile $values 0.95
     Write-Output ("| {0} ({1}) | {2} | {3:N3} | {4:N3} |" -f `
         $group.Name, $metric, $values.Count, $median, $p95)
+    if ($group.Name -eq "steady_playback") {
+        [double[]]$frameRateValues = @($group.Group.row | ForEach-Object {
+            [double]$_.frames / [double]$_.elapsed_ms * 1000.0
+        })
+        $frameRateMedian = Get-Percentile $frameRateValues 0.50
+        $frameRateP95 = Get-Percentile $frameRateValues 0.95
+        Write-Output ("| {0} ({1}) | {2} | {3:N3} | {4:N3} |" -f `
+            $group.Name, "callback_fps", $frameRateValues.Count,
+            $frameRateMedian, $frameRateP95)
+
+        [double[]]$memoryValues = @($group.Group.row.peak_working_set_bytes |
+            ForEach-Object { [double]$_ / 1MB })
+        $memoryMedian = Get-Percentile $memoryValues 0.50
+        $memoryP95 = Get-Percentile $memoryValues 0.95
+        Write-Output ("| {0} ({1}) | {2} | {3:N3} | {4:N3} |" -f `
+            $group.Name, "peak_working_set_mib", $memoryValues.Count,
+            $memoryMedian, $memoryP95)
+    }
 }
 
 $resolvedSyncPath = $SyncCsvPath

@@ -15,7 +15,7 @@ namespace semi::domain {
 
 class VideoRenderedStore final : public VideoRenderedSink, public VideoRenderedSource {
 public:
-    static constexpr std::size_t kDefaultCapacity = 8;
+    static constexpr std::size_t kDefaultCapacity = 3;
 
     explicit VideoRenderedStore(std::shared_ptr<infra::Notifier> notifier,
                                 std::size_t capacity = kDefaultCapacity);

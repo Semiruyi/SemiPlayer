@@ -44,9 +44,9 @@ flowchart LR
 
     Demuxer --> VPQ["VideoPacketQueue\n容量 64"]
     VPQ --> VD["VideoDecoder\nFFmpeg 解码"]
-    VD --> VFS["VideoFrameStore\n容量 64"]
+    VD --> VFS["VideoFrameStore\n容量 4"]
     VFS --> VR["VideoRenderer\nswscale 转 RGBA"]
-    VR --> VRS["VideoRenderedStore\n容量 8"]
+    VR --> VRS["VideoRenderedStore\n容量 3"]
     VRS --> VS["VideoSync\n按播放时钟选帧"]
     VS -->|"借用 RGBA 帧"| Host["宿主"]
 
@@ -198,8 +198,8 @@ Generation 只解决数据隔离，不等同于命令取消。Seek 已经开始�
 | VideoPacketQueue | 64 项 |
 | decoded AudioFrameStore | 64 项 |
 | playback AudioFrameStore | 64 项 |
-| VideoFrameStore | 64 项 |
-| VideoRenderedStore | 8 项 |
+| VideoFrameStore | 4 项 |
+| VideoRenderedStore | 3 项 |
 | miniaudio SPSC 字节环 | 48 kHz、双声道、F32 下约 2 秒 |
 
 所有 Queue/Store 的写入都是“整项接受或拒绝”，不会部分写入。上游保留待输出项并

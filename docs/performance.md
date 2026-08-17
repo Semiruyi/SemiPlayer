@@ -39,6 +39,9 @@ VideoSync telemetry `sync.csv`、隔离的 `logs/semi_player.log` 和 `summary.m
 记录媒体 SHA-256、Git commit 和测试参数。`sync.csv` 的 session 数量会按
 `(Warmups + Runs) × 场景数` 校验，避免日志缺失时生成看似完整的结果。
 
+内存调优应至少同时比较 `peak_working_set_mib`、视频回调帧数和 CPU。单纯选择工作集
+最低的容量会削弱调度抖动下的缓冲余量。
+
 ## 测试场景
 
 ### Startup
@@ -59,6 +62,25 @@ VideoSync telemetry `sync.csv`、隔离的 `logs/semi_player.log` 和 `summary.m
 从 VideoSync 日志记录 FPS、catch-up/stale drop、wait overshoot、wakeup late、
 呈现延迟、回调耗时和 busy-wait 耗时。汇总时会排除 warmup，只统计正式 steady
 playback session。
+
+## 视频容量选择
+
+在同一台 Windows 11 / Intel Core i7-12700 主机上，以 Big Buck Bunny 1080p60 对
+视频管道容量做 3 次短时筛选。帧率是宿主 RGBA 回调数除以测量时间；峰值工作集取
+3 次中位数。
+
+| VideoFrameStore / VideoRenderedStore | 峰值工作集 | 回调帧率 |
+|---:|---:|---:|
+| 64 / 8（原默认值） | 347.4 MiB | 58.72 fps |
+| 8 / 4 | 149.4 MiB | 58.93 fps |
+| **4 / 3** | **131.8 MiB** | **58.53 fps** |
+| 2 / 2 | 118.2 MiB | 58.15 fps |
+| 1 / 1 | 107.2 MiB | 58.19 fps |
+
+最终选择 4/3：相对原默认值，短测峰值工作集下降约 62%，回调帧率中位数下降约
+0.3%；继续压缩到 2/2 只再节省约 14 MiB，但调度抖动下的缓冲余量和回调帧率都更低。
+随后以 1 次预热、5 次正式运行、每次 30 秒复核 4/3，峰值工作集中位数为
+135.4 MiB、P95 为 135.5 MiB，回调帧率为 57.5–59.1 fps。
 
 ## 结果解释
 

@@ -15,7 +15,7 @@ namespace semi::domain {
 
 class VideoFrameStore final : public VideoFrameSink, public VideoFrameSource {
 public:
-    static constexpr std::size_t kDefaultCapacity = 64;
+    static constexpr std::size_t kDefaultCapacity = 4;
 
     explicit VideoFrameStore(std::shared_ptr<infra::Notifier> notifier,
                              std::size_t capacity = kDefaultCapacity);

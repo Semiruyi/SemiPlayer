@@ -127,26 +127,20 @@ flowchart LR
 ## 性能基准结果
 
 以下结果来自官方 [Big Buck Bunny 1080p60](https://video.blender.org/w/dmhvQNzwBnrWy1iYzVv5g7)
-素材，使用 `windows-benchmark` Release 构建，在项目的 Windows / MSYS2 UCRT64
-开发环境执行 1 次预热、5 次正式测量，持续播放场景每次 60 秒。运行参数、Git
-HEAD、媒体 SHA-256 和系统信息采集状态随每次结果目录的 `metadata.json` 保存。
+素材，使用 `windows-benchmark` Release 构建，在 Windows 11 / Intel Core i7-12700
+上执行 1 次预热、5 次正式测量，持续播放场景每次 30 秒：
 
 | 场景 | 结果 |
 |---|---|
-| 启动到首帧 | 中位数 48.166 ms，P95 49.144 ms |
-| 暂停后 Seek 25% / 50% / 75% | 中位数 130.424 / 138.996 / 134.172 ms；P95 140.813 / 146.243 / 138.692 ms |
+| 启动到首帧 | 中位数 77.6 ms，P95 79.4 ms |
+| 暂停后 Seek 25% / 50% / 75% | 中位数 128.1 / 135.8 / 136.8 ms；P95 137.9 / 144.9 / 147.6 ms |
 | 暂停保持 | 15/15 次 Seek 后均未继续交付视频帧 |
-| 持续播放 CPU | 中位数 38.742%，P95 41.548% |
-| 峰值工作集 | 约 349 MiB |
-| VideoSync 持续播放 FPS | 中位数 58.957，最低 58.708 |
-| Catch-up drops | 中位数 63，P95 79 |
-| wait overshoot | 平均值中位数 6.910 ms；单轮最大值 P95 29.122 ms |
-| wakeup late 最大值 | P95 30.631 ms |
+| 持续播放 CPU | 中位数 80.6%，P95 88.4% |
+| 持续播放回调帧率 | 中位数 58.7 fps，P95 59.1 fps（宿主 RGBA 帧回调） |
+| 峰值工作集 | 中位数 135.4 MiB，P95 135.5 MiB（视频 Store 容量 4/3） |
 
 当前 Seek 使用 `PREVIOUS_KEYFRAME`，因此实际首帧可能早于目标时间戳；这反映的是关键帧
-定位策略，不是首帧响应延迟。当前约 59 fps 的结果保留现有实现即可；VideoSync
-telemetry 已显示出可观测的唤醒 overshoot，但这些指标是每个 session 的聚合统计，不能
-直接解释为每一次丢帧事件的因果关系。详细字段见 [性能基准](docs/performance.md)。
+定位策略，不是首帧响应延迟。
 
 复现实验：
 
@@ -154,7 +148,7 @@ telemetry 已显示出可观测的唤醒 overshoot，但这些指标是每个 se
 .\tools\benchmark\download-bbb.ps1
 .\tools\benchmark\run-release.ps1 `
     -MediaPath .\.tmp\benchmark-media\big-buck-bunny-1080p.mp4 `
-    -Runs 5 -Warmups 1 -SteadySeconds 60
+    -Runs 5 -Warmups 1 -SteadySeconds 30
 ```
 
 ## 文档导航
