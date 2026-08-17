@@ -1,0 +1,14 @@
+README.md
+  h_71186a0a6bfb09 130-131,135-136,138,143
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "2.5.918",
+  "base_commit_sha": "d23a3a7bba86cf8663bf9a039fa9ba8d006e82c5",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
