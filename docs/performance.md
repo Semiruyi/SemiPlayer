@@ -63,6 +63,9 @@ VideoSync telemetry `sync.csv`、隔离的 `logs/semi_player.log` 和 `summary.m
 呈现延迟、回调耗时和 busy-wait 耗时。汇总时会排除 warmup，只统计正式 steady
 playback session。
 
+CPU 百分比按进程在采样窗口内消耗的 CPU 时间除以墙钟时间计算，不按机器逻辑处理器
+数量归一化；因此 100% 约等于持续占满 1 个逻辑核，而不是整台多核机器的全部算力。
+
 ## 视频容量选择
 
 在同一台 Windows 11 / Intel Core i7-12700 主机上，以 Big Buck Bunny 1080p60 对

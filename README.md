@@ -115,7 +115,7 @@ flowchart LR
 
 | 项目 | 当前结果 |
 |---|---|
-| 自动化测试 | 264 项通过 |
+| 自动化测试 | 278 项通过 |
 | 覆盖层次 | 领域逻辑、资源队列、后端契约、FFmpeg 后端、IoC 管道、C ABI 动态库边界 |
 | 持续集成 | Windows UCRT64 无声卡构建与测试 |
 | Release 验收 | Clean Release 构建、全新解压、限制系统 `PATH` 后播放内置样例 |
@@ -135,7 +135,7 @@ flowchart LR
 | 启动到首帧 | 中位数 77.6 ms，P95 79.4 ms |
 | 暂停后 Seek 25% / 50% / 75% | 中位数 128.1 / 135.8 / 136.8 ms；P95 137.9 / 144.9 / 147.6 ms |
 | 暂停保持 | 15/15 次 Seek 后均未继续交付视频帧 |
-| 持续播放 CPU | 中位数 80.6%，P95 88.4% |
+| 持续播放 CPU | 中位数 80.6%，P95 88.4%（100% 约等于占满 1 个逻辑核） |
 | 持续播放回调帧率 | 中位数 58.7 fps，P95 59.1 fps（宿主 RGBA 帧回调） |
 | 峰值工作集 | 中位数 135.4 MiB，P95 135.5 MiB（视频 Store 容量 4/3） |
 
@@ -157,7 +157,7 @@ flowchart LR
 |---|---|
 | [架构设计](docs/architecture.md) | 模块边界、数据流、Generation 和命令模型的设计演进 |
 | [性能基准](docs/performance.md) | Release 基准架构、测试场景、媒体清单和结果解释 |
-| [路线图](docs/roadmap.md) | 精确 Seek、字幕、GPU、跨平台和性能基准计划 |
+| [路线图](docs/roadmap.md) | 精确 Seek、字幕、GPU、跨平台和发布改进计划 |
 | [生命周期](docs/lifecycle.md) | 初始化、关闭、状态机和释放顺序 |
 | [ApiLayer](docs/modules/api_layer/api_layer.md) | 命令队列、任务状态与会话状态机 |
 | [Seek 编排](docs/modules/api_layer/seek.md) | 关键帧定位和世代号推进顺序 |
