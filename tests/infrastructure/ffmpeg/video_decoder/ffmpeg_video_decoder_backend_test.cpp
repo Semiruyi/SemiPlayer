@@ -9,6 +9,7 @@ extern "C" {
 }
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -46,6 +47,29 @@ TEST(FfmpegVideoFrameBufferTest, ExposesNativePlanesAndOwnsTheAvFrame) {
                                        (index == 0 ? 180U : 90U));
     }
     EXPECT_EQ(buffer->plane(3).size_bytes, 0U);
+}
+
+TEST(FfmpegVideoFrameBufferTest, ExposesYuv420p10lePlanes) {
+    AvFramePtr frame(av_frame_alloc());
+    ASSERT_NE(frame, nullptr);
+    frame->format = AV_PIX_FMT_YUV420P10LE;
+    frame->width = 4;
+    frame->height = 2;
+    ASSERT_EQ(av_frame_get_buffer(frame.get(), 32), 0);
+    ASSERT_EQ(av_frame_make_writable(frame.get()), 0);
+
+    auto buffer = std::make_unique<FfmpegVideoFrameBuffer>(std::move(frame));
+
+    EXPECT_EQ(buffer->pixel_format(), VideoPixelFormat::Yuv420p10le);
+    EXPECT_EQ(buffer->width(), 4U);
+    EXPECT_EQ(buffer->height(), 2U);
+    ASSERT_EQ(buffer->plane_count(), 3U);
+    EXPECT_EQ(buffer->plane(0).size_bytes,
+              static_cast<std::size_t>(buffer->plane(0).stride_bytes) * 2U);
+    EXPECT_EQ(buffer->plane(1).size_bytes,
+              static_cast<std::size_t>(buffer->plane(1).stride_bytes));
+    EXPECT_EQ(buffer->plane(2).size_bytes,
+              static_cast<std::size_t>(buffer->plane(2).stride_bytes));
 }
 
 TEST(FfmpegVideoDecoderBackendTest, RejectsDecodeBeforeConfiguration) {

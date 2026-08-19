@@ -79,6 +79,8 @@ FfmpegVideoFrameBuffer::media_pixel_format(AVPixelFormat format) noexcept {
     case AV_PIX_FMT_YUV420P:
     case AV_PIX_FMT_YUVJ420P:
         return VideoPixelFormat::Yuv420p;
+    case AV_PIX_FMT_YUV420P10LE:
+        return VideoPixelFormat::Yuv420p10le;
     case AV_PIX_FMT_YUV422P:
     case AV_PIX_FMT_YUVJ422P:
         return VideoPixelFormat::Yuv422p;

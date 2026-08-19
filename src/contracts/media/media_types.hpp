@@ -42,6 +42,7 @@ struct VideoCodecConfig {
 enum class VideoPixelFormat : std::uint8_t {
     Unknown,
     Yuv420p,
+    Yuv420p10le,
     Yuv422p,
     Yuv444p,
     Nv12,

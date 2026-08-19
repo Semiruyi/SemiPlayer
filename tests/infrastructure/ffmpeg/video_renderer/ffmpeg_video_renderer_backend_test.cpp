@@ -139,6 +139,46 @@ TEST(FfmpegVideoRendererBackendTest, ConvertsYuv420pToRgba) {
     EXPECT_EQ(rendered->pts_us, 777);
 }
 
+TEST(FfmpegVideoRendererBackendTest, ConvertsYuv420p10leToRgba) {
+    AvFramePtr frame(av_frame_alloc());
+    ASSERT_NE(frame, nullptr);
+    frame->format = AV_PIX_FMT_YUV420P10LE;
+    frame->width = 2;
+    frame->height = 2;
+    ASSERT_EQ(av_frame_get_buffer(frame.get(), 1), 0);
+    ASSERT_EQ(av_frame_make_writable(frame.get()), 0);
+
+    for (int row = 0; row < 2; ++row) {
+        auto* y_row = reinterpret_cast<std::uint16_t*>(
+            frame->data[0] + row * frame->linesize[0]);
+        for (int column = 0; column < 2; ++column) {
+            y_row[column] = 512;
+        }
+    }
+    reinterpret_cast<std::uint16_t*>(frame->data[1])[0] = 512;
+    reinterpret_cast<std::uint16_t*>(frame->data[2])[0] = 512;
+
+    DecodedVideo input{
+        .buffer = std::make_unique<video_decoder::FfmpegVideoFrameBuffer>(std::move(frame)),
+        .pts_us = 888,
+    };
+
+    FfmpegVideoRendererBackend backend;
+    ASSERT_TRUE(backend.configure({}).has_value());
+    const auto rendered = backend.render(input);
+    ASSERT_TRUE(rendered.has_value()) << rendered.error().message;
+
+    EXPECT_EQ(rendered->width, 2U);
+    EXPECT_EQ(rendered->height, 2U);
+    EXPECT_EQ(rendered->stride_bytes, 8U);
+    ASSERT_EQ(rendered->pixels.size(), 16U);
+    EXPECT_EQ(rendered->pixels[3], std::byte{255});
+    EXPECT_EQ(rendered->pixels[7], std::byte{255});
+    EXPECT_EQ(rendered->pixels[11], std::byte{255});
+    EXPECT_EQ(rendered->pixels[15], std::byte{255});
+    EXPECT_EQ(rendered->pts_us, 888);
+}
+
 TEST(FfmpegVideoRendererBackendTest, RejectsTruncatedInputPlane) {
     FfmpegVideoRendererBackend backend;
     ASSERT_TRUE(backend.configure({}).has_value());

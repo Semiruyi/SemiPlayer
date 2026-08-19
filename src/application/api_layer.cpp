@@ -2,12 +2,17 @@
 
 #include "domain/resource/generation/generation.hpp"
 #include "domain/worker/audio_decoder/audio_decoder.hpp"
+#include "domain/worker/audio_decoder/audio_decoder_events.hpp"
 #include "domain/worker/audio_output/audio_output.hpp"
 #include "domain/worker/audio_output/audio_output_events.hpp"
 #include "domain/worker/audio_resampler/audio_resampler.hpp"
+#include "domain/worker/audio_resampler/audio_resampler_events.hpp"
 #include "domain/worker/demuxer/demuxer.hpp"
+#include "domain/worker/demuxer/demuxer_events.hpp"
 #include "domain/worker/video_decoder/video_decoder.hpp"
+#include "domain/worker/video_decoder/video_decoder_events.hpp"
 #include "domain/worker/video_renderer/video_renderer.hpp"
+#include "domain/worker/video_renderer/video_renderer_events.hpp"
 #include "domain/worker/video_sync/video_sync.hpp"
 #include "domain/worker/video_sync/video_sync_events.hpp"
 #include "infrastructure/log/log.hpp"
@@ -129,6 +134,12 @@ struct ApiLayer::Impl {
     VideoPresentationConfig video_presentation_config;
     std::shared_ptr<infra::Notifier::Subscription> audio_playback_finished_subscription;
     std::shared_ptr<infra::Notifier::Subscription> video_playback_finished_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> demuxer_read_error_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> audio_decoder_backend_failure_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> audio_resampler_backend_failure_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> audio_output_backend_failure_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> video_decoder_backend_failure_subscription;
+    std::shared_ptr<infra::Notifier::Subscription> video_renderer_backend_failure_subscription;
     PlayerState player_state = PlayerState::Idle;
     domain::Generation::Value active_generation = 0;
     CommandHandle next_handle = 1;
@@ -182,6 +193,15 @@ void push_event_locked(ApiLayer::Impl& impl, PlayerEvent event) {
                       kMaxPendingEvents);
     }
     impl.pending_events.push_back(event);
+}
+
+template <typename BackendError>
+void log_backend_failure(const char* component, const BackendError& error) noexcept {
+    SEMI_LOG_ERROR("{} backend failure: operation={} native_code={} message={}",
+                   component,
+                   static_cast<int>(error.operation),
+                   error.native_code,
+                   error.message);
 }
 
 bool can_execute(PlayerState state, const Command& command) noexcept {
@@ -474,12 +494,18 @@ CommandExecution make_open_success(const domain::DemuxerOpenResult& opened) {
     execution.result.has_media_info = true;
     execution.result.media_info = to_media_info(opened);
     const MediaInfo& media_info = execution.result.media_info;
-    SEMI_LOG_INFO("media opened: duration_us={}, video={}x{}, audio={}, subtitle={}",
-                  media_info.duration_us,
-                  media_info.video_width,
-                  media_info.video_height,
-                  media_info.has_audio,
-                  media_info.has_subtitle);
+    SEMI_LOG_INFO(
+        "media opened: duration_us={}, video={}x{} codec={}, audio={} codec={} sample_rate={} channels={}, subtitle={} codec={}",
+        media_info.duration_us,
+        media_info.video_width,
+        media_info.video_height,
+        opened.video ? opened.video->config.common.codec_name : std::string{},
+        media_info.has_audio,
+        opened.audio ? opened.audio->config.common.codec_name : std::string{},
+        opened.audio ? opened.audio->config.sample_rate : 0,
+        opened.audio ? opened.audio->config.channels : 0,
+        media_info.has_subtitle,
+        opened.subtitle ? opened.subtitle->config.common.codec_name : std::string{});
     return execution;
 }
 
@@ -791,6 +817,41 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
             impl_->notifier->subscribe<domain::VideoPlaybackFinished>(
                 [impl = impl_.get()](const domain::VideoPlaybackFinished& event) {
                     handle_stream_finished(*impl, FinishedStream::Video, event.generation);
+                });
+        impl_->demuxer_read_error_subscription =
+            impl_->notifier->subscribe<domain::DemuxerReadError>(
+                [](const domain::DemuxerReadError& event) {
+                    log_backend_failure("demuxer read", event.error);
+                });
+        impl_->audio_decoder_backend_failure_subscription =
+            impl_->notifier->subscribe<domain::AudioDecoderBackendFailure>(
+                [](const domain::AudioDecoderBackendFailure& event) {
+                    log_backend_failure("audio decoder", event.error);
+                });
+        impl_->audio_resampler_backend_failure_subscription =
+            impl_->notifier->subscribe<domain::AudioResamplerBackendFailure>(
+                [](const domain::AudioResamplerBackendFailure& event) {
+                    log_backend_failure("audio resampler", event.error);
+                });
+        impl_->audio_output_backend_failure_subscription =
+            impl_->notifier->subscribe<domain::AudioOutputBackendFailure>(
+                [](const domain::AudioOutputBackendFailure& event) {
+                    SEMI_LOG_ERROR(
+                        "audio output backend failure: generation={} operation={} native_code={} message={}",
+                        event.generation,
+                        static_cast<int>(event.error.operation),
+                        event.error.native_code,
+                        event.error.message);
+                });
+        impl_->video_decoder_backend_failure_subscription =
+            impl_->notifier->subscribe<domain::VideoDecoderBackendFailure>(
+                [](const domain::VideoDecoderBackendFailure& event) {
+                    log_backend_failure("video decoder", event.error);
+                });
+        impl_->video_renderer_backend_failure_subscription =
+            impl_->notifier->subscribe<domain::VideoRendererBackendFailure>(
+                [](const domain::VideoRendererBackendFailure& event) {
+                    log_backend_failure("video renderer", event.error);
                 });
     }
 }

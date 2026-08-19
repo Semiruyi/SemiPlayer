@@ -65,6 +65,8 @@ std::optional<AVPixelFormat> native_pixel_format(VideoPixelFormat format) noexce
     switch (format) {
     case VideoPixelFormat::Yuv420p:
         return AV_PIX_FMT_YUV420P;
+    case VideoPixelFormat::Yuv420p10le:
+        return AV_PIX_FMT_YUV420P10LE;
     case VideoPixelFormat::Yuv422p:
         return AV_PIX_FMT_YUV422P;
     case VideoPixelFormat::Yuv444p:
@@ -86,6 +88,7 @@ std::size_t plane_height(VideoPixelFormat format,
                          std::size_t plane) noexcept {
     switch (format) {
     case VideoPixelFormat::Yuv420p:
+    case VideoPixelFormat::Yuv420p10le:
         return plane == 0 ? height : (static_cast<std::size_t>(height) + 1U) / 2U;
     case VideoPixelFormat::Yuv422p:
         return plane == 0 ? height : (static_cast<std::size_t>(height) + 1U) / 2U;
@@ -108,6 +111,10 @@ std::size_t plane_width(VideoPixelFormat format,
     case VideoPixelFormat::Yuv420p:
     case VideoPixelFormat::Yuv422p:
         return plane == 0 ? width : (static_cast<std::size_t>(width) + 1U) / 2U;
+    case VideoPixelFormat::Yuv420p10le:
+        return plane == 0
+            ? static_cast<std::size_t>(width) * 2U
+            : ((static_cast<std::size_t>(width) + 1U) / 2U) * 2U;
     case VideoPixelFormat::Yuv444p:
         return width;
     case VideoPixelFormat::Nv12:
@@ -125,6 +132,7 @@ std::size_t plane_width(VideoPixelFormat format,
 std::size_t expected_plane_count(VideoPixelFormat format) noexcept {
     switch (format) {
     case VideoPixelFormat::Yuv420p:
+    case VideoPixelFormat::Yuv420p10le:
     case VideoPixelFormat::Yuv422p:
     case VideoPixelFormat::Yuv444p:
         return 3;
