@@ -4,10 +4,13 @@
 #include "contracts/demuxer/seek_mode.hpp"
 #include "domain/resource/video_rendered_store/rendered_video_frame.hpp"
 #include "infrastructure/log/log.hpp"
+#include "infrastructure/platform/process_path.hpp"
 #include "ioc/ioc_container.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
+#include <string>
 #include <utility>
 
 // C ABI 导出层（也是生命周期入口）。
@@ -23,10 +26,21 @@ namespace {
 
 #define SEMI_LOG_TAG "api"
 
+std::string default_log_file_path() {
+    try {
+        const auto exe_directory = semi::infra::platform::executable_directory();
+        if (exe_directory) {
+            return (*exe_directory / "logs" / "semi_player.log").string();
+        }
+    } catch (...) {
+    }
+    return "logs/semi_player.log";
+}
+
 // 进程默认日志配置。文件写失败时 log 会降级 ConsoleOnly，不阻断播放器 init。
 semi::log::Config default_log_config() {
     semi::log::Config config;
-    config.file_path = "logs/semi_player.log";
+    config.file_path = default_log_file_path();
     config.level = semi::log::Level::Info;
     // Info 也进控制台，便于宿主/调试直接看到 assemble 等生命周期日志。
     config.console_level = semi::log::Level::Info;
