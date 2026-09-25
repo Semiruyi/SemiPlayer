@@ -11,10 +11,6 @@
 
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #if defined(WIN32) || defined(_WIN32)
   #ifdef SEMI_PLAYER_DLL_EXPORT
     #define SEMI_API __declspec(dllexport)
@@ -23,10 +19,6 @@ extern "C" {
   #endif
 #else
   #define SEMI_API __attribute__((visibility("default")))
-#endif
-
-#ifdef __cplusplus
-} /* extern "C" */
 #endif
 
 /* Opaque handle to an in-flight command. 0 == invalid/no handle. */
