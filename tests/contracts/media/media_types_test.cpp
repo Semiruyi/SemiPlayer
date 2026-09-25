@@ -67,19 +67,21 @@ private:
 
 TEST(DecodedAudioTest, RepresentsPlanarPcmWithOptionalTimestamp) {
     DecodedAudio decoded{
-        .format = AudioPcmFormat{
-            .sample_rate = 48'000,
-            .channels = 2,
-            .sample_format = AudioSampleFormat::F32,
-            .planar = true,
-        },
+        .format =
+            AudioPcmFormat{
+                .sample_rate = 48'000,
+                .channels = 2,
+                .sample_format = AudioSampleFormat::F32,
+                .planar = true,
+            },
         .samples_per_channel = 2,
-        .planes = {
-            {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
-             std::byte{0x05}, std::byte{0x06}, std::byte{0x07}, std::byte{0x08}},
-            {std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14},
-             std::byte{0x15}, std::byte{0x16}, std::byte{0x17}, std::byte{0x18}},
-        },
+        .planes =
+            {
+                {std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+                 std::byte{0x05}, std::byte{0x06}, std::byte{0x07}, std::byte{0x08}},
+                {std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14},
+                 std::byte{0x15}, std::byte{0x16}, std::byte{0x17}, std::byte{0x18}},
+            },
         .pts_us = 123'456,
     };
 
@@ -110,13 +112,10 @@ TEST(DecodedAudioTest, DefaultsToAnUnknownEmptyFormatWithoutTimestamp) {
 TEST(DecodedVideoTest, ExposesFormatPlanesAndTimestampThroughOwnedBuffer) {
     DecodedVideo decoded{
         .buffer = std::make_unique<FakeVideoFrameBuffer>(
-            VideoPixelFormat::Rgba8,
-            2,
-            1,
-            std::vector<std::vector<std::byte>>{{std::byte{0x01}, std::byte{0x02},
-                                                   std::byte{0x03}, std::byte{0x04},
-                                                   std::byte{0x05}, std::byte{0x06},
-                                                   std::byte{0x07}, std::byte{0x08}}},
+            VideoPixelFormat::Rgba8, 2, 1,
+            std::vector<std::vector<std::byte>>{{std::byte{0x01}, std::byte{0x02}, std::byte{0x03},
+                                                 std::byte{0x04}, std::byte{0x05}, std::byte{0x06},
+                                                 std::byte{0x07}, std::byte{0x08}}},
             std::vector<std::uint32_t>{8}),
         .pts_us = 123'456,
     };
@@ -136,9 +135,7 @@ TEST(DecodedVideoTest, ExposesFormatPlanesAndTimestampThroughOwnedBuffer) {
 
 TEST(DecodedVideoTest, BufferOwnerKeepsPlaneDataAlive) {
     auto buffer = std::make_unique<FakeVideoFrameBuffer>(
-        VideoPixelFormat::Yuv420p,
-        2,
-        2,
+        VideoPixelFormat::Yuv420p, 2, 2,
         std::vector<std::vector<std::byte>>{{std::byte{0x11}, std::byte{0x12}}},
         std::vector<std::uint32_t>{2});
     DecodedVideo decoded{.buffer = std::move(buffer), .pts_us = std::nullopt};

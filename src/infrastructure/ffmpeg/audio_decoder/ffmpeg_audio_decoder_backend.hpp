@@ -16,11 +16,11 @@ public:
     configure(const contracts::media::AudioCodecConfig& config) override;
 
     [[nodiscard]] std::expected<contracts::audio_decoder::DecodedAudioBatch,
-                                 contracts::audio_decoder::AudioDecoderBackendError>
+                                contracts::audio_decoder::AudioDecoderBackendError>
     decode(const contracts::demuxer::packet::EncodedPacket& packet) override;
 
     [[nodiscard]] std::expected<contracts::audio_decoder::DecodedAudioBatch,
-                                 contracts::audio_decoder::AudioDecoderBackendError>
+                                contracts::audio_decoder::AudioDecoderBackendError>
     drain() override;
 
     void reset() noexcept override;

@@ -4,8 +4,7 @@
 
 namespace semi::domain {
 
-VideoPacketQueue::VideoPacketQueue(std::shared_ptr<infra::Notifier> notifier,
-                                   std::size_t capacity)
+VideoPacketQueue::VideoPacketQueue(std::shared_ptr<infra::Notifier> notifier, std::size_t capacity)
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 VideoPacketPushResult VideoPacketQueue::try_push(VideoPacketQueueItem&& item) {

@@ -10,8 +10,7 @@ namespace semi::domain {
 // One decoded video frame in the MVP playback pipeline.
 class VideoFrame final {
 public:
-    VideoFrame(contracts::media::DecodedVideo decoded_video,
-               Generation::Value generation) noexcept
+    VideoFrame(contracts::media::DecodedVideo decoded_video, Generation::Value generation) noexcept
         : decoded_video_(std::move(decoded_video)), generation_(generation) {}
 
     ~VideoFrame() = default;
@@ -34,8 +33,8 @@ private:
     Generation::Value generation_;
 };
 
-[[nodiscard]] inline bool is_current_video_frame(
-    const VideoFrame& frame, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool is_current_video_frame(const VideoFrame& frame,
+                                                 Generation::Value current_generation) noexcept {
     return frame.generation() == current_generation;
 }
 

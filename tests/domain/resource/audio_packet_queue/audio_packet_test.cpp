@@ -12,9 +12,9 @@
 namespace semi::domain {
 namespace {
 
-contracts::demuxer::packet::EncodedPacket make_encoded_packet(
-    std::optional<std::int64_t> pts_us = 123'000,
-    std::optional<std::int64_t> dts_us = 122'000) {
+contracts::demuxer::packet::EncodedPacket
+make_encoded_packet(std::optional<std::int64_t> pts_us = 123'000,
+                    std::optional<std::int64_t> dts_us = 122'000) {
     return {
         .payload = {std::byte{0x01}, std::byte{0x02}},
         .pts_us = pts_us,

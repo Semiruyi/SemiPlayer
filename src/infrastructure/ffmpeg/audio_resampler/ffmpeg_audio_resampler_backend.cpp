@@ -203,10 +203,9 @@ convert_samples(SwrContext& context,
         return std::unexpected(make_error(operation, static_cast<int>(delay)));
     }
 
-    const auto requested_samples = av_rescale_rnd(delay + input_samples,
-                                                  static_cast<int>(output_format.sample_rate),
-                                                  static_cast<int>(input_format.sample_rate),
-                                                  AV_ROUND_UP);
+    const auto requested_samples =
+        av_rescale_rnd(delay + input_samples, static_cast<int>(output_format.sample_rate),
+                       static_cast<int>(input_format.sample_rate), AV_ROUND_UP);
     if (requested_samples < 0 ||
         requested_samples > static_cast<std::int64_t>(std::numeric_limits<int>::max())) {
         return std::unexpected(make_state_error(operation, "output sample count overflows"));
@@ -215,20 +214,16 @@ convert_samples(SwrContext& context,
         return std::nullopt;
     }
 
-    auto output = make_output_frame(output_format,
-                                    static_cast<std::uint32_t>(requested_samples),
-                                    std::nullopt,
-                                    operation);
+    auto output = make_output_frame(output_format, static_cast<std::uint32_t>(requested_samples),
+                                    std::nullopt, operation);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }
     auto output_data = mutable_planes(*output);
 
-    const int converted = swr_convert(&context,
-                                      output_data.data(),
-                                      static_cast<int>(requested_samples),
-                                      input_data,
-                                      input_samples);
+    const int converted =
+        swr_convert(&context, output_data.data(), static_cast<int>(requested_samples), input_data,
+                    input_samples);
     if (converted < 0) {
         return std::unexpected(make_error(operation, converted));
     }
@@ -263,15 +258,15 @@ struct FfmpegAudioResamplerBackend::Impl {
         }
         const auto whole_seconds = output_samples_emitted / output_format.sample_rate;
         const auto remaining_samples = output_samples_emitted % output_format.sample_rate;
-        if (whole_seconds > static_cast<std::uint64_t>(
-                                std::numeric_limits<std::int64_t>::max() / 1'000'000)) {
+        if (whole_seconds >
+            static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max() / 1'000'000)) {
             return std::nullopt;
         }
         const auto offset_us = whole_seconds * 1'000'000ULL +
                                remaining_samples * 1'000'000ULL / output_format.sample_rate;
         if (offset_us > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
-            *output_anchor_pts_us > std::numeric_limits<std::int64_t>::max() -
-                                        static_cast<std::int64_t>(offset_us)) {
+            *output_anchor_pts_us >
+                std::numeric_limits<std::int64_t>::max() - static_cast<std::int64_t>(offset_us)) {
             return std::nullopt;
         }
         return *output_anchor_pts_us + static_cast<std::int64_t>(offset_us);
@@ -279,8 +274,8 @@ struct FfmpegAudioResamplerBackend::Impl {
 
     void stamp_and_advance(DecodedAudio& output) noexcept {
         output.pts_us = next_output_pts();
-        if (output_samples_emitted <= std::numeric_limits<std::uint64_t>::max() -
-                                          output.samples_per_channel) {
+        if (output_samples_emitted <=
+            std::numeric_limits<std::uint64_t>::max() - output.samples_per_channel) {
             output_samples_emitted += output.samples_per_channel;
         } else {
             output_anchor_pts_us.reset();
@@ -298,8 +293,9 @@ std::expected<void, AudioResamplerBackendError>
 FfmpegAudioResamplerBackend::configure(const AudioPcmFormat& input_format,
                                        const AudioPcmFormat& output_format) {
     if (impl_->context != nullptr) {
-        return std::unexpected(make_state_error(AudioResamplerBackendOperation::Configure,
-                                                "FFmpeg audio resampler backend is already configured"));
+        return std::unexpected(
+            make_state_error(AudioResamplerBackendOperation::Configure,
+                             "FFmpeg audio resampler backend is already configured"));
     }
     if (!valid_format(input_format) || !valid_format(output_format)) {
         return std::unexpected(make_state_error(AudioResamplerBackendOperation::Configure,
@@ -312,15 +308,11 @@ FfmpegAudioResamplerBackend::configure(const AudioPcmFormat& input_format,
     av_channel_layout_default(&output_layout, static_cast<int>(output_format.channels));
 
     SwrContext* raw_context = nullptr;
-    const int allocated = swr_alloc_set_opts2(&raw_context,
-                                              &output_layout,
-                                              *native_sample_format(output_format),
-                                              static_cast<int>(output_format.sample_rate),
-                                              &input_layout,
-                                              *native_sample_format(input_format),
-                                              static_cast<int>(input_format.sample_rate),
-                                              0,
-                                              nullptr);
+    const int allocated =
+        swr_alloc_set_opts2(&raw_context, &output_layout, *native_sample_format(output_format),
+                            static_cast<int>(output_format.sample_rate), &input_layout,
+                            *native_sample_format(input_format),
+                            static_cast<int>(input_format.sample_rate), 0, nullptr);
     av_channel_layout_uninit(&input_layout);
     av_channel_layout_uninit(&output_layout);
     if (allocated < 0) {
@@ -328,7 +320,8 @@ FfmpegAudioResamplerBackend::configure(const AudioPcmFormat& input_format,
     }
     SwrContextPtr context(raw_context);
     if (context == nullptr) {
-        return std::unexpected(make_error(AudioResamplerBackendOperation::Configure, AVERROR(ENOMEM)));
+        return std::unexpected(
+            make_error(AudioResamplerBackendOperation::Configure, AVERROR(ENOMEM)));
     }
 
     const int initialized = swr_init(context.get());
@@ -347,12 +340,14 @@ FfmpegAudioResamplerBackend::configure(const AudioPcmFormat& input_format,
 std::expected<ResampledAudioBatch, AudioResamplerBackendError>
 FfmpegAudioResamplerBackend::resample(const DecodedAudio& input) {
     if (impl_->context == nullptr) {
-        return std::unexpected(make_state_error(AudioResamplerBackendOperation::Resample,
-                                                "FFmpeg audio resampler backend is not configured"));
+        return std::unexpected(
+            make_state_error(AudioResamplerBackendOperation::Resample,
+                             "FFmpeg audio resampler backend is not configured"));
     }
     if (impl_->draining) {
-        return std::unexpected(make_state_error(AudioResamplerBackendOperation::Resample,
-                                                "FFmpeg audio resampler must be reset after drain"));
+        return std::unexpected(
+            make_state_error(AudioResamplerBackendOperation::Resample,
+                             "FFmpeg audio resampler must be reset after drain"));
     }
     if (input.format.sample_rate != impl_->input_format.sample_rate ||
         input.format.channels != impl_->input_format.channels ||
@@ -372,11 +367,8 @@ FfmpegAudioResamplerBackend::resample(const DecodedAudio& input) {
         impl_->output_anchor_pts_us = input.pts_us;
     }
 
-    auto converted = convert_samples(*impl_->context,
-                                     impl_->input_format,
-                                     impl_->output_format,
-                                     planes->data(),
-                                     static_cast<int>(input.samples_per_channel),
+    auto converted = convert_samples(*impl_->context, impl_->input_format, impl_->output_format,
+                                     planes->data(), static_cast<int>(input.samples_per_channel),
                                      AudioResamplerBackendOperation::Resample);
     if (!converted) {
         return std::unexpected(std::move(converted.error()));
@@ -388,7 +380,8 @@ FfmpegAudioResamplerBackend::resample(const DecodedAudio& input) {
         try {
             output.push_back(std::move(**converted));
         } catch (const std::bad_alloc&) {
-            return std::unexpected(make_error(AudioResamplerBackendOperation::Resample, AVERROR(ENOMEM)));
+            return std::unexpected(
+                make_error(AudioResamplerBackendOperation::Resample, AVERROR(ENOMEM)));
         }
     }
     return output;
@@ -397,8 +390,9 @@ FfmpegAudioResamplerBackend::resample(const DecodedAudio& input) {
 std::expected<ResampledAudioBatch, AudioResamplerBackendError>
 FfmpegAudioResamplerBackend::drain() {
     if (impl_->context == nullptr) {
-        return std::unexpected(make_state_error(AudioResamplerBackendOperation::Drain,
-                                                "FFmpeg audio resampler backend is not configured"));
+        return std::unexpected(
+            make_state_error(AudioResamplerBackendOperation::Drain,
+                             "FFmpeg audio resampler backend is not configured"));
     }
     if (impl_->draining) {
         return ResampledAudioBatch{};
@@ -407,12 +401,9 @@ FfmpegAudioResamplerBackend::drain() {
     try {
         ResampledAudioBatch output;
         for (;;) {
-            auto converted = convert_samples(*impl_->context,
-                                             impl_->input_format,
-                                             impl_->output_format,
-                                             nullptr,
-                                             0,
-                                             AudioResamplerBackendOperation::Drain);
+            auto converted =
+                convert_samples(*impl_->context, impl_->input_format, impl_->output_format, nullptr,
+                                0, AudioResamplerBackendOperation::Drain);
             if (!converted) {
                 return std::unexpected(std::move(converted.error()));
             }

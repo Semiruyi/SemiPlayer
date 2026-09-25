@@ -41,9 +41,9 @@ public:
 
     template <class T>
     [[nodiscard]] std::shared_ptr<Subscription> subscribe(std::function<void(const T&)> cb) {
-        return subscribe_erased(std::type_index(typeid(T)), [cb = std::move(cb)](const void* event) {
-            cb(*static_cast<const T*>(event));
-        });
+        return subscribe_erased(
+            std::type_index(typeid(T)),
+            [cb = std::move(cb)](const void* event) { cb(*static_cast<const T*>(event)); });
     }
 
     template <class T>
@@ -65,9 +65,8 @@ public:
 protected:
     Notifier() = default;
 
-    virtual std::shared_ptr<Subscription> subscribe_erased(
-        std::type_index type,
-        std::function<void(const void*)> cb) = 0;
+    virtual std::shared_ptr<Subscription> subscribe_erased(std::type_index type,
+                                                           std::function<void(const void*)> cb) = 0;
 
     virtual bool send_erased(std::type_index type, const void* event) = 0;
     virtual bool clear_erased(std::type_index type) noexcept = 0;

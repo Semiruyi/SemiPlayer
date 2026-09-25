@@ -5,8 +5,7 @@
 
 namespace semi::domain {
 
-AudioFrameStore::AudioFrameStore(std::shared_ptr<infra::Notifier> notifier,
-                                 std::size_t capacity)
+AudioFrameStore::AudioFrameStore(std::shared_ptr<infra::Notifier> notifier, std::size_t capacity)
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 AudioFramePushResult AudioFrameStore::try_push(AudioFrameStoreItem&& item) {

@@ -4,8 +4,7 @@
 
 namespace semi::domain {
 
-VideoFrameStore::VideoFrameStore(std::shared_ptr<infra::Notifier> notifier,
-                                 std::size_t capacity)
+VideoFrameStore::VideoFrameStore(std::shared_ptr<infra::Notifier> notifier, std::size_t capacity)
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 VideoFramePushResult VideoFrameStore::try_push(VideoFrameStoreItem&& item) {

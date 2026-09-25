@@ -55,8 +55,7 @@ void write_formatted(Level level,
                      std::string_view tag,
                      const std::source_location& location,
                      std::string_view message) noexcept;
-void report_internal_failure(std::string_view context,
-                             std::string_view detail) noexcept;
+void report_internal_failure(std::string_view context, std::string_view detail) noexcept;
 
 } // namespace detail
 
@@ -82,11 +81,8 @@ inline void write(Level level,
     }
 
     try {
-        detail::write_formatted(
-            level,
-            tag,
-            location,
-            fmt::format(format, std::forward<Args>(args)...));
+        detail::write_formatted(level, tag, location,
+                                fmt::format(format, std::forward<Args>(args)...));
     } catch (const std::exception& ex) {
         detail::report_internal_failure("formatting failed", ex.what());
     } catch (...) {
@@ -96,9 +92,21 @@ inline void write(Level level,
 
 } // namespace semi::log
 
-#define SEMI_LOG_TRACE(...) ::semi::log::write(::semi::log::Level::Trace, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
-#define SEMI_LOG_DEBUG(...) ::semi::log::write(::semi::log::Level::Debug, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
-#define SEMI_LOG_INFO(...) ::semi::log::write(::semi::log::Level::Info, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
-#define SEMI_LOG_WARN(...) ::semi::log::write(::semi::log::Level::Warn, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
-#define SEMI_LOG_ERROR(...) ::semi::log::write(::semi::log::Level::Error, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
-#define SEMI_LOG_CRITICAL(...) ::semi::log::write(::semi::log::Level::Critical, SEMI_LOG_TAG, std::source_location::current(), __VA_ARGS__)
+#define SEMI_LOG_TRACE(...)                                                                        \
+    ::semi::log::write(::semi::log::Level::Trace, SEMI_LOG_TAG, std::source_location::current(),   \
+                       __VA_ARGS__)
+#define SEMI_LOG_DEBUG(...)                                                                        \
+    ::semi::log::write(::semi::log::Level::Debug, SEMI_LOG_TAG, std::source_location::current(),   \
+                       __VA_ARGS__)
+#define SEMI_LOG_INFO(...)                                                                         \
+    ::semi::log::write(::semi::log::Level::Info, SEMI_LOG_TAG, std::source_location::current(),    \
+                       __VA_ARGS__)
+#define SEMI_LOG_WARN(...)                                                                         \
+    ::semi::log::write(::semi::log::Level::Warn, SEMI_LOG_TAG, std::source_location::current(),    \
+                       __VA_ARGS__)
+#define SEMI_LOG_ERROR(...)                                                                        \
+    ::semi::log::write(::semi::log::Level::Error, SEMI_LOG_TAG, std::source_location::current(),   \
+                       __VA_ARGS__)
+#define SEMI_LOG_CRITICAL(...)                                                                     \
+    ::semi::log::write(::semi::log::Level::Critical, SEMI_LOG_TAG,                                 \
+                       std::source_location::current(), __VA_ARGS__)

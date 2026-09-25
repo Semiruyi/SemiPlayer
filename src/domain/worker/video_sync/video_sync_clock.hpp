@@ -37,8 +37,7 @@ public:
 
     [[nodiscard]] VideoSyncClockSnapshot snapshot() const noexcept;
     [[nodiscard]] std::optional<std::int64_t>
-    current_pts_for_frame(std::optional<std::int64_t> frame_pts_us,
-                          bool playback_enabled) noexcept;
+    current_pts_for_frame(std::optional<std::int64_t> frame_pts_us, bool playback_enabled) noexcept;
 
     void pause() noexcept;
     void resume() noexcept;
@@ -49,8 +48,7 @@ private:
 
     [[nodiscard]] bool external_clock_required() const noexcept;
     [[nodiscard]] std::optional<std::int64_t> current_pts() const noexcept;
-    void anchor_local_clock_if_needed(std::int64_t pts_us,
-                                      bool playback_enabled) noexcept;
+    void anchor_local_clock_if_needed(std::int64_t pts_us, bool playback_enabled) noexcept;
 
     std::shared_ptr<AudioOutput> audio_output_;
     bool audio_master_ = true;

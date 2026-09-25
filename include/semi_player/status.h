@@ -12,14 +12,14 @@ extern "C" {
 
 typedef enum semi_status {
     SEMI_OK = 0,
-    SEMI_ERR_NOT_INITIALIZED = 1, /* 未 init 就调业务接口 */
-    SEMI_ERR_INVALID_STATE = 2,   /* 会话状态不允许该操作 */
-    SEMI_ERR_CANCELLED = 3,       /* 命令被 cancel */
-    SEMI_ERR_ASSEMBLE_FAILED = 4, /* init / IoC 装配失败 */
-    SEMI_ERR_INTERNAL = 5,        /* 未分类内部错误 */
-    SEMI_ERR_INVALID_ARGUMENT = 6,/* 参数为空或超出合法范围 */
-    SEMI_ERR_INVALID_HANDLE = 7,  /* 句柄不存在、已释放或不支持该结果 */
-    SEMI_ERR_INVALID_RESOURCE = 8 /* 资源无法打开或探测 */
+    SEMI_ERR_NOT_INITIALIZED = 1,  /* 未 init 就调业务接口 */
+    SEMI_ERR_INVALID_STATE = 2,    /* 会话状态不允许该操作 */
+    SEMI_ERR_CANCELLED = 3,        /* 命令被 cancel */
+    SEMI_ERR_ASSEMBLE_FAILED = 4,  /* init / IoC 装配失败 */
+    SEMI_ERR_INTERNAL = 5,         /* 未分类内部错误 */
+    SEMI_ERR_INVALID_ARGUMENT = 6, /* 参数为空或超出合法范围 */
+    SEMI_ERR_INVALID_HANDLE = 7,   /* 句柄不存在、已释放或不支持该结果 */
+    SEMI_ERR_INVALID_RESOURCE = 8  /* 资源无法打开或探测 */
 } semi_status_t;
 
 #ifdef __cplusplus

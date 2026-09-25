@@ -43,8 +43,8 @@ TEST(FfmpegVideoFrameBufferTest, ExposesNativePlanesAndOwnsTheAvFrame) {
         const auto plane = buffer->plane(index);
         EXPECT_NE(plane.data, nullptr);
         EXPECT_GT(plane.stride_bytes, 0U);
-        EXPECT_EQ(plane.size_bytes, static_cast<std::size_t>(plane.stride_bytes) *
-                                       (index == 0 ? 180U : 90U));
+        EXPECT_EQ(plane.size_bytes,
+                  static_cast<std::size_t>(plane.stride_bytes) * (index == 0 ? 180U : 90U));
     }
     EXPECT_EQ(buffer->plane(3).size_bytes, 0U);
 }
@@ -66,10 +66,8 @@ TEST(FfmpegVideoFrameBufferTest, ExposesYuv420p10lePlanes) {
     ASSERT_EQ(buffer->plane_count(), 3U);
     EXPECT_EQ(buffer->plane(0).size_bytes,
               static_cast<std::size_t>(buffer->plane(0).stride_bytes) * 2U);
-    EXPECT_EQ(buffer->plane(1).size_bytes,
-              static_cast<std::size_t>(buffer->plane(1).stride_bytes));
-    EXPECT_EQ(buffer->plane(2).size_bytes,
-              static_cast<std::size_t>(buffer->plane(2).stride_bytes));
+    EXPECT_EQ(buffer->plane(1).size_bytes, static_cast<std::size_t>(buffer->plane(1).stride_bytes));
+    EXPECT_EQ(buffer->plane(2).size_bytes, static_cast<std::size_t>(buffer->plane(2).stride_bytes));
 }
 
 TEST(FfmpegVideoDecoderBackendTest, RejectsDecodeBeforeConfiguration) {

@@ -39,34 +39,31 @@ AudioResamplerBackendError backend_exception(AudioResamplerBackendOperation oper
 
 } // namespace
 
-DefaultAudioResampler::DefaultAudioResampler(
-    std::shared_ptr<AudioFrameSource> audio_frame_source,
-    std::shared_ptr<AudioFrameSink> audio_frame_sink,
-    std::shared_ptr<AudioResamplerBackend> backend,
-    std::shared_ptr<infra::Notifier> notifier,
-    std::shared_ptr<Generation> generation)
+DefaultAudioResampler::DefaultAudioResampler(std::shared_ptr<AudioFrameSource> audio_frame_source,
+                                             std::shared_ptr<AudioFrameSink> audio_frame_sink,
+                                             std::shared_ptr<AudioResamplerBackend> backend,
+                                             std::shared_ptr<infra::Notifier> notifier,
+                                             std::shared_ptr<Generation> generation)
     : audio_frame_source_(std::move(audio_frame_source)),
       audio_frame_sink_(std::move(audio_frame_sink)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
-    audio_frame_store_not_empty_subscription_ = notifier_->subscribe<AudioFrameStoreNotEmpty>(
-        [this](const AudioFrameStoreNotEmpty&) {
+    audio_frame_store_not_empty_subscription_ =
+        notifier_->subscribe<AudioFrameStoreNotEmpty>([this](const AudioFrameStoreNotEmpty&) {
             {
                 std::lock_guard lock(mutex_);
                 input_not_empty_hint_ = true;
             }
             cv_.notify_one();
         });
-    audio_frame_store_not_full_subscription_ = notifier_->subscribe<AudioFrameStoreNotFull>(
-        [this](const AudioFrameStoreNotFull&) {
+    audio_frame_store_not_full_subscription_ =
+        notifier_->subscribe<AudioFrameStoreNotFull>([this](const AudioFrameStoreNotFull&) {
             {
                 std::lock_guard lock(mutex_);
                 output_not_full_hint_ = true;
@@ -74,9 +71,7 @@ DefaultAudioResampler::DefaultAudioResampler(
             cv_.notify_one();
         });
     generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
-            cv_.notify_one();
-        });
+        [this](const GenerationChanged&) { cv_.notify_one(); });
 }
 
 DefaultAudioResampler::~DefaultAudioResampler() {
@@ -86,9 +81,9 @@ DefaultAudioResampler::~DefaultAudioResampler() {
     generation_changed_subscription_.reset();
 }
 
-std::expected<void, AudioResamplerError> DefaultAudioResampler::configure(
-    const contracts::media::AudioPcmFormat& input_format,
-    const contracts::media::AudioPcmFormat& output_format) {
+std::expected<void, AudioResamplerError>
+DefaultAudioResampler::configure(const contracts::media::AudioPcmFormat& input_format,
+                                 const contracts::media::AudioPcmFormat& output_format) {
     ConfigureCommand command;
     command.input_format = input_format;
     command.output_format = output_format;
@@ -249,8 +244,7 @@ bool DefaultAudioResampler::should_process_data_locked() const noexcept {
         return output_not_full_hint_;
     }
 
-    if (input_exhausted_ &&
-        (!generation_ || active_generation_ == generation_->current())) {
+    if (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) {
         return false;
     }
 
@@ -262,7 +256,8 @@ void DefaultAudioResampler::adopt_generation_if_needed(
     bool generation_changed = false;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+        if (session_state_ != SessionState::Configured ||
+            current_generation == active_generation_) {
             return;
         }
 
@@ -306,8 +301,7 @@ DefaultAudioResampler::try_push_pending_output() noexcept {
     const auto pushed = audio_frame_sink->try_push(std::move(*pending_output));
 
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured) {
         return PendingOutputPushResult::Handled;
     }
 
@@ -329,8 +323,7 @@ void DefaultAudioResampler::read_next_input_to_pending() noexcept {
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured ||
-            (input_exhausted_ &&
-             (!generation_ || active_generation_ == generation_->current())) ||
+            (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) ||
             !pending_outputs_.empty()) {
             return;
         }
@@ -378,8 +371,8 @@ void DefaultAudioResampler::handle_input_item(AudioFrameStoreItem item) noexcept
     handle_end_of_input(current_generation);
 }
 
-void DefaultAudioResampler::handle_audio_frame(
-    AudioFrame frame, Generation::Value current_generation) noexcept {
+void DefaultAudioResampler::handle_audio_frame(AudioFrame frame,
+                                               Generation::Value current_generation) noexcept {
     std::shared_ptr<AudioResamplerBackend> backend;
     {
         std::lock_guard lock(mutex_);
@@ -395,9 +388,9 @@ void DefaultAudioResampler::handle_audio_frame(
     try {
         resampled = backend->resample(frame.decoded());
     } catch (...) {
-        resampled = std::unexpected(backend_exception(
-            AudioResamplerBackendOperation::Resample,
-            "audio resampler backend resample threw an exception"));
+        resampled = std::unexpected(
+            backend_exception(AudioResamplerBackendOperation::Resample,
+                              "audio resampler backend resample threw an exception"));
     }
 
     if (!resampled) {
@@ -425,9 +418,9 @@ void DefaultAudioResampler::handle_end_of_input(Generation::Value generation) no
     try {
         drained = backend->drain();
     } catch (...) {
-        drained = std::unexpected(backend_exception(
-            AudioResamplerBackendOperation::Drain,
-            "audio resampler backend drain threw an exception"));
+        drained =
+            std::unexpected(backend_exception(AudioResamplerBackendOperation::Drain,
+                                              "audio resampler backend drain threw an exception"));
     }
 
     if (!drained) {
@@ -443,8 +436,7 @@ void DefaultAudioResampler::store_resampled_outputs(
     Generation::Value generation,
     bool append_end_of_input) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured ||
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
         active_generation_ != generation) {
         return;
     }
@@ -504,8 +496,7 @@ bool DefaultAudioResampler::transition_worker_locked(WorkerEvent event) noexcept
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -541,8 +532,7 @@ bool DefaultAudioResampler::transition_session_locked(SessionEvent event) noexce
         }
         return false;
     case SessionEvent::UnconfigureRequested:
-        if (session_state_ == SessionState::Configured ||
-            session_state_ == SessionState::Failed) {
+        if (session_state_ == SessionState::Configured || session_state_ == SessionState::Failed) {
             session_state_ = SessionState::Unconfiguring;
             return true;
         }

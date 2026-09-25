@@ -21,10 +21,8 @@ public:
     void pause(std::uint64_t generation) noexcept;
     void resume(std::uint64_t generation) noexcept;
     void finish(std::uint64_t generation) noexcept;
-    [[nodiscard]] bool set_first_pts(std::uint64_t generation,
-                                     std::int64_t pts_us) noexcept;
-    void on_audio_frames_consumed(std::uint64_t generation,
-                                  std::uint32_t frames) noexcept;
+    [[nodiscard]] bool set_first_pts(std::uint64_t generation, std::int64_t pts_us) noexcept;
+    void on_audio_frames_consumed(std::uint64_t generation, std::uint32_t frames) noexcept;
 
     [[nodiscard]] std::optional<PlaybackPosition> current_position() const noexcept;
 

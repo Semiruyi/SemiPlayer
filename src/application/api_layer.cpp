@@ -53,8 +53,13 @@ struct ConfigureVideoOutputCommand {
     semi_status_t validation_status = SEMI_OK;
 };
 
-using Command = std::variant<OpenCommand, PlayCommand, PauseCommand, SeekCommand, CloseCommand,
-                             SetVolumeCommand, ConfigureVideoOutputCommand>;
+using Command = std::variant<OpenCommand,
+                             PlayCommand,
+                             PauseCommand,
+                             SeekCommand,
+                             CloseCommand,
+                             SetVolumeCommand,
+                             ConfigureVideoOutputCommand>;
 
 template <typename... Handlers>
 struct Overloaded : Handlers... {
@@ -197,11 +202,8 @@ void push_event_locked(ApiLayer::Impl& impl, PlayerEvent event) {
 
 template <typename BackendError>
 void log_backend_failure(const char* component, const BackendError& error) noexcept {
-    SEMI_LOG_ERROR("{} backend failure: operation={} native_code={} message={}",
-                   component,
-                   static_cast<int>(error.operation),
-                   error.native_code,
-                   error.message);
+    SEMI_LOG_ERROR("{} backend failure: operation={} native_code={} message={}", component,
+                   static_cast<int>(error.operation), error.native_code, error.message);
 }
 
 bool can_execute(PlayerState state, const Command& command) noexcept {
@@ -220,9 +222,7 @@ bool can_execute(PlayerState state, const Command& command) noexcept {
             },
             [](const CloseCommand&) { return true; },
             [](const SetVolumeCommand&) { return true; },
-            [state](const ConfigureVideoOutputCommand&) {
-                return state == PlayerState::Idle;
-            },
+            [state](const ConfigureVideoOutputCommand&) { return state == PlayerState::Idle; },
         },
         command);
 }
@@ -393,8 +393,7 @@ open_demuxer(ApiLayer::Impl& impl, const std::string& source, bool replaced_medi
     } catch (...) {
         SEMI_LOG_ERROR("demuxer open threw an unknown exception");
     }
-    return std::unexpected(make_failure(SEMI_ERR_INTERNAL,
-                                        idle_state_if_replaced(replaced_media)));
+    return std::unexpected(make_failure(SEMI_ERR_INTERNAL, idle_state_if_replaced(replaced_media)));
 }
 
 std::expected<void, CommandExecution>
@@ -475,12 +474,13 @@ configure_audio_pipeline(ApiLayer::Impl& impl, const domain::DemuxerOpenResult& 
         return std::unexpected(make_failure(output_status(output.error()), PlayerState::Idle));
     }
 
-    auto resampled = impl.audio_resampler->configure(decoded->decoded_format,
-                                                     output->playback_format);
+    auto resampled =
+        impl.audio_resampler->configure(decoded->decoded_format, output->playback_format);
     if (!resampled) {
         SEMI_LOG_ERROR("audio resampler configure failed: {}", resampled.error().message);
         close_pipeline(impl);
-        return std::unexpected(make_failure(resampler_status(resampled.error()), PlayerState::Idle));
+        return std::unexpected(
+            make_failure(resampler_status(resampled.error()), PlayerState::Idle));
     }
 
     impl.audio_pipeline_configured = true;
@@ -494,24 +494,20 @@ CommandExecution make_open_success(const domain::DemuxerOpenResult& opened) {
     execution.result.has_media_info = true;
     execution.result.media_info = to_media_info(opened);
     const MediaInfo& media_info = execution.result.media_info;
-    SEMI_LOG_INFO(
-        "media opened: duration_us={}, video={}x{} codec={}, audio={} codec={} sample_rate={} channels={}, subtitle={} codec={}",
-        media_info.duration_us,
-        media_info.video_width,
-        media_info.video_height,
-        opened.video ? opened.video->config.common.codec_name : std::string{},
-        media_info.has_audio,
-        opened.audio ? opened.audio->config.common.codec_name : std::string{},
-        opened.audio ? opened.audio->config.sample_rate : 0,
-        opened.audio ? opened.audio->config.channels : 0,
-        media_info.has_subtitle,
-        opened.subtitle ? opened.subtitle->config.common.codec_name : std::string{});
+    SEMI_LOG_INFO("media opened: duration_us={}, video={}x{} codec={}, audio={} codec={} "
+                  "sample_rate={} channels={}, subtitle={} codec={}",
+                  media_info.duration_us, media_info.video_width, media_info.video_height,
+                  opened.video ? opened.video->config.common.codec_name : std::string{},
+                  media_info.has_audio,
+                  opened.audio ? opened.audio->config.common.codec_name : std::string{},
+                  opened.audio ? opened.audio->config.sample_rate : 0,
+                  opened.audio ? opened.audio->config.channels : 0, media_info.has_subtitle,
+                  opened.subtitle ? opened.subtitle->config.common.codec_name : std::string{});
     return execution;
 }
 
-CommandExecution execute_open(const OpenCommand& command,
-                              PlayerState current_state,
-                              ApiLayer::Impl& impl) {
+CommandExecution
+execute_open(const OpenCommand& command, PlayerState current_state, ApiLayer::Impl& impl) {
     if (command.source.empty()) {
         return make_failure(SEMI_ERR_INVALID_ARGUMENT);
     }
@@ -612,16 +608,15 @@ CommandExecution execute_pause(PlayerState current_state, ApiLayer::Impl& impl) 
 }
 
 CommandExecution execute_seek(std::int64_t position_us,
-                               contracts::demuxer::SeekMode mode,
-                               PlayerState current_state,
-                               ApiLayer::Impl& impl) noexcept {
+                              contracts::demuxer::SeekMode mode,
+                              PlayerState current_state,
+                              ApiLayer::Impl& impl) noexcept {
     const bool valid_mode = mode == contracts::demuxer::SeekMode::PreviousKeyframe ||
                             mode == contracts::demuxer::SeekMode::NextKeyframe ||
                             mode == contracts::demuxer::SeekMode::Accurate;
     if (position_us < 0 || !valid_mode || !impl.demuxer) {
-        return make_failure(position_us < 0 || !valid_mode
-                                ? SEMI_ERR_INVALID_ARGUMENT
-                                : SEMI_ERR_INTERNAL);
+        return make_failure(position_us < 0 || !valid_mode ? SEMI_ERR_INVALID_ARGUMENT
+                                                           : SEMI_ERR_INTERNAL);
     }
     try {
         auto result = impl.demuxer->seek(position_us, mode);
@@ -642,7 +637,8 @@ CommandExecution execute_seek(std::int64_t position_us,
 
     CommandExecution execution;
     execution.status = SEMI_OK;
-    execution.next_state = current_state == PlayerState::Ended ? PlayerState::Paused : current_state;
+    execution.next_state =
+        current_state == PlayerState::Ended ? PlayerState::Paused : current_state;
     return execution;
 }
 
@@ -657,16 +653,14 @@ CommandExecution execute_close(PlayerState current_state, ApiLayer::Impl& impl) 
     return execution;
 }
 
-CommandExecution execute_configure_video_output(
-    const ConfigureVideoOutputCommand& command,
-    ApiLayer::Impl& impl) {
+CommandExecution execute_configure_video_output(const ConfigureVideoOutputCommand& command,
+                                                ApiLayer::Impl& impl) {
     const auto& config = command.config;
     if (command.validation_status != SEMI_OK) {
         return make_failure(command.validation_status);
     }
 
-    constexpr auto max_dimension =
-        static_cast<std::uint32_t>(std::numeric_limits<int>::max());
+    constexpr auto max_dimension = static_cast<std::uint32_t>(std::numeric_limits<int>::max());
     if (config.pixel_format != contracts::media::VideoPixelFormat::Rgba8 ||
         config.output_width > max_dimension || config.output_height > max_dimension) {
         return make_failure(SEMI_ERR_INVALID_ARGUMENT);
@@ -676,9 +670,8 @@ CommandExecution execute_configure_video_output(
     return make_failure(SEMI_OK);
 }
 
-CommandExecution execute_command(PlayerState current_state,
-                                 const Command& command,
-                                 ApiLayer::Impl& impl) noexcept {
+CommandExecution
+execute_command(PlayerState current_state, const Command& command, ApiLayer::Impl& impl) noexcept {
     try {
         if (!can_execute(current_state, command)) {
             CommandExecution execution;
@@ -686,29 +679,29 @@ CommandExecution execute_command(PlayerState current_state,
             return execution;
         }
 
-        return std::visit(
-            Overloaded{
-                [&impl, current_state](const OpenCommand& value) {
-                    return execute_open(value, current_state, impl);
-                },
-                [&impl, current_state](const PlayCommand&) {
-                    return execute_play(current_state, impl);
-                },
-                [&impl, current_state](const PauseCommand&) {
-                    return execute_pause(current_state, impl);
-                },
-                [&impl, current_state](const SeekCommand& value) {
-                    return execute_seek(value.position_us, value.mode, current_state, impl);
-                },
-                [&impl, current_state](const CloseCommand&) {
-                    return execute_close(current_state, impl);
-                },
-                [](const SetVolumeCommand&) -> CommandExecution { return {}; },
-                [&impl](const ConfigureVideoOutputCommand& value) {
-                    return execute_configure_video_output(value, impl);
-                },
-            },
-            command);
+        return std::visit(Overloaded{
+                              [&impl, current_state](const OpenCommand& value) {
+                                  return execute_open(value, current_state, impl);
+                              },
+                              [&impl, current_state](const PlayCommand&) {
+                                  return execute_play(current_state, impl);
+                              },
+                              [&impl, current_state](const PauseCommand&) {
+                                  return execute_pause(current_state, impl);
+                              },
+                              [&impl, current_state](const SeekCommand& value) {
+                                  return execute_seek(value.position_us, value.mode, current_state,
+                                                      impl);
+                              },
+                              [&impl, current_state](const CloseCommand&) {
+                                  return execute_close(current_state, impl);
+                              },
+                              [](const SetVolumeCommand&) -> CommandExecution { return {}; },
+                              [&impl](const ConfigureVideoOutputCommand& value) {
+                                  return execute_configure_video_output(value, impl);
+                              },
+                          },
+                          command);
     } catch (const std::exception& error) {
         SEMI_LOG_ERROR("command execution failed: {}", error.what());
         return {};
@@ -740,9 +733,7 @@ void worker_main(ApiLayer::Impl& impl) {
         bool stopping = false;
         {
             std::unique_lock lock(impl.mutex);
-            impl.queue_cv.wait(lock, [&impl] {
-                return impl.stopping || !impl.queue.empty();
-            });
+            impl.queue_cv.wait(lock, [&impl] { return impl.stopping || !impl.queue.empty(); });
             if (impl.queue.empty()) {
                 if (impl.stopping) {
                     return;
@@ -837,12 +828,10 @@ ApiLayer::ApiLayer(std::shared_ptr<domain::Demuxer> demuxer,
         impl_->audio_output_backend_failure_subscription =
             impl_->notifier->subscribe<domain::AudioOutputBackendFailure>(
                 [](const domain::AudioOutputBackendFailure& event) {
-                    SEMI_LOG_ERROR(
-                        "audio output backend failure: generation={} operation={} native_code={} message={}",
-                        event.generation,
-                        static_cast<int>(event.error.operation),
-                        event.error.native_code,
-                        event.error.message);
+                    SEMI_LOG_ERROR("audio output backend failure: generation={} operation={} "
+                                   "native_code={} message={}",
+                                   event.generation, static_cast<int>(event.error.operation),
+                                   event.error.native_code, event.error.message);
                 });
         impl_->video_decoder_backend_failure_subscription =
             impl_->notifier->subscribe<domain::VideoDecoderBackendFailure>(
@@ -868,9 +857,7 @@ bool ApiLayer::start() noexcept {
             return true;
         }
         impl_->stopping = false;
-        impl_->worker = std::thread([impl = impl_.get()] {
-            worker_main(*impl);
-        });
+        impl_->worker = std::thread([impl = impl_.get()] { worker_main(*impl); });
         impl_->accepting = true;
         SEMI_LOG_INFO("command worker started");
         return true;
@@ -926,11 +913,13 @@ CommandHandle enqueue(ApiLayer::Impl& impl, CommandType command) {
             }
         }
         if (discarded != 0) {
-            SEMI_LOG_WARN("discarded {} completed command result(s) to free task capacity", discarded);
+            SEMI_LOG_WARN("discarded {} completed command result(s) to free task capacity",
+                          discarded);
         }
         if (capacity_rejected) {
-            SEMI_LOG_WARN("command rejected: task capacity {} is occupied by queued or running commands",
-                          kMaxLiveTasks);
+            SEMI_LOG_WARN(
+                "command rejected: task capacity {} is occupied by queued or running commands",
+                kMaxLiveTasks);
             return 0;
         }
         impl.queue_cv.notify_one();
@@ -955,8 +944,7 @@ CommandHandle ApiLayer::enqueue_pause() {
     return enqueue(*impl_, PauseCommand{});
 }
 
-CommandHandle ApiLayer::enqueue_seek(std::int64_t position_us,
-                                     contracts::demuxer::SeekMode mode) {
+CommandHandle ApiLayer::enqueue_seek(std::int64_t position_us, contracts::demuxer::SeekMode mode) {
     return enqueue(*impl_, SeekCommand{position_us, mode});
 }
 
@@ -968,13 +956,12 @@ CommandHandle ApiLayer::enqueue_set_volume(std::uint32_t volume) {
     return enqueue(*impl_, SetVolumeCommand{volume});
 }
 
-CommandHandle
-ApiLayer::enqueue_configure_video_output(VideoPresentationConfig config,
-                                         semi_status_t validation_status) {
+CommandHandle ApiLayer::enqueue_configure_video_output(VideoPresentationConfig config,
+                                                       semi_status_t validation_status) {
     return enqueue(*impl_, ConfigureVideoOutputCommand{
-        .config = std::move(config),
-        .validation_status = validation_status,
-    });
+                               .config = std::move(config),
+                               .validation_status = validation_status,
+                           });
 }
 
 CommandHandle ApiLayer::open(std::string source) {
@@ -989,8 +976,7 @@ CommandHandle ApiLayer::pause() {
     return enqueue_pause();
 }
 
-CommandHandle ApiLayer::seek(std::int64_t position_us,
-                             contracts::demuxer::SeekMode mode) {
+CommandHandle ApiLayer::seek(std::int64_t position_us, contracts::demuxer::SeekMode mode) {
     return enqueue_seek(position_us, mode);
 }
 
@@ -1021,9 +1007,7 @@ semi_status_t ApiLayer::await(CommandHandle handle, CommandResult& out_result) {
     semi_status_t status = SEMI_ERR_INTERNAL;
     {
         std::unique_lock lock(task->mutex);
-        task->done_cv.wait(lock, [&task] {
-            return is_terminal(task->state);
-        });
+        task->done_cv.wait(lock, [&task] { return is_terminal(task->state); });
         if (task->consumed) {
             return SEMI_ERR_INVALID_HANDLE;
         }

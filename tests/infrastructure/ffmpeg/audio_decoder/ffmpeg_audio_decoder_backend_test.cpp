@@ -40,8 +40,8 @@ TEST(FfmpegAudioDecoderBackendTest, DecodesOwnedU8PcmAndPreservesTimestamp) {
     EXPECT_EQ(configured->decoded_format.sample_format, AudioSampleFormat::U8);
     EXPECT_FALSE(configured->decoded_format.planar);
 
-    const std::array<std::byte, 4> payload = {
-        std::byte{0x80}, std::byte{0x81}, std::byte{0x7f}, std::byte{0x00}};
+    const std::array<std::byte, 4> payload = {std::byte{0x80}, std::byte{0x81}, std::byte{0x7f},
+                                              std::byte{0x00}};
     const auto decoded = backend.decode(EncodedPacket{
         .payload = {payload.begin(), payload.end()},
         .pts_us = 123'456,
@@ -75,9 +75,9 @@ TEST(FfmpegAudioDecoderBackendTest, MapsS64PcmToTheMediaContract) {
     EXPECT_EQ(configured->decoded_format.sample_format, AudioSampleFormat::S64);
     EXPECT_FALSE(configured->decoded_format.planar);
 
-    const std::array<std::byte, 8> payload = {
-        std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
-        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+    const std::array<std::byte, 8> payload = {std::byte{0x01}, std::byte{0x00}, std::byte{0x00},
+                                              std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+                                              std::byte{0x00}, std::byte{0x00}};
     const auto decoded = backend.decode(EncodedPacket{
         .payload = {payload.begin(), payload.end()},
         .pts_us = std::nullopt,

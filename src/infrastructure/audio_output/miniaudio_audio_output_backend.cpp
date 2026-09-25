@@ -66,9 +66,8 @@ bool same_format(const AudioPcmFormat& lhs, const AudioPcmFormat& rhs) noexcept 
            lhs.sample_format == rhs.sample_format && lhs.planar == rhs.planar;
 }
 
-AudioOutputBackendError make_error(AudioOutputBackendOperation operation,
-                                   int native_code,
-                                   std::string message) {
+AudioOutputBackendError
+make_error(AudioOutputBackendOperation operation, int native_code, std::string message) {
     return AudioOutputBackendError{
         .operation = operation,
         .native_code = native_code,
@@ -82,22 +81,21 @@ struct MiniaudioAudioOutputBackend::Impl {
     explicit Impl(std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> notifier)
         : realtime_notifier(std::move(notifier)) {}
 
-    ~Impl() { unconfigure(); }
+    ~Impl() {
+        unconfigure();
+    }
 
     std::expected<AudioOutputConfigureResult, AudioOutputBackendError>
     configure(const AudioOutputOptions& options) {
         std::lock_guard lock(mutex);
         if (configured) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Configure,
-                0,
-                "miniaudio output backend is already configured"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Configure, 0,
+                                              "miniaudio output backend is already configured"));
         }
         if (options.device_id.has_value()) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Configure,
-                0,
-                "miniaudio output backend device_id selection is not implemented yet"));
+            return std::unexpected(
+                make_error(AudioOutputBackendOperation::Configure, 0,
+                           "miniaudio output backend device_id selection is not implemented yet"));
         }
 
         playback_format = default_playback_format();
@@ -114,10 +112,9 @@ struct MiniaudioAudioOutputBackend::Impl {
         ma_result result = ma_device_init(nullptr, &config, &device);
         if (result != MA_SUCCESS) {
             buffer.clear();
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Configure,
-                static_cast<int>(result),
-                "miniaudio device initialization failed"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Configure,
+                                              static_cast<int>(result),
+                                              "miniaudio device initialization failed"));
         }
         device_initialized = true;
         configured = true;
@@ -127,10 +124,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     std::expected<void, AudioOutputBackendError> pause() {
         std::lock_guard lock(mutex);
         if (!configured) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Pause,
-                0,
-                "miniaudio output backend is not configured"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Pause, 0,
+                                              "miniaudio output backend is not configured"));
         }
         if (!device_running) {
             return {};
@@ -138,10 +133,9 @@ struct MiniaudioAudioOutputBackend::Impl {
 
         const ma_result result = ma_device_stop(&device);
         if (result != MA_SUCCESS) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Pause,
-                static_cast<int>(result),
-                "miniaudio device pause failed"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Pause,
+                                              static_cast<int>(result),
+                                              "miniaudio device pause failed"));
         }
         device_running = false;
         return {};
@@ -150,10 +144,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     std::expected<void, AudioOutputBackendError> resume() {
         std::lock_guard lock(mutex);
         if (!configured) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Resume,
-                0,
-                "miniaudio output backend is not configured"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Resume, 0,
+                                              "miniaudio output backend is not configured"));
         }
         if (device_running) {
             return {};
@@ -161,10 +153,9 @@ struct MiniaudioAudioOutputBackend::Impl {
 
         const ma_result result = ma_device_start(&device);
         if (result != MA_SUCCESS) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Resume,
-                static_cast<int>(result),
-                "miniaudio device resume failed"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Resume,
+                                              static_cast<int>(result),
+                                              "miniaudio device resume failed"));
         }
         device_running = true;
         return {};
@@ -174,31 +165,26 @@ struct MiniaudioAudioOutputBackend::Impl {
     try_submit(const DecodedAudio& audio) {
         std::lock_guard lock(mutex);
         if (!configured) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Submit,
-                0,
-                "miniaudio output backend is not configured"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Submit, 0,
+                                              "miniaudio output backend is not configured"));
         }
         if (!same_format(audio.format, playback_format)) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Submit,
-                0,
-                "miniaudio output backend received an unexpected PCM format"));
+            return std::unexpected(
+                make_error(AudioOutputBackendOperation::Submit, 0,
+                           "miniaudio output backend received an unexpected PCM format"));
         }
         if (audio.format.planar || audio.planes.size() != 1) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Submit,
-                0,
-                "miniaudio output backend requires one packed PCM plane"));
+            return std::unexpected(
+                make_error(AudioOutputBackendOperation::Submit, 0,
+                           "miniaudio output backend requires one packed PCM plane"));
         }
 
         const std::size_t expected_bytes =
             static_cast<std::size_t>(audio.samples_per_channel) * frame_size_bytes(audio.format);
         if (audio.planes.front().size() != expected_bytes) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Submit,
-                0,
-                "miniaudio output backend received malformed PCM plane data"));
+            return std::unexpected(
+                make_error(AudioOutputBackendOperation::Submit, 0,
+                           "miniaudio output backend received malformed PCM plane data"));
         }
         if (expected_bytes == 0) {
             return AudioOutputSubmitStatus::Accepted;
@@ -212,13 +198,11 @@ struct MiniaudioAudioOutputBackend::Impl {
     std::expected<AudioOutputDrainStatus, AudioOutputBackendError> try_drain() {
         std::lock_guard lock(mutex);
         if (!configured) {
-            return std::unexpected(make_error(
-                AudioOutputBackendOperation::Drain,
-                0,
-                "miniaudio output backend is not configured"));
+            return std::unexpected(make_error(AudioOutputBackendOperation::Drain, 0,
+                                              "miniaudio output backend is not configured"));
         }
         return buffer.available() == 0 ? AudioOutputDrainStatus::Drained
-                                   : AudioOutputDrainStatus::WouldBlock;
+                                       : AudioOutputDrainStatus::WouldBlock;
     }
 
     std::expected<void, AudioOutputBackendError> reset() {
@@ -228,10 +212,9 @@ struct MiniaudioAudioOutputBackend::Impl {
             // pre-reset callback can notify after the old buffer is cleared.
             const ma_result stopped = ma_device_stop(&device);
             if (stopped != MA_SUCCESS) {
-                return std::unexpected(make_error(
-                    AudioOutputBackendOperation::Reset,
-                    static_cast<int>(stopped),
-                    "miniaudio device reset stop failed"));
+                return std::unexpected(make_error(AudioOutputBackendOperation::Reset,
+                                                  static_cast<int>(stopped),
+                                                  "miniaudio device reset stop failed"));
             }
             device_running = false;
         }
@@ -241,10 +224,9 @@ struct MiniaudioAudioOutputBackend::Impl {
             const ma_result started = ma_device_start(&device);
             if (started != MA_SUCCESS) {
                 device_running = false;
-                return std::unexpected(make_error(
-                    AudioOutputBackendOperation::Reset,
-                    static_cast<int>(started),
-                    "miniaudio device reset restart failed"));
+                return std::unexpected(make_error(AudioOutputBackendOperation::Reset,
+                                                  static_cast<int>(started),
+                                                  "miniaudio device reset restart failed"));
             }
             device_running = true;
         }
@@ -267,10 +249,8 @@ struct MiniaudioAudioOutputBackend::Impl {
         previous_callback_copied_frames.store(0, std::memory_order_release);
     }
 
-    static void data_callback(ma_device* device,
-                              void* output,
-                              const void*,
-                              ma_uint32 frame_count) noexcept {
+    static void
+    data_callback(ma_device* device, void* output, const void*, ma_uint32 frame_count) noexcept {
         auto* self = static_cast<Impl*>(device->pUserData);
         if (self == nullptr || output == nullptr) {
             return;
@@ -279,8 +259,8 @@ struct MiniaudioAudioOutputBackend::Impl {
     }
 
     void write_to_device(void* output, ma_uint32 frame_count) noexcept {
-        const auto confirmed_frames = previous_callback_copied_frames.load(
-            std::memory_order_acquire);
+        const auto confirmed_frames =
+            previous_callback_copied_frames.load(std::memory_order_acquire);
         const std::size_t requested_bytes =
             static_cast<std::size_t>(frame_count) * kPlaybackChannels * kBytesPerSample;
         auto* bytes = static_cast<std::byte*>(output);
@@ -290,9 +270,8 @@ struct MiniaudioAudioOutputBackend::Impl {
             std::memset(bytes + copied, 0, requested_bytes - copied);
         }
         const std::size_t bytes_per_frame = kPlaybackChannels * kBytesPerSample;
-        previous_callback_copied_frames.store(
-            static_cast<std::uint32_t>(copied / bytes_per_frame),
-            std::memory_order_release);
+        previous_callback_copied_frames.store(static_cast<std::uint32_t>(copied / bytes_per_frame),
+                                              std::memory_order_release);
         if (confirmed_frames > 0 && realtime_notifier) {
             realtime_notifier->notify(confirmed_frames);
         }
@@ -333,8 +312,7 @@ MiniaudioAudioOutputBackend::resume() {
 
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
-MiniaudioAudioOutputBackend::try_submit(
-    const contracts::media::DecodedAudio& audio) {
+MiniaudioAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
     return impl_->try_submit(audio);
 }
 

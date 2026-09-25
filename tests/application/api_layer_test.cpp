@@ -31,8 +31,7 @@ public:
     domain::SeekMode last_seek_mode = domain::SeekMode::Unknown;
     bool fail_seek = false;
 
-    std::expected<domain::DemuxerOpenResult, domain::DemuxerError>
-    open(std::string_view) override {
+    std::expected<domain::DemuxerOpenResult, domain::DemuxerError> open(std::string_view) override {
         ++open_calls;
         if (is_open) {
             return std::unexpected(domain::DemuxerError{
@@ -45,11 +44,12 @@ public:
             return std::unexpected(domain::DemuxerError{
                 .code = domain::DemuxerErrorCode::BackendFailure,
                 .message = "cannot open source",
-                .backend_error = domain::DemuxerBackendError{
-                    .operation = domain::DemuxerBackendOperation::Open,
-                    .native_code = -2,
-                    .message = "No such file or directory",
-                },
+                .backend_error =
+                    domain::DemuxerBackendError{
+                        .operation = domain::DemuxerBackendOperation::Open,
+                        .native_code = -2,
+                        .message = "No such file or directory",
+                    },
             });
         }
         is_open = true;
@@ -59,8 +59,11 @@ public:
             result.video = domain::SelectedStream<domain::VideoCodecConfig>{
                 .id = {0},
                 .timing = {},
-                .config = {.common = {}, .coded_width = 1920, .coded_height = 1080,
-                           .profile = std::nullopt, .level = std::nullopt},
+                .config = {.common = {},
+                           .coded_width = 1920,
+                           .coded_height = 1080,
+                           .profile = std::nullopt,
+                           .level = std::nullopt},
             };
         }
         if (has_audio) {
@@ -73,8 +76,8 @@ public:
         return result;
     }
 
-    std::expected<void, domain::DemuxerError>
-    seek(std::int64_t position_us, domain::SeekMode mode) override {
+    std::expected<void, domain::DemuxerError> seek(std::int64_t position_us,
+                                                   domain::SeekMode mode) override {
         ++seek_calls;
         last_seek_position = position_us;
         last_seek_mode = mode;
@@ -82,11 +85,12 @@ public:
             return std::unexpected(domain::DemuxerError{
                 .code = domain::DemuxerErrorCode::BackendFailure,
                 .message = "cannot seek source",
-                .backend_error = domain::DemuxerBackendError{
-                    .operation = domain::DemuxerBackendOperation::Seek,
-                    .native_code = -3,
-                    .message = "seek failed",
-                },
+                .backend_error =
+                    domain::DemuxerBackendError{
+                        .operation = domain::DemuxerBackendOperation::Seek,
+                        .native_code = -3,
+                        .message = "seek failed",
+                    },
             });
         }
         return {};
@@ -115,16 +119,19 @@ public:
             });
         }
         return domain::AudioDecoderConfigureResult{
-            .decoded_format = contracts::media::AudioPcmFormat{
-                .sample_rate = 48000,
-                .channels = 2,
-                .sample_format = contracts::media::AudioSampleFormat::F32,
-                .planar = false,
-            },
+            .decoded_format =
+                contracts::media::AudioPcmFormat{
+                    .sample_rate = 48000,
+                    .channels = 2,
+                    .sample_format = contracts::media::AudioSampleFormat::F32,
+                    .planar = false,
+                },
         };
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 class FakeVideoDecoder final : public domain::VideoDecoder {
@@ -146,7 +153,9 @@ public:
         return {};
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 class FakeVideoRenderer final : public domain::VideoRenderer {
@@ -170,7 +179,9 @@ public:
         return {};
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 class FakeAudioResampler final : public domain::AudioResampler {
@@ -189,7 +200,9 @@ public:
         return {};
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 class FakeAudioOutput final : public domain::AudioOutput {
@@ -205,12 +218,13 @@ public:
     configure(const domain::AudioOutputOptions&) override {
         ++configure_calls;
         return domain::AudioOutputConfigureResult{
-            .playback_format = contracts::media::AudioPcmFormat{
-                .sample_rate = 48000,
-                .channels = 2,
-                .sample_format = contracts::media::AudioSampleFormat::F32,
-                .planar = false,
-            },
+            .playback_format =
+                contracts::media::AudioPcmFormat{
+                    .sample_rate = 48000,
+                    .channels = 2,
+                    .sample_format = contracts::media::AudioSampleFormat::F32,
+                    .planar = false,
+                },
         };
     }
 
@@ -242,7 +256,9 @@ public:
         return std::nullopt;
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 class FakeVideoSync final : public domain::VideoSync {
@@ -293,7 +309,9 @@ public:
         return {};
     }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 };
 
 struct FakePipeline {
@@ -309,15 +327,9 @@ struct FakePipeline {
 };
 
 ApiLayer make_layer(const FakePipeline& pipeline) {
-    return ApiLayer(pipeline.demuxer,
-                    pipeline.decoder,
-                    pipeline.resampler,
-                    pipeline.output,
-                    pipeline.notifier,
-                    pipeline.generation,
-                    pipeline.video_decoder,
-                    pipeline.video_renderer,
-                    pipeline.video_sync);
+    return ApiLayer(pipeline.demuxer, pipeline.decoder, pipeline.resampler, pipeline.output,
+                    pipeline.notifier, pipeline.generation, pipeline.video_decoder,
+                    pipeline.video_renderer, pipeline.video_sync);
 }
 
 TEST(ApiLayerTest, OpenCompletesWithMediaInfoFromDemuxer) {
@@ -472,8 +484,7 @@ TEST(ApiLayerTest, RejectsMediaCommandsThatAreInvalidInIdle) {
 
     const CommandHandle play = layer.play();
     const CommandHandle pause = layer.pause();
-    const CommandHandle seek =
-        layer.seek(1000000, domain::SeekMode::PreviousKeyframe);
+    const CommandHandle seek = layer.seek(1000000, domain::SeekMode::PreviousKeyframe);
     ASSERT_NE(play, 0U);
     ASSERT_NE(pause, 0U);
     ASSERT_NE(seek, 0U);
@@ -588,8 +599,7 @@ TEST(ApiLayerTest, VideoOutputConfigurationIsSerializedAndAppliedOnOpen) {
     EXPECT_EQ(pipeline.video_renderer->last_options.output_height, 360U);
     EXPECT_TRUE(pipeline.video_sync->last_has_on_frame);
 
-    const CommandHandle rejected =
-        layer.configure_video_output(VideoPresentationConfig{});
+    const CommandHandle rejected = layer.configure_video_output(VideoPresentationConfig{});
     ASSERT_NE(rejected, 0U);
     EXPECT_EQ(layer.await(rejected, result), SEMI_ERR_INVALID_STATE);
 

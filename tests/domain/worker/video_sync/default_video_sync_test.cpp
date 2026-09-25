@@ -28,17 +28,22 @@ public:
     std::expected<AudioOutputConfigureResult, AudioOutputError>
     configure(const AudioOutputOptions&) override {
         return AudioOutputConfigureResult{
-            .playback_format = contracts::media::AudioPcmFormat{
-                .sample_rate = 48'000,
-                .channels = 2,
-                .sample_format = contracts::media::AudioSampleFormat::F32,
-                .planar = false,
-            },
+            .playback_format =
+                contracts::media::AudioPcmFormat{
+                    .sample_rate = 48'000,
+                    .channels = 2,
+                    .sample_format = contracts::media::AudioSampleFormat::F32,
+                    .planar = false,
+                },
         };
     }
 
-    std::expected<void, AudioOutputError> start_playback() override { return {}; }
-    std::expected<void, AudioOutputError> pause_playback() override { return {}; }
+    std::expected<void, AudioOutputError> start_playback() override {
+        return {};
+    }
+    std::expected<void, AudioOutputError> pause_playback() override {
+        return {};
+    }
 
     std::optional<PlaybackPosition> current_position() const noexcept override {
         if (!position_available_.load(std::memory_order_acquire)) {
@@ -94,9 +99,7 @@ public:
 
     bool wait_for_frames(std::size_t count, std::chrono::milliseconds timeout) const {
         std::unique_lock lock(mutex_);
-        return cv_.wait_for(lock, timeout, [this, count] {
-            return frames_.size() >= count;
-        });
+        return cv_.wait_for(lock, timeout, [this, count] { return frames_.size() >= count; });
     }
 
     std::vector<PresentedFrame> frames() const {
@@ -116,16 +119,12 @@ public:
         std::unique_lock lock(mutex_);
         entered_ = true;
         cv_.notify_all();
-        cv_.wait(lock, [this] {
-            return may_return_;
-        });
+        cv_.wait(lock, [this] { return may_return_; });
     }
 
     bool wait_until_entered(std::chrono::milliseconds timeout) {
         std::unique_lock lock(mutex_);
-        return cv_.wait_for(lock, timeout, [this] {
-            return entered_;
-        });
+        return cv_.wait_for(lock, timeout, [this] { return entered_; });
     }
 
     void allow_return() {
@@ -143,8 +142,7 @@ private:
     bool may_return_ = false;
 };
 
-contracts::media::RenderedVideo make_rendered_video(std::uint8_t marker,
-                                                    std::int64_t pts_us) {
+contracts::media::RenderedVideo make_rendered_video(std::uint8_t marker, std::int64_t pts_us) {
     return contracts::media::RenderedVideo{
         .pixel_format = contracts::media::VideoPixelFormat::Rgba8,
         .width = 1,
@@ -155,9 +153,8 @@ contracts::media::RenderedVideo make_rendered_video(std::uint8_t marker,
     };
 }
 
-VideoRenderedStoreItem make_frame(std::uint8_t marker,
-                                  std::int64_t pts_us,
-                                  Generation::Value generation) {
+VideoRenderedStoreItem
+make_frame(std::uint8_t marker, std::int64_t pts_us, Generation::Value generation) {
     return VideoRenderedStoreItem{
         std::in_place_type<RenderedVideoFrame>,
         make_rendered_video(marker, pts_us),
@@ -182,9 +179,8 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
     ASSERT_TRUE(sync.configure(VideoSyncOptions{
         .audio_master = true,
-        .on_frame = [presentation](const RenderedVideoFrame& frame) {
-            presentation->present(frame);
-        },
+        .on_frame =
+            [presentation](const RenderedVideoFrame& frame) { presentation->present(frame); },
     }));
     audio_output->set_position(generation->current(), 150'000);
     ASSERT_TRUE(sync.start_playback());
@@ -209,8 +205,7 @@ TEST(DefaultVideoSyncTest, AudioClockPresentsNewestDueFrameAndWaitsForFutureFram
     sync.unconfigure();
 }
 
-TEST(DefaultVideoSyncTest,
-     DiscardsStaleGenerationAndPresentsFuturePausedFrameAfterSeek) {
+TEST(DefaultVideoSyncTest, DiscardsStaleGenerationAndPresentsFuturePausedFrameAfterSeek) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     auto generation = std::make_shared<Generation>(notifier);
     auto rendered_store = std::make_shared<VideoRenderedStore>(notifier);
@@ -223,9 +218,8 @@ TEST(DefaultVideoSyncTest,
     DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
     ASSERT_TRUE(sync.configure(VideoSyncOptions{
         .audio_master = true,
-        .on_frame = [presentation](const RenderedVideoFrame& frame) {
-            presentation->present(frame);
-        },
+        .on_frame =
+            [presentation](const RenderedVideoFrame& frame) { presentation->present(frame); },
     }));
 
     const auto new_generation = generation->bump();
@@ -257,9 +251,8 @@ TEST(DefaultVideoSyncTest, UnconfigureWaitsForSynchronousFrameCallback) {
     DefaultVideoSync sync(rendered_store, nullptr, notifier, generation);
     ASSERT_TRUE(sync.configure(VideoSyncOptions{
         .audio_master = false,
-        .on_frame = [presentation](const RenderedVideoFrame& frame) {
-            presentation->present(frame);
-        },
+        .on_frame =
+            [presentation](const RenderedVideoFrame& frame) { presentation->present(frame); },
     }));
     ASSERT_TRUE(sync.start_playback());
     ASSERT_TRUE(presentation->wait_until_entered(std::chrono::seconds(1)));
@@ -287,8 +280,8 @@ TEST(DefaultVideoSyncTest, PublishesFinishedAfterTheFinalFrameCallbackReturns) {
     bool finished = false;
     Generation::Value finished_generation = 0;
 
-    auto subscription = notifier->subscribe<VideoPlaybackFinished>(
-        [&](const VideoPlaybackFinished& event) {
+    auto subscription =
+        notifier->subscribe<VideoPlaybackFinished>([&](const VideoPlaybackFinished& event) {
             EXPECT_TRUE(callback_returned.load(std::memory_order_acquire));
             {
                 std::lock_guard lock(finished_mutex);
@@ -309,17 +302,16 @@ TEST(DefaultVideoSyncTest, PublishesFinishedAfterTheFinalFrameCallbackReturns) {
     DefaultVideoSync sync(rendered_store, nullptr, notifier, generation);
     ASSERT_TRUE(sync.configure(VideoSyncOptions{
         .audio_master = false,
-        .on_frame = [&](const RenderedVideoFrame&) {
-            callback_returned.store(true, std::memory_order_release);
-        },
+        .on_frame =
+            [&](const RenderedVideoFrame&) {
+                callback_returned.store(true, std::memory_order_release);
+            },
     }));
     ASSERT_TRUE(sync.start_playback());
 
     {
         std::unique_lock lock(finished_mutex);
-        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] {
-            return finished;
-        }));
+        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] { return finished; }));
     }
     EXPECT_EQ(finished_generation, generation->current());
     sync.unconfigure();
@@ -335,8 +327,8 @@ TEST(DefaultVideoSyncTest, ContinuesVideoTailAfterAudioFinishes) {
     std::condition_variable finished_cv;
     bool finished = false;
 
-    auto subscription = notifier->subscribe<VideoPlaybackFinished>(
-        [&](const VideoPlaybackFinished&) {
+    auto subscription =
+        notifier->subscribe<VideoPlaybackFinished>([&](const VideoPlaybackFinished&) {
             {
                 std::lock_guard lock(finished_mutex);
                 finished = true;
@@ -357,9 +349,8 @@ TEST(DefaultVideoSyncTest, ContinuesVideoTailAfterAudioFinishes) {
     DefaultVideoSync sync(rendered_store, audio_output, notifier, generation);
     ASSERT_TRUE(sync.configure(VideoSyncOptions{
         .audio_master = true,
-        .on_frame = [presentation](const RenderedVideoFrame& frame) {
-            presentation->present(frame);
-        },
+        .on_frame =
+            [presentation](const RenderedVideoFrame& frame) { presentation->present(frame); },
     }));
     audio_output->set_position(generation->current(), 0);
     ASSERT_TRUE(sync.start_playback());
@@ -374,9 +365,7 @@ TEST(DefaultVideoSyncTest, ContinuesVideoTailAfterAudioFinishes) {
     ASSERT_TRUE(presentation->wait_for_frames(2, std::chrono::seconds(1)));
     {
         std::unique_lock lock(finished_mutex);
-        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] {
-            return finished;
-        }));
+        ASSERT_TRUE(finished_cv.wait_for(lock, std::chrono::seconds(1), [&] { return finished; }));
     }
 
     const auto frames = presentation->frames();

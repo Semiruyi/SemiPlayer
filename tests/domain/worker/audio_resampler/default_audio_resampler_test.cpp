@@ -74,9 +74,13 @@ public:
         return drain_output_;
     }
 
-    void reset() noexcept override { ++reset_calls; }
+    void reset() noexcept override {
+        ++reset_calls;
+    }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     void set_configure_error(AudioResamplerBackendError error) {
         std::lock_guard lock(mutex_);
@@ -134,7 +138,9 @@ public:
 
     void reset() noexcept override {}
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     std::atomic_int unconfigure_calls = 0;
 };
@@ -215,11 +221,10 @@ struct ResamplerDependencies {
 };
 
 std::unique_ptr<DefaultAudioResampler> make_resampler(ResamplerDependencies dependencies) {
-    return std::make_unique<DefaultAudioResampler>(std::move(dependencies.source),
-                                                   std::move(dependencies.sink),
-                                                   std::move(dependencies.backend),
-                                                   std::move(dependencies.notifier),
-                                                   std::move(dependencies.generation));
+    return std::make_unique<DefaultAudioResampler>(
+        std::move(dependencies.source), std::move(dependencies.sink),
+        std::move(dependencies.backend), std::move(dependencies.notifier),
+        std::move(dependencies.generation));
 }
 
 ResamplerDependencies complete_dependencies() {
@@ -511,9 +516,7 @@ TEST(DefaultAudioResamplerTest, ReportsResampleFailureAndRequiresUnconfigureForR
     auto notifier = dependencies.notifier;
     std::atomic_int failure_events = 0;
     auto failure_subscription = notifier->subscribe<AudioResamplerBackendFailure>(
-        [&failure_events](const AudioResamplerBackendFailure&) {
-            ++failure_events;
-        });
+        [&failure_events](const AudioResamplerBackendFailure&) { ++failure_events; });
     backend->set_resample_error(AudioResamplerBackendError{
         .operation = AudioResamplerBackendOperation::Resample,
         .native_code = -1,

@@ -12,7 +12,8 @@ namespace {
 
 using contracts::media::VideoPixelFormat;
 
-std::size_t plane_height(const AVPixFmtDescriptor& descriptor, int frame_height,
+std::size_t plane_height(const AVPixFmtDescriptor& descriptor,
+                         int frame_height,
                          std::size_t plane_index) noexcept {
     if (plane_index == 0 || !(descriptor.flags & AV_PIX_FMT_FLAG_PLANAR)) {
         return static_cast<std::size_t>(frame_height);
@@ -49,7 +50,8 @@ FfmpegVideoFrameBuffer::FfmpegVideoFrameBuffer(AvFramePtr frame) noexcept
         }
 
         const auto bytes_per_row = static_cast<std::size_t>(native_stride);
-        const auto rows = plane_height(*descriptor, frame_->height, static_cast<std::size_t>(index));
+        const auto rows =
+            plane_height(*descriptor, frame_->height, static_cast<std::size_t>(index));
         if (rows > std::numeric_limits<std::size_t>::max() / bytes_per_row) {
             return;
         }

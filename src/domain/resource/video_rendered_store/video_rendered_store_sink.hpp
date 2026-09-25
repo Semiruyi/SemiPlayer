@@ -20,8 +20,7 @@ public:
     VideoRenderedSink(VideoRenderedSink&&) = delete;
     VideoRenderedSink& operator=(VideoRenderedSink&&) = delete;
 
-    [[nodiscard]] virtual VideoRenderedPushResult
-    try_push(VideoRenderedStoreItem&& item) = 0;
+    [[nodiscard]] virtual VideoRenderedPushResult try_push(VideoRenderedStoreItem&& item) = 0;
 
 protected:
     VideoRenderedSink() = default;

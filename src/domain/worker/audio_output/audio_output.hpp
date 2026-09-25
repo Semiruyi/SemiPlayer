@@ -50,8 +50,7 @@ public:
 
     // Read-only, realtime-safe playback position. The value is absent until
     // the current generation has produced its first confirmed audio frame.
-    [[nodiscard]] virtual std::optional<PlaybackPosition>
-    current_position() const noexcept = 0;
+    [[nodiscard]] virtual std::optional<PlaybackPosition> current_position() const noexcept = 0;
 
     virtual void unconfigure() noexcept = 0;
 

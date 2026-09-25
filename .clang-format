@@ -1,0 +1,66 @@
+---
+# SemiPlayer code style.
+#
+# Derived from the existing codebase: running clang-format with this config
+# leaves the large majority of lines untouched. The residue comes from places
+# where the hand-written style varies (e.g. wrapped call arguments are
+# sometimes one-per-line, sometimes bin-packed); adopt the config first and
+# apply a one-time normalization pass separately if desired.
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: Latest
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+NamespaceIndentation: None
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+
+# Width
+ColumnLimit: 100
+
+# Braces stay attached to their declaration / control statement.
+BreakBeforeBraces: Attach
+
+# Pointers bind to the variable name (`uint8_t *data`), references attach to
+# the type (`Foo& bar`); files vary, so the binding is derived per file.
+DerivePointerAlignment: true
+PointerAlignment: Right
+ReferenceAlignment: Left
+
+# Constructors break before the initializer colon; initializers all fit on the
+# colon line or go one per line.
+BreakConstructorInitializers: BeforeColon
+PackConstructorInitializers: NextLine
+
+# A declaration that wraps keeps one parameter per line; call arguments wrap
+# bin-packed with aligned continuations.
+BinPackArguments: true
+BinPackParameters: false
+AlignAfterOpenBracket: Align
+AlignOperands: Align
+
+# A template declaration always breaks before the entity it introduces.
+AlwaysBreakTemplateDeclarations: Yes
+
+# Short forms
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortEnumsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+
+# Include order is maintained by hand (own header / project / std groups).
+IncludeBlocks: Preserve
+SortIncludes: Never
+
+# Misc spacing
+SpaceBeforeParens: ControlStatements
+SpaceAfterTemplateKeyword: true
+BreakStringLiterals: true
+...

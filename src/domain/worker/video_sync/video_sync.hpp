@@ -45,11 +45,9 @@ public:
     [[nodiscard]] virtual std::expected<void, VideoSyncError>
     configure(const VideoSyncOptions& options) = 0;
 
-    [[nodiscard]] virtual std::expected<void, VideoSyncError>
-    start_playback() = 0;
+    [[nodiscard]] virtual std::expected<void, VideoSyncError> start_playback() = 0;
 
-    [[nodiscard]] virtual std::expected<void, VideoSyncError>
-    pause_playback() = 0;
+    [[nodiscard]] virtual std::expected<void, VideoSyncError> pause_playback() = 0;
 
     virtual void unconfigure() noexcept = 0;
 

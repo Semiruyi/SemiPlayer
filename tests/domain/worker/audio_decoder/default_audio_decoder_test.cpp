@@ -75,9 +75,13 @@ public:
         return drain_output_;
     }
 
-    void reset() noexcept override { ++reset_calls; }
+    void reset() noexcept override {
+        ++reset_calls;
+    }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     void set_configure_error(AudioDecoderBackendError error) {
         std::lock_guard lock(mutex_);
@@ -138,7 +142,9 @@ public:
 
     void reset() noexcept override {}
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     std::atomic_int unconfigure_calls = 0;
 };
@@ -234,11 +240,10 @@ struct DecoderDependencies {
 };
 
 std::unique_ptr<DefaultAudioDecoder> make_decoder(DecoderDependencies dependencies) {
-    return std::make_unique<DefaultAudioDecoder>(std::move(dependencies.source),
-                                                 std::move(dependencies.sink),
-                                                 std::move(dependencies.backend),
-                                                 std::move(dependencies.notifier),
-                                                 std::move(dependencies.generation));
+    return std::make_unique<DefaultAudioDecoder>(
+        std::move(dependencies.source), std::move(dependencies.sink),
+        std::move(dependencies.backend), std::move(dependencies.notifier),
+        std::move(dependencies.generation));
 }
 
 DecoderDependencies complete_dependencies() {
@@ -270,12 +275,13 @@ AudioPacketQueueItem make_packet_item(std::uint8_t marker, Generation::Value gen
 
 contracts::media::DecodedAudio make_decoded_audio(std::uint32_t samples_per_channel) {
     return contracts::media::DecodedAudio{
-        .format = contracts::media::AudioPcmFormat{
-            .sample_rate = 48000,
-            .channels = 2,
-            .sample_format = contracts::media::AudioSampleFormat::F32,
-            .planar = false,
-        },
+        .format =
+            contracts::media::AudioPcmFormat{
+                .sample_rate = 48000,
+                .channels = 2,
+                .sample_format = contracts::media::AudioSampleFormat::F32,
+                .planar = false,
+            },
         .samples_per_channel = samples_per_channel,
         .planes = {{std::byte{0x01}, std::byte{0x02}}},
         .pts_us = 123,
@@ -290,12 +296,13 @@ contracts::media::DecodedAudio make_seek_audio(std::int64_t pts_us,
         payload.push_back(std::byte{sample});
     }
     return contracts::media::DecodedAudio{
-        .format = contracts::media::AudioPcmFormat{
-            .sample_rate = 1'000,
-            .channels = 1,
-            .sample_format = contracts::media::AudioSampleFormat::U8,
-            .planar = false,
-        },
+        .format =
+            contracts::media::AudioPcmFormat{
+                .sample_rate = 1'000,
+                .channels = 1,
+                .sample_format = contracts::media::AudioSampleFormat::U8,
+                .planar = false,
+            },
         .samples_per_channel = static_cast<std::uint32_t>(samples.size()),
         .planes = {std::move(payload)},
         .pts_us = pts_us,
@@ -584,9 +591,7 @@ TEST(DefaultAudioDecoderTest, ReportsDecodeFailureAndRequiresUnconfigureForRecov
     auto notifier = dependencies.notifier;
     std::atomic_int failure_events = 0;
     auto failure_subscription = notifier->subscribe<AudioDecoderBackendFailure>(
-        [&failure_events](const AudioDecoderBackendFailure&) {
-            ++failure_events;
-        });
+        [&failure_events](const AudioDecoderBackendFailure&) { ++failure_events; });
     backend->set_decode_error(AudioDecoderBackendError{
         .operation = AudioDecoderBackendOperation::Decode,
         .native_code = -1,

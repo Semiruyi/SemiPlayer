@@ -5,8 +5,7 @@
 
 namespace semi::domain {
 
-AudioPacketQueue::AudioPacketQueue(std::shared_ptr<infra::Notifier> notifier,
-                                   std::size_t capacity)
+AudioPacketQueue::AudioPacketQueue(std::shared_ptr<infra::Notifier> notifier, std::size_t capacity)
     : notifier_(std::move(notifier)), capacity_(capacity) {}
 
 AudioPacketPushResult AudioPacketQueue::try_push(AudioPacketQueueItem&& item) {

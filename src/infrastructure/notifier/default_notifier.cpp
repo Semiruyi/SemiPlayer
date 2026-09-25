@@ -33,8 +33,8 @@ struct DefaultNotifier::State {
 };
 
 DefaultNotifier::SubscriptionImpl::SubscriptionImpl(std::weak_ptr<State> state,
-                                                        std::type_index type,
-                                                        std::shared_ptr<Slot> slot)
+                                                    std::type_index type,
+                                                    std::shared_ptr<Slot> slot)
     : state_(std::move(state)), type_(type), slot_(std::move(slot)) {}
 
 DefaultNotifier::SubscriptionImpl::~SubscriptionImpl() {
@@ -79,9 +79,8 @@ DefaultNotifier::~DefaultNotifier() {
     (void)clear_all();
 }
 
-std::shared_ptr<Notifier::Subscription> DefaultNotifier::subscribe_erased(
-    std::type_index type,
-    std::function<void(const void*)> cb) {
+std::shared_ptr<Notifier::Subscription>
+DefaultNotifier::subscribe_erased(std::type_index type, std::function<void(const void*)> cb) {
     auto slot = std::make_shared<Slot>(std::move(cb));
 
     {
@@ -163,20 +162,14 @@ bool DefaultNotifier::clear_all() noexcept {
 }
 
 void DefaultNotifier::log_slow_callback(std::type_index type,
-                                            std::chrono::microseconds elapsed) noexcept {
+                                        std::chrono::microseconds elapsed) noexcept {
     if (elapsed > kErrorCallbackCost) {
-        SEMI_LOG_ERROR(
-            "slow callback for event type {} cost {}us",
-            type.name(),
-            elapsed.count());
+        SEMI_LOG_ERROR("slow callback for event type {} cost {}us", type.name(), elapsed.count());
         return;
     }
 
     if (elapsed > kWarnCallbackCost) {
-        SEMI_LOG_WARN(
-            "slow callback for event type {} cost {}us",
-            type.name(),
-            elapsed.count());
+        SEMI_LOG_WARN("slow callback for event type {} cost {}us", type.name(), elapsed.count());
     }
 }
 

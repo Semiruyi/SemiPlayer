@@ -22,8 +22,9 @@ audio_frame_store_item_generation(const AudioFrameStoreItem& item) noexcept {
     return std::get<AudioFrameEndOfInput>(item).generation;
 }
 
-[[nodiscard]] inline bool is_current_audio_frame_store_item(
-    const AudioFrameStoreItem& item, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool
+is_current_audio_frame_store_item(const AudioFrameStoreItem& item,
+                                  Generation::Value current_generation) noexcept {
     return audio_frame_store_item_generation(item) == current_generation;
 }
 

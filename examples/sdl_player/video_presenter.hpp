@@ -50,8 +50,7 @@ public:
     [[nodiscard]] std::int64_t current_pts_us() const noexcept;
 
 private:
-    [[nodiscard]] bool ensure_texture(std::uint32_t width,
-                                      std::uint32_t height) noexcept;
+    [[nodiscard]] bool ensure_texture(std::uint32_t width, std::uint32_t height) noexcept;
     [[nodiscard]] bool upload_and_present() noexcept;
     [[nodiscard]] bool draw_current_texture() noexcept;
 

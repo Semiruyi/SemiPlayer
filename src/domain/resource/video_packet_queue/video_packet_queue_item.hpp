@@ -20,8 +20,9 @@ video_packet_queue_item_generation(const VideoPacketQueueItem& item) noexcept {
     return std::get<VideoPacketEndOfInput>(item).generation;
 }
 
-[[nodiscard]] inline bool is_current_video_packet_queue_item(
-    const VideoPacketQueueItem& item, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool
+is_current_video_packet_queue_item(const VideoPacketQueueItem& item,
+                                   Generation::Value current_generation) noexcept {
     return video_packet_queue_item_generation(item) == current_generation;
 }
 

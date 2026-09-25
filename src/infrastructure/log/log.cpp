@@ -144,12 +144,8 @@ std::tm local_time(std::time_t value) noexcept {
 std::string render_payload(std::string_view tag,
                            const std::source_location& location,
                            std::string_view message) {
-    return fmt::format(
-        "[{}] [{}:{}] {}",
-        tag,
-        base_name(location.file_name()),
-        location.line(),
-        message);
+    return fmt::format("[{}] [{}:{}] {}", tag, base_name(location.file_name()), location.line(),
+                       message);
 }
 
 void raw_stderr_write(Level level,
@@ -160,20 +156,13 @@ void raw_stderr_write(Level level,
         const auto now = std::chrono::system_clock::now();
         const auto tt = std::chrono::system_clock::to_time_t(now);
         const auto millis =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) %
-            1000;
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
         const auto local = local_time(tt);
         const auto tid = std::hash<std::thread::id>{}(std::this_thread::get_id());
-        const auto line = fmt::format(
-            "{}.{:03d} [{}] [tid {}] [{}] [{}:{}] {}\n",
-            fmt::format("{:%Y-%m-%d %H:%M:%S}", local),
-            static_cast<int>(millis.count()),
-            level_name(level),
-            tid,
-            tag,
-            base_name(location.file_name()),
-            location.line(),
-            message);
+        const auto line = fmt::format("{}.{:03d} [{}] [tid {}] [{}] [{}:{}] {}\n",
+                                      fmt::format("{:%Y-%m-%d %H:%M:%S}", local),
+                                      static_cast<int>(millis.count()), level_name(level), tid, tag,
+                                      base_name(location.file_name()), location.line(), message);
 
         std::lock_guard<std::mutex> lock(g_stderr_mutex);
         fmt::print(stderr, "{}", line);
@@ -233,10 +222,7 @@ InitResult init(const Config& config) noexcept {
                 }
 
                 auto file_sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-                    normalized.file_path,
-                    normalized.rotate_bytes,
-                    normalized.rotate_files,
-                    false);
+                    normalized.file_path, normalized.rotate_bytes, normalized.rotate_files, false);
                 file_sink->set_level(to_spdlog_level(normalized.level));
                 sinks.insert(sinks.begin(), file_sink);
                 result = InitResult::Ready;
@@ -246,10 +232,7 @@ InitResult init(const Config& config) noexcept {
         }
 
         auto logger = std::make_shared<spdlog::async_logger>(
-            kLoggerName,
-            sinks.begin(),
-            sinks.end(),
-            spdlog::thread_pool(),
+            kLoggerName, sinks.begin(), sinks.end(), spdlog::thread_pool(),
             to_overflow_policy(normalized.overflow));
         logger->set_level(to_spdlog_level(normalized.level));
         logger->set_pattern(std::string{kPattern});
@@ -288,9 +271,8 @@ void shutdown() noexcept {
         } catch (const std::exception& ex) {
             detail::report_internal_failure("logger flush during shutdown failed", ex.what());
         } catch (...) {
-            detail::report_internal_failure(
-                "logger flush during shutdown failed",
-                "unknown exception");
+            detail::report_internal_failure("logger flush during shutdown failed",
+                                            "unknown exception");
         }
     }
 
@@ -348,11 +330,8 @@ void write_formatted(Level level,
 
 void report_internal_failure(std::string_view context, std::string_view detail) noexcept {
     try {
-        raw_stderr_write(
-            Level::Error,
-            "Logger",
-            std::source_location::current(),
-            fmt::format("{}: {}", context, detail));
+        raw_stderr_write(Level::Error, "Logger", std::source_location::current(),
+                         fmt::format("{}: {}", context, detail));
     } catch (...) {
         std::lock_guard<std::mutex> lock(g_stderr_mutex);
         std::fputs("logger internal failure\n", stderr);

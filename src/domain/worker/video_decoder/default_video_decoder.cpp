@@ -39,34 +39,31 @@ VideoDecoderBackendError backend_exception(VideoDecoderBackendOperation operatio
 
 } // namespace
 
-DefaultVideoDecoder::DefaultVideoDecoder(
-    std::shared_ptr<VideoPacketSource> video_packet_source,
-    std::shared_ptr<VideoFrameSink> video_frame_sink,
-    std::shared_ptr<VideoDecoderBackend> backend,
-    std::shared_ptr<infra::Notifier> notifier,
-    std::shared_ptr<Generation> generation)
+DefaultVideoDecoder::DefaultVideoDecoder(std::shared_ptr<VideoPacketSource> video_packet_source,
+                                         std::shared_ptr<VideoFrameSink> video_frame_sink,
+                                         std::shared_ptr<VideoDecoderBackend> backend,
+                                         std::shared_ptr<infra::Notifier> notifier,
+                                         std::shared_ptr<Generation> generation)
     : video_packet_source_(std::move(video_packet_source)),
       video_frame_sink_(std::move(video_frame_sink)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
-    video_queue_not_empty_subscription_ = notifier_->subscribe<VideoQueueNotEmpty>(
-        [this](const VideoQueueNotEmpty&) {
+    video_queue_not_empty_subscription_ =
+        notifier_->subscribe<VideoQueueNotEmpty>([this](const VideoQueueNotEmpty&) {
             {
                 std::lock_guard lock(mutex_);
                 input_not_empty_hint_ = true;
             }
             cv_.notify_one();
         });
-    video_frame_store_not_full_subscription_ = notifier_->subscribe<VideoFrameStoreNotFull>(
-        [this](const VideoFrameStoreNotFull&) {
+    video_frame_store_not_full_subscription_ =
+        notifier_->subscribe<VideoFrameStoreNotFull>([this](const VideoFrameStoreNotFull&) {
             {
                 std::lock_guard lock(mutex_);
                 output_not_full_hint_ = true;
@@ -74,9 +71,7 @@ DefaultVideoDecoder::DefaultVideoDecoder(
             cv_.notify_one();
         });
     generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
-            cv_.notify_one();
-        });
+        [this](const GenerationChanged&) { cv_.notify_one(); });
 }
 
 DefaultVideoDecoder::~DefaultVideoDecoder() {
@@ -86,8 +81,8 @@ DefaultVideoDecoder::~DefaultVideoDecoder() {
     generation_changed_subscription_.reset();
 }
 
-std::expected<void, VideoDecoderError> DefaultVideoDecoder::configure(
-    const contracts::media::VideoCodecConfig& config) {
+std::expected<void, VideoDecoderError>
+DefaultVideoDecoder::configure(const contracts::media::VideoCodecConfig& config) {
     ConfigureCommand command;
     command.config = config;
     auto completion = command.completion.get_future();
@@ -182,9 +177,9 @@ void DefaultVideoDecoder::process_command(ConfigureCommand& command) noexcept {
     try {
         configured = backend_->configure(command.config);
     } catch (...) {
-        configured = std::unexpected(backend_exception(
-            VideoDecoderBackendOperation::Configure,
-            "video decoder backend configuration threw an exception"));
+        configured = std::unexpected(
+            backend_exception(VideoDecoderBackendOperation::Configure,
+                              "video decoder backend configuration threw an exception"));
     }
     if (!configured) {
         backend_->unconfigure();
@@ -249,8 +244,7 @@ bool DefaultVideoDecoder::should_process_data_locked() const noexcept {
         return output_not_full_hint_;
     }
 
-    if (input_exhausted_ &&
-        (!generation_ || active_generation_ == generation_->current())) {
+    if (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) {
         return false;
     }
 
@@ -259,12 +253,13 @@ bool DefaultVideoDecoder::should_process_data_locked() const noexcept {
 
 void DefaultVideoDecoder::adopt_generation_if_needed(
     Generation::Value current_generation) noexcept {
-    const auto seek_target = generation_ ? generation_->seek_target_for(current_generation)
-                                         : std::nullopt;
+    const auto seek_target =
+        generation_ ? generation_->seek_target_for(current_generation) : std::nullopt;
     bool generation_changed = false;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+        if (session_state_ != SessionState::Configured ||
+            current_generation == active_generation_) {
             return;
         }
 
@@ -310,8 +305,7 @@ DefaultVideoDecoder::try_push_pending_output() noexcept {
     const auto pushed = video_frame_sink->try_push(std::move(*pending_output));
 
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured) {
         return PendingOutputPushResult::Handled;
     }
 
@@ -333,8 +327,7 @@ void DefaultVideoDecoder::read_next_input_to_pending() noexcept {
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured ||
-            (input_exhausted_ &&
-             (!generation_ || active_generation_ == generation_->current())) ||
+            (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) ||
             !pending_outputs_.empty()) {
             return;
         }
@@ -382,8 +375,8 @@ void DefaultVideoDecoder::handle_input_item(VideoPacketQueueItem item) noexcept 
     handle_end_of_input(current_generation);
 }
 
-void DefaultVideoDecoder::handle_video_packet(
-    VideoPacket packet, Generation::Value current_generation) noexcept {
+void DefaultVideoDecoder::handle_video_packet(VideoPacket packet,
+                                              Generation::Value current_generation) noexcept {
     std::shared_ptr<VideoDecoderBackend> backend;
     {
         std::lock_guard lock(mutex_);
@@ -398,9 +391,9 @@ void DefaultVideoDecoder::handle_video_packet(
     try {
         decoded = backend->decode(packet.encoded());
     } catch (...) {
-        decoded = std::unexpected(backend_exception(
-            VideoDecoderBackendOperation::Decode,
-            "video decoder backend decode threw an exception"));
+        decoded =
+            std::unexpected(backend_exception(VideoDecoderBackendOperation::Decode,
+                                              "video decoder backend decode threw an exception"));
     }
 
     if (!decoded) {
@@ -428,8 +421,7 @@ void DefaultVideoDecoder::handle_end_of_input(Generation::Value generation) noex
         drained = backend->drain();
     } catch (...) {
         drained = std::unexpected(backend_exception(
-            VideoDecoderBackendOperation::Drain,
-            "video decoder backend drain threw an exception"));
+            VideoDecoderBackendOperation::Drain, "video decoder backend drain threw an exception"));
     }
 
     if (!drained) {
@@ -440,15 +432,12 @@ void DefaultVideoDecoder::handle_end_of_input(Generation::Value generation) noex
     store_decoded_outputs(std::move(*drained), generation, true);
 }
 
-void DefaultVideoDecoder::store_decoded_outputs(
-    contracts::video_decoder::DecodedVideoBatch decoded,
-    Generation::Value generation,
-    bool append_end_of_input) noexcept {
+void DefaultVideoDecoder::store_decoded_outputs(contracts::video_decoder::DecodedVideoBatch decoded,
+                                                Generation::Value generation,
+                                                bool append_end_of_input) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured ||
-        active_generation_ != generation ||
-        (generation_ && generation_->current() != generation)) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
+        active_generation_ != generation || (generation_ && generation_->current() != generation)) {
         return;
     }
 
@@ -513,8 +502,7 @@ bool DefaultVideoDecoder::transition_worker_locked(WorkerEvent event) noexcept {
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -550,8 +538,7 @@ bool DefaultVideoDecoder::transition_session_locked(SessionEvent event) noexcept
         }
         return false;
     case SessionEvent::UnconfigureRequested:
-        if (session_state_ == SessionState::Configured ||
-            session_state_ == SessionState::Failed) {
+        if (session_state_ == SessionState::Configured || session_state_ == SessionState::Failed) {
             session_state_ = SessionState::Unconfiguring;
             return true;
         }

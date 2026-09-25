@@ -12,12 +12,13 @@ public:
     std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
     configure(const media::AudioCodecConfig&) override {
         return AudioDecoderBackendConfigureResult{
-            .decoded_format = media::AudioPcmFormat{
-                .sample_rate = 48000,
-                .channels = 2,
-                .sample_format = media::AudioSampleFormat::F32,
-                .planar = false,
-            },
+            .decoded_format =
+                media::AudioPcmFormat{
+                    .sample_rate = 48000,
+                    .channels = 2,
+                    .sample_format = media::AudioSampleFormat::F32,
+                    .planar = false,
+                },
         };
     }
 

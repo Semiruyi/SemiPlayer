@@ -48,8 +48,7 @@ public:
     decode(const demuxer::packet::EncodedPacket& packet) = 0;
 
     // Drains delayed codec frames after an end-of-input marker.
-    [[nodiscard]] virtual std::expected<DecodedVideoBatch, VideoDecoderBackendError>
-    drain() = 0;
+    [[nodiscard]] virtual std::expected<DecodedVideoBatch, VideoDecoderBackendError> drain() = 0;
 
     // Clears delayed codec data after the worker has observed a new generation.
     virtual void reset() noexcept = 0;

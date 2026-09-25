@@ -35,8 +35,9 @@ private:
     Generation::Value generation_ = 0;
 };
 
-[[nodiscard]] inline bool is_current_rendered_video_frame(
-    const RenderedVideoFrame& frame, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool
+is_current_rendered_video_frame(const RenderedVideoFrame& frame,
+                                Generation::Value current_generation) noexcept {
     return frame.generation() == current_generation;
 }
 

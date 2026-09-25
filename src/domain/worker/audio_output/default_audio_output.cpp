@@ -52,21 +52,19 @@ void DefaultAudioOutput::ProgressSink::on_realtime_notification(
     owner_.on_audio_frames_consumed(confirmed_frames);
 }
 
-DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_frame_source,
-                                       std::shared_ptr<AudioOutputBackend> backend,
-                                       std::shared_ptr<infra::Notifier> notifier,
-                                       std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier>
-                                           realtime_notifier,
-                                       std::shared_ptr<Generation> generation)
+DefaultAudioOutput::DefaultAudioOutput(
+    std::shared_ptr<AudioFrameSource> audio_frame_source,
+    std::shared_ptr<AudioOutputBackend> backend,
+    std::shared_ptr<infra::Notifier> notifier,
+    std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier,
+    std::shared_ptr<Generation> generation)
     : audio_frame_source_(std::move(audio_frame_source)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
       realtime_notifier_(std::move(realtime_notifier)),
       generation_(std::move(generation)),
       progress_sink_(*this),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (realtime_notifier_) {
         (void)realtime_notifier_->register_sink(progress_sink_);
     }
@@ -74,8 +72,8 @@ DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_f
         return;
     }
 
-    audio_frame_store_not_empty_subscription_ = notifier_->subscribe<AudioFrameStoreNotEmpty>(
-        [this](const AudioFrameStoreNotEmpty&) {
+    audio_frame_store_not_empty_subscription_ =
+        notifier_->subscribe<AudioFrameStoreNotEmpty>([this](const AudioFrameStoreNotEmpty&) {
             {
                 std::lock_guard lock(mutex_);
                 input_not_empty_hint_ = true;
@@ -83,9 +81,7 @@ DefaultAudioOutput::DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_f
             cv_.notify_one();
         });
     generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
-            cv_.notify_one();
-        });
+        [this](const GenerationChanged&) { cv_.notify_one(); });
 }
 
 DefaultAudioOutput::~DefaultAudioOutput() {
@@ -153,8 +149,7 @@ std::optional<PlaybackPosition> DefaultAudioOutput::current_position() const noe
     return playback_clock_.current_position();
 }
 
-void DefaultAudioOutput::on_audio_frames_consumed(
-    std::uint32_t confirmed_frames) noexcept {
+void DefaultAudioOutput::on_audio_frames_consumed(std::uint32_t confirmed_frames) noexcept {
     const auto generation = active_generation_.load(std::memory_order_acquire);
     playback_clock_.on_audio_frames_consumed(generation, confirmed_frames);
     playback_position_ready_hint_.store(true, std::memory_order_release);
@@ -329,8 +324,7 @@ void DefaultAudioOutput::process_command(StartPlaybackCommand& command) noexcept
         resumed = backend_->resume();
     } catch (...) {
         resumed = std::unexpected(backend_exception(
-            AudioOutputBackendOperation::Resume,
-            "audio output backend resume threw an exception"));
+            AudioOutputBackendOperation::Resume, "audio output backend resume threw an exception"));
     }
     if (!resumed) {
         command.completion.set_value(std::unexpected(backend_failure(std::move(resumed.error()))));
@@ -369,8 +363,7 @@ void DefaultAudioOutput::process_command(PausePlaybackCommand& command) noexcept
         paused = backend_->pause();
     } catch (...) {
         paused = std::unexpected(backend_exception(
-            AudioOutputBackendOperation::Pause,
-            "audio output backend pause threw an exception"));
+            AudioOutputBackendOperation::Pause, "audio output backend pause threw an exception"));
     }
     if (!paused) {
         command.completion.set_value(std::unexpected(backend_failure(std::move(paused.error()))));
@@ -389,8 +382,8 @@ bool DefaultAudioOutput::should_process_data_locked() const noexcept {
         return false;
     }
 
-    if (generation_ && generation_->current() !=
-                           active_generation_.load(std::memory_order_acquire)) {
+    if (generation_ &&
+        generation_->current() != active_generation_.load(std::memory_order_acquire)) {
         return true;
     }
 
@@ -456,15 +449,13 @@ void DefaultAudioOutput::handle_generation_change_if_needed() noexcept {
     discarding_stale_generation_ = true;
 }
 
-bool DefaultAudioOutput::reset_backend_for_generation(
-    Generation::Value generation) noexcept {
+bool DefaultAudioOutput::reset_backend_for_generation(Generation::Value generation) noexcept {
     std::expected<void, AudioOutputBackendError> reset;
     try {
         reset = backend_->reset();
     } catch (...) {
-        reset = std::unexpected(backend_exception(
-            AudioOutputBackendOperation::Reset,
-            "audio output backend reset threw an exception"));
+        reset = std::unexpected(backend_exception(AudioOutputBackendOperation::Reset,
+                                                  "audio output backend reset threw an exception"));
     }
     if (!reset) {
         handle_backend_failure(std::move(reset.error()), generation);
@@ -500,8 +491,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_submit_pending_frame(
         submitted = backend->try_submit(pending_frame->decoded());
     } catch (...) {
         submitted = std::unexpected(backend_exception(
-            AudioOutputBackendOperation::Submit,
-            "audio output backend submit threw an exception"));
+            AudioOutputBackendOperation::Submit, "audio output backend submit threw an exception"));
     }
 
     if (!submitted) {
@@ -510,8 +500,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_submit_pending_frame(
     }
 
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured) {
         return DataStepResult::Handled;
     }
 
@@ -554,8 +543,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
         drained = backend->try_drain();
     } catch (...) {
         drained = std::unexpected(backend_exception(
-            AudioOutputBackendOperation::Drain,
-            "audio output backend drain threw an exception"));
+            AudioOutputBackendOperation::Drain, "audio output backend drain threw an exception"));
     }
 
     if (!drained) {
@@ -568,7 +556,7 @@ DefaultAudioOutput::DataStepResult DefaultAudioOutput::try_drain_backend() noexc
         std::lock_guard lock(mutex_);
         if (worker_state_ == WorkerState::ShuttingDown ||
             session_state_ != SessionState::Configured ||
-        active_generation_.load(std::memory_order_acquire) != generation) {
+            active_generation_.load(std::memory_order_acquire) != generation) {
             return DataStepResult::Handled;
         }
 
@@ -594,10 +582,8 @@ void DefaultAudioOutput::read_next_input_to_pending() noexcept {
     std::shared_ptr<AudioFrameSource> audio_frame_source;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured ||
-            phase_ != PlaybackPhase::Running ||
-            pending_frame_.has_value() ||
-            (!playback_enabled_ && !discarding_stale_generation_)) {
+        if (session_state_ != SessionState::Configured || phase_ != PlaybackPhase::Running ||
+            pending_frame_.has_value() || (!playback_enabled_ && !discarding_stale_generation_)) {
             return;
         }
         if (!input_not_empty_hint_) {
@@ -644,21 +630,19 @@ void DefaultAudioOutput::handle_input_item(AudioFrameStoreItem item) noexcept {
     handle_end_of_input(current_generation);
 }
 
-void DefaultAudioOutput::handle_audio_frame(
-    AudioFrame frame, Generation::Value current_generation) noexcept {
+void DefaultAudioOutput::handle_audio_frame(AudioFrame frame,
+                                            Generation::Value current_generation) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured ||
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
         active_generation_.load(std::memory_order_acquire) != current_generation ||
-        phase_ != PlaybackPhase::Running ||
-        pending_frame_.has_value()) {
+        phase_ != PlaybackPhase::Running || pending_frame_.has_value()) {
         return;
     }
 
     pending_frame_.emplace(std::move(frame));
     if (pending_frame_->decoded().pts_us) {
-        const bool clock_anchored = playback_clock_.set_first_pts(
-            current_generation, *pending_frame_->decoded().pts_us);
+        const bool clock_anchored =
+            playback_clock_.set_first_pts(current_generation, *pending_frame_->decoded().pts_us);
         if (clock_anchored && playback_clock_.current_position()) {
             playback_position_ready_hint_.store(true, std::memory_order_release);
         }
@@ -668,11 +652,9 @@ void DefaultAudioOutput::handle_audio_frame(
 
 void DefaultAudioOutput::handle_end_of_input(Generation::Value generation) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured ||
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
         active_generation_.load(std::memory_order_acquire) != generation ||
-        phase_ != PlaybackPhase::Running ||
-        pending_frame_.has_value()) {
+        phase_ != PlaybackPhase::Running || pending_frame_.has_value()) {
         return;
     }
 
@@ -681,16 +663,15 @@ void DefaultAudioOutput::handle_end_of_input(Generation::Value generation) noexc
 }
 
 void DefaultAudioOutput::handle_backend_failure(
-    AudioOutputBackendError error,
-    std::optional<Generation::Value> generation_override) noexcept {
+    AudioOutputBackendError error, std::optional<Generation::Value> generation_override) noexcept {
     bool should_notify = false;
     Generation::Value generation = 0;
     {
         std::lock_guard lock(mutex_);
         if (worker_state_ != WorkerState::ShuttingDown &&
             session_state_ == SessionState::Configured) {
-            generation = generation_override.value_or(
-                active_generation_.load(std::memory_order_acquire));
+            generation =
+                generation_override.value_or(active_generation_.load(std::memory_order_acquire));
             pending_frame_.reset();
             input_not_empty_hint_ = false;
             backend_progress_hint_ = false;
@@ -716,8 +697,8 @@ void DefaultAudioOutput::notify_playback_position_ready_if_needed() noexcept {
     }
 
     bool expected = false;
-    if (!playback_position_ready_notified_.compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel)) {
+    if (!playback_position_ready_notified_.compare_exchange_strong(expected, true,
+                                                                   std::memory_order_acq_rel)) {
         return;
     }
 
@@ -769,8 +750,7 @@ bool DefaultAudioOutput::transition_worker_locked(WorkerEvent event) noexcept {
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -806,8 +786,7 @@ bool DefaultAudioOutput::transition_session_locked(SessionEvent event) noexcept 
         }
         return false;
     case SessionEvent::UnconfigureRequested:
-        if (session_state_ == SessionState::Configured ||
-            session_state_ == SessionState::Failed) {
+        if (session_state_ == SessionState::Configured || session_state_ == SessionState::Failed) {
             session_state_ = SessionState::Unconfiguring;
             return true;
         }

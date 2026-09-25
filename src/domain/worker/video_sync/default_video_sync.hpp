@@ -44,11 +44,9 @@ public:
     [[nodiscard]] std::expected<void, VideoSyncError>
     configure(const VideoSyncOptions& options) override;
 
-    [[nodiscard]] std::expected<void, VideoSyncError>
-    start_playback() override;
+    [[nodiscard]] std::expected<void, VideoSyncError> start_playback() override;
 
-    [[nodiscard]] std::expected<void, VideoSyncError>
-    pause_playback() override;
+    [[nodiscard]] std::expected<void, VideoSyncError> pause_playback() override;
 
     void unconfigure() noexcept override;
 
@@ -98,10 +96,8 @@ private:
         std::promise<void> completion;
     };
 
-    using ControlCommand = std::variant<ConfigureCommand,
-                                        StartPlaybackCommand,
-                                        PausePlaybackCommand,
-                                        UnconfigureCommand>;
+    using ControlCommand = std::
+        variant<ConfigureCommand, StartPlaybackCommand, PausePlaybackCommand, UnconfigureCommand>;
 
     void worker_main() noexcept;
     void process_command(ConfigureCommand& command) noexcept;
@@ -115,13 +111,10 @@ private:
     [[nodiscard]] bool begin_data_step() noexcept;
     void adopt_generation_if_needed() noexcept;
     void adopt_audio_playback_finished_if_needed() noexcept;
-    void present_frame(RenderedVideoFrame&& frame,
-                       std::optional<std::int64_t> clock_pts) noexcept;
+    void present_frame(RenderedVideoFrame&& frame, std::optional<std::int64_t> clock_pts) noexcept;
     void notify_playback_finished_if_needed() noexcept;
-    void record_wakeup_observation(
-        const VideoSyncWakeupObservation& observation) noexcept;
-    void record_schedule_observations(
-        const VideoSyncScheduleResult& result) noexcept;
+    void record_wakeup_observation(const VideoSyncWakeupObservation& observation) noexcept;
+    void record_schedule_observations(const VideoSyncScheduleResult& result) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
@@ -134,8 +127,7 @@ private:
     VideoFrameScheduler scheduler_;
     VideoSyncWakeupController wakeup_;
 
-    std::shared_ptr<infra::Notifier::Subscription>
-        video_rendered_store_not_empty_subscription_;
+    std::shared_ptr<infra::Notifier::Subscription> video_rendered_store_not_empty_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> generation_changed_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> audio_position_ready_subscription_;
     std::shared_ptr<infra::Notifier::Subscription> audio_playback_finished_subscription_;

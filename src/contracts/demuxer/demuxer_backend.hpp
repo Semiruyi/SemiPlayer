@@ -15,11 +15,11 @@ namespace semi::contracts::demuxer {
 using media::AudioCodecConfig;
 using media::ContainerInfo;
 using media::OtherStreamConfig;
-using media::TimeBase;
 using media::StreamConfig;
 using media::StreamDescriptor;
 using media::StreamTiming;
 using media::SubtitleCodecConfig;
+using media::TimeBase;
 using media::VideoCodecConfig;
 using packet::BackendEndOfStream;
 using packet::BackendPacket;
@@ -55,11 +55,10 @@ public:
     [[nodiscard]] virtual std::expected<BackendProbeResult, DemuxerBackendError>
     open(std::string_view source) = 0;
 
-    [[nodiscard]] virtual std::expected<BackendReadResult, DemuxerBackendError>
-    read_packet() = 0;
+    [[nodiscard]] virtual std::expected<BackendReadResult, DemuxerBackendError> read_packet() = 0;
 
-    [[nodiscard]] virtual std::expected<void, DemuxerBackendError>
-    seek(std::int64_t position_us, SeekMode mode) = 0;
+    [[nodiscard]] virtual std::expected<void, DemuxerBackendError> seek(std::int64_t position_us,
+                                                                        SeekMode mode) = 0;
 
     virtual void close() noexcept = 0;
 

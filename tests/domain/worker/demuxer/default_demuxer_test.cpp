@@ -36,14 +36,12 @@ using BackendReadExpected = std::expected<BackendReadResult, DemuxerBackendError
 
 class FakeBackend final : public contracts::demuxer::DemuxerBackend {
 public:
-    std::expected<BackendProbeResult, DemuxerBackendError>
-    open(std::string_view) override {
+    std::expected<BackendProbeResult, DemuxerBackendError> open(std::string_view) override {
         ++open_calls;
         return probe;
     }
 
-    std::expected<BackendReadResult, DemuxerBackendError>
-    read_packet() override {
+    std::expected<BackendReadResult, DemuxerBackendError> read_packet() override {
         ++read_calls;
         std::lock_guard lock(mutex_);
         if (read_results_.empty()) {
@@ -54,8 +52,8 @@ public:
         return result;
     }
 
-    std::expected<void, DemuxerBackendError>
-    seek(std::int64_t position_us, SeekMode mode) override {
+    std::expected<void, DemuxerBackendError> seek(std::int64_t position_us,
+                                                  SeekMode mode) override {
         ++seek_calls;
         last_seek_position = position_us;
         last_seek_mode = mode;
@@ -69,7 +67,9 @@ public:
         return {};
     }
 
-    void close() noexcept override { ++close_calls; }
+    void close() noexcept override {
+        ++close_calls;
+    }
 
     void push_read_result(BackendReadResult result) {
         std::lock_guard lock(mutex_);
@@ -107,13 +107,14 @@ StreamDescriptor video_stream(std::uint32_t id) {
     return StreamDescriptor{
         .id = {id},
         .timing = {},
-        .config = VideoCodecConfig{
-            .common = {},
-            .coded_width = 1920,
-            .coded_height = 1080,
-            .profile = std::nullopt,
-            .level = std::nullopt,
-        },
+        .config =
+            VideoCodecConfig{
+                .common = {},
+                .coded_width = 1920,
+                .coded_height = 1080,
+                .profile = std::nullopt,
+                .level = std::nullopt,
+            },
     };
 }
 
@@ -439,9 +440,8 @@ TEST(DefaultDemuxerTest, ReadFailureNotifiesAndRequiresCloseBeforeReopen) {
     ASSERT_TRUE(opened.has_value());
     {
         std::unique_lock lock(mutex);
-        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&read_error] {
-            return read_error.has_value();
-        }));
+        ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(1),
+                                [&read_error] { return read_error.has_value(); }));
         EXPECT_EQ(read_error->operation, DemuxerBackendOperation::Read);
     }
 

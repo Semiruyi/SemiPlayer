@@ -35,9 +35,15 @@ public:
         return VideoPixelFormat::Rgba8;
     }
 
-    [[nodiscard]] std::uint32_t width() const noexcept override { return width_; }
-    [[nodiscard]] std::uint32_t height() const noexcept override { return height_; }
-    [[nodiscard]] std::size_t plane_count() const noexcept override { return 1; }
+    [[nodiscard]] std::uint32_t width() const noexcept override {
+        return width_;
+    }
+    [[nodiscard]] std::uint32_t height() const noexcept override {
+        return height_;
+    }
+    [[nodiscard]] std::size_t plane_count() const noexcept override {
+        return 1;
+    }
 
     [[nodiscard]] contracts::media::VideoPlaneView
     plane(std::size_t index) const noexcept override {
@@ -72,9 +78,9 @@ DecodedVideo make_rgba_video(std::vector<std::byte> bytes,
 TEST(FfmpegVideoRendererBackendTest, RejectsRenderBeforeConfiguration) {
     FfmpegVideoRendererBackend backend;
 
-    const auto rendered = backend.render(make_rgba_video({
-        std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
-        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
+    const auto rendered =
+        backend.render(make_rgba_video({std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
+                                        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
 
     ASSERT_FALSE(rendered.has_value());
     EXPECT_EQ(rendered.error().operation, VideoRendererBackendOperation::Render);
@@ -84,9 +90,9 @@ TEST(FfmpegVideoRendererBackendTest, ConvertsRgbaAndPreservesTimelineMetadata) {
     FfmpegVideoRendererBackend backend;
     ASSERT_TRUE(backend.configure({}).has_value());
 
-    const auto rendered = backend.render(make_rgba_video({
-        std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
-        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
+    const auto rendered =
+        backend.render(make_rgba_video({std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
+                                        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
     ASSERT_TRUE(rendered.has_value()) << rendered.error().message;
 
     EXPECT_EQ(rendered->pixel_format, VideoPixelFormat::Rgba8);
@@ -149,8 +155,7 @@ TEST(FfmpegVideoRendererBackendTest, ConvertsYuv420p10leToRgba) {
     ASSERT_EQ(av_frame_make_writable(frame.get()), 0);
 
     for (int row = 0; row < 2; ++row) {
-        auto* y_row = reinterpret_cast<std::uint16_t*>(
-            frame->data[0] + row * frame->linesize[0]);
+        auto* y_row = reinterpret_cast<std::uint16_t*>(frame->data[0] + row * frame->linesize[0]);
         for (int column = 0; column < 2; ++column) {
             y_row[column] = 512;
         }
@@ -183,8 +188,8 @@ TEST(FfmpegVideoRendererBackendTest, RejectsTruncatedInputPlane) {
     FfmpegVideoRendererBackend backend;
     ASSERT_TRUE(backend.configure({}).has_value());
 
-    const auto rendered = backend.render(make_rgba_video(
-        {std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255}}, 2, 1, 8));
+    const auto rendered = backend.render(
+        make_rgba_video({std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255}}, 2, 1, 8));
 
     ASSERT_FALSE(rendered.has_value());
     EXPECT_EQ(rendered.error().operation, VideoRendererBackendOperation::Render);
@@ -194,15 +199,15 @@ TEST(FfmpegVideoRendererBackendTest, ResetKeepsBackendReusable) {
     FfmpegVideoRendererBackend backend;
     ASSERT_TRUE(backend.configure({}).has_value());
 
-    const auto first = backend.render(make_rgba_video({
-        std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
-        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
+    const auto first =
+        backend.render(make_rgba_video({std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255},
+                                        std::byte{4}, std::byte{5}, std::byte{6}, std::byte{255}}));
     ASSERT_TRUE(first.has_value());
 
     backend.reset();
-    const auto second = backend.render(make_rgba_video({
-        std::byte{7}, std::byte{8}, std::byte{9}, std::byte{255},
-        std::byte{10}, std::byte{11}, std::byte{12}, std::byte{255}}));
+    const auto second = backend.render(
+        make_rgba_video({std::byte{7}, std::byte{8}, std::byte{9}, std::byte{255}, std::byte{10},
+                         std::byte{11}, std::byte{12}, std::byte{255}}));
     ASSERT_TRUE(second.has_value()) << second.error().message;
     EXPECT_EQ(second->pixels[0], std::byte{7});
 }

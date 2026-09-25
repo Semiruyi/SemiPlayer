@@ -42,7 +42,8 @@ public:
     AudioDecoderBackend(AudioDecoderBackend&&) = delete;
     AudioDecoderBackend& operator=(AudioDecoderBackend&&) = delete;
 
-    [[nodiscard]] virtual std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
+    [[nodiscard]] virtual std::expected<AudioDecoderBackendConfigureResult,
+                                        AudioDecoderBackendError>
     configure(const media::AudioCodecConfig& config) = 0;
 
     // A packet may produce zero, one, or many PCM frames.

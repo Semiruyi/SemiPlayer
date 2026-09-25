@@ -24,9 +24,13 @@ public:
         return AudioOutputConfigureResult{.playback_format = playback_format()};
     }
 
-    std::expected<void, AudioOutputBackendError> pause() override { return {}; }
+    std::expected<void, AudioOutputBackendError> pause() override {
+        return {};
+    }
 
-    std::expected<void, AudioOutputBackendError> resume() override { return {}; }
+    std::expected<void, AudioOutputBackendError> resume() override {
+        return {};
+    }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio&) override {
@@ -41,7 +45,9 @@ public:
         ++reset_calls;
         return {};
     }
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     AudioOutputSubmitStatus submit_status = AudioOutputSubmitStatus::Accepted;
     AudioOutputDrainStatus drain_status = AudioOutputDrainStatus::Drained;

@@ -12,11 +12,11 @@ public:
     ~FfmpegDemuxerBackend() override;
 
     [[nodiscard]] std::expected<contracts::demuxer::BackendProbeResult,
-                                 contracts::demuxer::DemuxerBackendError>
+                                contracts::demuxer::DemuxerBackendError>
     open(std::string_view source) override;
 
     [[nodiscard]] std::expected<contracts::demuxer::BackendReadResult,
-                                 contracts::demuxer::DemuxerBackendError>
+                                contracts::demuxer::DemuxerBackendError>
     read_packet() override;
 
     [[nodiscard]] std::expected<void, contracts::demuxer::DemuxerBackendError>

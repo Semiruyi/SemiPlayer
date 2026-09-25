@@ -39,17 +39,22 @@ public:
     std::expected<AudioOutputConfigureResult, AudioOutputError>
     configure(const AudioOutputOptions&) override {
         return AudioOutputConfigureResult{
-            .playback_format = contracts::media::AudioPcmFormat{
-                .sample_rate = 48'000,
-                .channels = 2,
-                .sample_format = contracts::media::AudioSampleFormat::F32,
-                .planar = false,
-            },
+            .playback_format =
+                contracts::media::AudioPcmFormat{
+                    .sample_rate = 48'000,
+                    .channels = 2,
+                    .sample_format = contracts::media::AudioSampleFormat::F32,
+                    .planar = false,
+                },
         };
     }
 
-    std::expected<void, AudioOutputError> start_playback() override { return {}; }
-    std::expected<void, AudioOutputError> pause_playback() override { return {}; }
+    std::expected<void, AudioOutputError> start_playback() override {
+        return {};
+    }
+    std::expected<void, AudioOutputError> pause_playback() override {
+        return {};
+    }
     std::optional<PlaybackPosition> current_position() const noexcept override {
         return position_;
     }

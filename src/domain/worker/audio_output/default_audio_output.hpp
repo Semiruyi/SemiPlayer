@@ -24,12 +24,12 @@ namespace semi::domain {
 
 class DefaultAudioOutput final : public AudioOutput {
 public:
-    DefaultAudioOutput(std::shared_ptr<AudioFrameSource> audio_frame_source,
-                       std::shared_ptr<AudioOutputBackend> backend,
-                       std::shared_ptr<infra::Notifier> notifier,
-                       std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier>
-                           realtime_notifier,
-                       std::shared_ptr<Generation> generation);
+    DefaultAudioOutput(
+        std::shared_ptr<AudioFrameSource> audio_frame_source,
+        std::shared_ptr<AudioOutputBackend> backend,
+        std::shared_ptr<infra::Notifier> notifier,
+        std::shared_ptr<contracts::audio_output::AudioOutputRealTimeNotifier> realtime_notifier,
+        std::shared_ptr<Generation> generation);
     ~DefaultAudioOutput() override;
 
     DefaultAudioOutput(const DefaultAudioOutput&) = delete;
@@ -44,8 +44,7 @@ public:
 
     [[nodiscard]] std::expected<void, AudioOutputError> pause_playback() override;
 
-    [[nodiscard]] std::optional<PlaybackPosition>
-    current_position() const noexcept override;
+    [[nodiscard]] std::optional<PlaybackPosition> current_position() const noexcept override;
 
     void unconfigure() noexcept override;
 
@@ -111,8 +110,8 @@ private:
         std::promise<std::expected<void, AudioOutputError>> completion;
     };
 
-    using ControlCommand =
-        std::variant<ConfigureCommand, UnconfigureCommand, StartPlaybackCommand, PausePlaybackCommand>;
+    using ControlCommand = std::
+        variant<ConfigureCommand, UnconfigureCommand, StartPlaybackCommand, PausePlaybackCommand>;
 
     enum class DataStepResult : std::uint8_t {
         Handled,
@@ -139,7 +138,8 @@ private:
         AudioOutputBackendError error,
         std::optional<Generation::Value> generation_override = std::nullopt) noexcept;
     void notify_playback_position_ready_if_needed() noexcept;
-    void notify_backend_failure(AudioOutputBackendError error, Generation::Value generation) noexcept;
+    void notify_backend_failure(AudioOutputBackendError error,
+                                Generation::Value generation) noexcept;
     void notify_playback_finished(Generation::Value generation) noexcept;
     void on_audio_frames_consumed(std::uint32_t confirmed_frames) noexcept;
 

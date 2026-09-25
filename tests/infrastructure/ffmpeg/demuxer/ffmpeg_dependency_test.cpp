@@ -27,8 +27,7 @@ TEST(FfmpegDemuxerBackendTest, ReportsOpenFailureWithoutKeepingResources) {
     const auto failed = backend.open("this-file-does-not-exist.mp4");
 
     ASSERT_FALSE(failed.has_value());
-    EXPECT_EQ(failed.error().operation,
-              semi::contracts::demuxer::DemuxerBackendOperation::Open);
+    EXPECT_EQ(failed.error().operation, semi::contracts::demuxer::DemuxerBackendOperation::Open);
     EXPECT_NE(failed.error().message, "");
     backend.close();
 }
@@ -39,22 +38,21 @@ TEST(FfmpegDemuxerBackendTest, RejectsReadingBeforeOpen) {
     const auto result = backend.read_packet();
 
     ASSERT_FALSE(result.has_value());
-    EXPECT_EQ(result.error().operation,
-              semi::contracts::demuxer::DemuxerBackendOperation::Read);
+    EXPECT_EQ(result.error().operation, semi::contracts::demuxer::DemuxerBackendOperation::Read);
 }
 
 TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
     const auto path = std::filesystem::temp_directory_path() / "semi_player_demuxer_probe.wav";
     const std::array<unsigned char, 48> wav = {
-        'R', 'I', 'F', 'F', 40, 0, 0, 0, 'W', 'A', 'V', 'E',
-        'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
-        0x40, 0x1F, 0, 0, 0x40, 0x1F, 0, 0, 1, 0, 8, 0,
-        'd', 'a', 't', 'a', 4, 0, 0, 0, 128, 128, 128, 128,
+        'R', 'I', 'F', 'F', 40,  0,   0,   0,   'W',  'A',  'V', 'E', 'f',  'm',  't', ' ',
+        16,  0,   0,   0,   1,   0,   1,   0,   0x40, 0x1F, 0,   0,   0x40, 0x1F, 0,   0,
+        1,   0,   8,   0,   'd', 'a', 't', 'a', 4,    0,    0,   0,   128,  128,  128, 128,
     };
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(output.is_open());
-        output.write(reinterpret_cast<const char*>(wav.data()), static_cast<std::streamsize>(wav.size()));
+        output.write(reinterpret_cast<const char*>(wav.data()),
+                     static_cast<std::streamsize>(wav.size()));
         ASSERT_TRUE(output.good());
     }
 
@@ -75,15 +73,15 @@ TEST(FfmpegDemuxerBackendTest, ProbesAudioStreamFromWavFile) {
 TEST(FfmpegDemuxerBackendTest, ReadsPacketsAndReportsEndOfStream) {
     const auto path = std::filesystem::temp_directory_path() / "semi_player_demuxer_read.wav";
     const std::array<unsigned char, 48> wav = {
-        'R', 'I', 'F', 'F', 40, 0, 0, 0, 'W', 'A', 'V', 'E',
-        'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0,
-        0x40, 0x1F, 0, 0, 0x40, 0x1F, 0, 0, 1, 0, 8, 0,
-        'd', 'a', 't', 'a', 4, 0, 0, 0, 128, 128, 128, 128,
+        'R', 'I', 'F', 'F', 40,  0,   0,   0,   'W',  'A',  'V', 'E', 'f',  'm',  't', ' ',
+        16,  0,   0,   0,   1,   0,   1,   0,   0x40, 0x1F, 0,   0,   0x40, 0x1F, 0,   0,
+        1,   0,   8,   0,   'd', 'a', 't', 'a', 4,    0,    0,   0,   128,  128,  128, 128,
     };
     {
         std::ofstream output(path, std::ios::binary | std::ios::trunc);
         ASSERT_TRUE(output.is_open());
-        output.write(reinterpret_cast<const char*>(wav.data()), static_cast<std::streamsize>(wav.size()));
+        output.write(reinterpret_cast<const char*>(wav.data()),
+                     static_cast<std::streamsize>(wav.size()));
         ASSERT_TRUE(output.good());
     }
 
@@ -100,8 +98,7 @@ TEST(FfmpegDemuxerBackendTest, ReadsPacketsAndReportsEndOfStream) {
             break;
         }
 
-        const auto* packet =
-            std::get_if<semi::contracts::demuxer::BackendPacket>(&*result);
+        const auto* packet = std::get_if<semi::contracts::demuxer::BackendPacket>(&*result);
         ASSERT_NE(packet, nullptr);
         EXPECT_EQ(packet->stream_id.value, 0U);
         if (packet_count == 0) {
@@ -127,21 +124,21 @@ TEST(FfmpegDemuxerBackendTest, ProbesCommittedMp4Fixture) {
     ASSERT_TRUE(probed->container.duration_us.has_value());
     EXPECT_GT(*probed->container.duration_us, 0);
 
-    const auto video = std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
-        return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(stream.config);
-    });
+    const auto video =
+        std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
+            return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(stream.config);
+        });
     ASSERT_NE(video, probed->streams.end());
-    const auto& video_config =
-        std::get<semi::contracts::media::VideoCodecConfig>(video->config);
+    const auto& video_config = std::get<semi::contracts::media::VideoCodecConfig>(video->config);
     EXPECT_EQ(video_config.coded_width, 320U);
     EXPECT_EQ(video_config.coded_height, 180U);
 
-    const auto audio = std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
-        return std::holds_alternative<semi::contracts::media::AudioCodecConfig>(stream.config);
-    });
+    const auto audio =
+        std::find_if(probed->streams.begin(), probed->streams.end(), [](const auto& stream) {
+            return std::holds_alternative<semi::contracts::media::AudioCodecConfig>(stream.config);
+        });
     ASSERT_NE(audio, probed->streams.end());
-    const auto& audio_config =
-        std::get<semi::contracts::media::AudioCodecConfig>(audio->config);
+    const auto& audio_config = std::get<semi::contracts::media::AudioCodecConfig>(audio->config);
     EXPECT_EQ(audio_config.sample_rate, 48000U);
     EXPECT_EQ(audio_config.channels, 1U);
     backend.close();
@@ -152,16 +149,14 @@ TEST(FfmpegDemuxerBackendTest, SeeksToPreviousNextOrAccurateKeyframe) {
     const auto opened = backend.open(SEMI_PLAYER_TEST_MEDIA_PATH);
     ASSERT_TRUE(opened.has_value()) << opened.error().message;
 
-    const auto video = std::find_if(
-        opened->streams.begin(), opened->streams.end(), [](const auto& stream) {
-            return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(
-                stream.config);
+    const auto video =
+        std::find_if(opened->streams.begin(), opened->streams.end(), [](const auto& stream) {
+            return std::holds_alternative<semi::contracts::media::VideoCodecConfig>(stream.config);
         });
     ASSERT_NE(video, opened->streams.end());
     const auto video_stream_id = video->id.value;
 
-    const auto read_next_video_pts = [&backend, video_stream_id]()
-        -> std::optional<std::int64_t> {
+    const auto read_next_video_pts = [&backend, video_stream_id]() -> std::optional<std::int64_t> {
         for (int index = 0; index < 128; ++index) {
             const auto packet = backend.read_packet();
             if (!packet ||
@@ -179,24 +174,20 @@ TEST(FfmpegDemuxerBackendTest, SeeksToPreviousNextOrAccurateKeyframe) {
     };
 
     constexpr std::int64_t target_us = 1'000'000;
-    ASSERT_TRUE(backend.seek(
-        target_us,
-        semi::contracts::demuxer::SeekMode::PreviousKeyframe).has_value());
+    ASSERT_TRUE(
+        backend.seek(target_us, semi::contracts::demuxer::SeekMode::PreviousKeyframe).has_value());
     const auto previous_pts = read_next_video_pts();
     ASSERT_TRUE(previous_pts.has_value());
     EXPECT_LE(*previous_pts, target_us);
 
-    ASSERT_TRUE(backend.seek(
-        target_us,
-        semi::contracts::demuxer::SeekMode::NextKeyframe).has_value());
+    ASSERT_TRUE(
+        backend.seek(target_us, semi::contracts::demuxer::SeekMode::NextKeyframe).has_value());
     const auto next_pts = read_next_video_pts();
     ASSERT_TRUE(next_pts.has_value());
     EXPECT_GE(*next_pts, target_us);
     EXPECT_LT(*previous_pts, *next_pts);
 
-    ASSERT_TRUE(backend.seek(
-        target_us,
-        semi::contracts::demuxer::SeekMode::Accurate).has_value());
+    ASSERT_TRUE(backend.seek(target_us, semi::contracts::demuxer::SeekMode::Accurate).has_value());
     const auto accurate_start_pts = read_next_video_pts();
     ASSERT_TRUE(accurate_start_pts.has_value());
     EXPECT_LE(*accurate_start_pts, target_us);

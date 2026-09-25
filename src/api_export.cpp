@@ -68,9 +68,8 @@ std::shared_ptr<semi::application::ApiLayer> api_layer() noexcept {
 }
 
 int api_layer_unavailable_status() noexcept {
-    return semi::ioc::IoCContainer::instance().is_assembled()
-        ? SEMI_ERR_INTERNAL
-        : SEMI_ERR_NOT_INITIALIZED;
+    return semi::ioc::IoCContainer::instance().is_assembled() ? SEMI_ERR_INTERNAL
+                                                              : SEMI_ERR_NOT_INITIALIZED;
 }
 
 struct ParsedVideoPresentationConfig {
@@ -78,8 +77,8 @@ struct ParsedVideoPresentationConfig {
     semi_status_t validation_status = SEMI_OK;
 };
 
-ParsedVideoPresentationConfig make_video_presentation_config(
-    const semi_video_output_config_t& public_config) {
+ParsedVideoPresentationConfig
+make_video_presentation_config(const semi_video_output_config_t& public_config) {
     ParsedVideoPresentationConfig parsed;
     if (public_config.struct_size < sizeof(semi_video_output_config_t)) {
         parsed.validation_status = SEMI_ERR_INVALID_ARGUMENT;
@@ -88,14 +87,13 @@ ParsedVideoPresentationConfig make_video_presentation_config(
 
     auto& config = parsed.config;
     config.pixel_format = public_config.pixel_format == SEMI_VIDEO_PIXEL_FORMAT_RGBA8888
-        ? semi::contracts::media::VideoPixelFormat::Rgba8
-        : semi::contracts::media::VideoPixelFormat::Unknown;
+                              ? semi::contracts::media::VideoPixelFormat::Rgba8
+                              : semi::contracts::media::VideoPixelFormat::Unknown;
     config.output_width = public_config.output_width;
     config.output_height = public_config.output_height;
 
     if (public_config.on_frame != nullptr) {
-        config.on_frame = [callback = public_config.on_frame,
-                           user_data = public_config.user_data](
+        config.on_frame = [callback = public_config.on_frame, user_data = public_config.user_data](
                               const semi::domain::RenderedVideoFrame& frame) {
             const auto& rendered = frame.rendered();
             semi_video_frame_t public_frame{};
@@ -109,8 +107,7 @@ ParsedVideoPresentationConfig make_video_presentation_config(
             public_frame.plane_count = 1;
             public_frame.planes[0].data =
                 reinterpret_cast<const std::uint8_t*>(rendered.pixels.data());
-            public_frame.planes[0].size_bytes =
-                static_cast<std::uint64_t>(rendered.pixels.size());
+            public_frame.planes[0].size_bytes = static_cast<std::uint64_t>(rendered.pixels.size());
             public_frame.planes[0].stride_bytes = rendered.stride_bytes;
             callback(user_data, &public_frame);
         };
@@ -180,8 +177,7 @@ semi_handle_t semi_player_seek(long long position_us, semi_seek_mode_t mode) {
     if (!layer) {
         return 0;
     }
-    semi::contracts::demuxer::SeekMode internal_mode =
-        semi::contracts::demuxer::SeekMode::Unknown;
+    semi::contracts::demuxer::SeekMode internal_mode = semi::contracts::demuxer::SeekMode::Unknown;
     switch (mode) {
     case SEMI_SEEK_MODE_PREVIOUS_KEYFRAME:
         internal_mode = semi::contracts::demuxer::SeekMode::PreviousKeyframe;
@@ -203,8 +199,7 @@ semi_handle_t semi_player_close(void) {
     return layer ? layer->close() : 0;
 }
 
-semi_handle_t semi_player_configure_video_output(
-    const semi_video_output_config_t* config) {
+semi_handle_t semi_player_configure_video_output(const semi_video_output_config_t* config) {
     if (config == nullptr) {
         return 0;
     }
@@ -214,8 +209,7 @@ semi_handle_t semi_player_configure_video_output(
     }
     try {
         auto parsed = make_video_presentation_config(*config);
-        return layer->configure_video_output(std::move(parsed.config),
-                                             parsed.validation_status);
+        return layer->configure_video_output(std::move(parsed.config), parsed.validation_status);
     } catch (...) {
         SEMI_LOG_ERROR("failed to construct video output configuration command");
         return 0;

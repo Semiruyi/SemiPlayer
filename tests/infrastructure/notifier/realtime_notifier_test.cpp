@@ -35,9 +35,8 @@ public:
     int total_underruns = 0;
 };
 
-using TestNotifier = RealTimeNotifier<
-    RealTimeEventSpec<FramesConsumed, 2>,
-    RealTimeEventSpec<DeviceUnderrun, 1>>;
+using TestNotifier =
+    RealTimeNotifier<RealTimeEventSpec<FramesConsumed, 2>, RealTimeEventSpec<DeviceUnderrun, 1>>;
 
 TEST(RealTimeNotifierTest, RoutesOnlyToSinksRegisteredForTheEventType) {
     TestNotifier notifier;

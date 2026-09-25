@@ -12,13 +12,14 @@ namespace semi::domain {
 namespace {
 
 VideoPacket make_packet(std::uint8_t marker, Generation::Value generation) {
-    return VideoPacket({
-                           .payload = {std::byte{marker}},
-                           .pts_us = marker,
-                           .dts_us = marker,
-                           .duration_us = 1'000,
-                       },
-                       generation);
+    return VideoPacket(
+        {
+            .payload = {std::byte{marker}},
+            .pts_us = marker,
+            .dts_us = marker,
+            .duration_us = 1'000,
+        },
+        generation);
 }
 
 std::uint8_t packet_marker(const VideoPacket& packet) {
@@ -117,8 +118,8 @@ TEST(VideoPacketQueue, NotifiesConsumerAndProducerAtBoundaries) {
             ++not_empty_calls;
             EXPECT_FALSE(queue.empty());
         });
-    auto not_full_subscription = notifier->subscribe<VideoQueueNotFull>(
-        [&not_full_calls, &queue](const VideoQueueNotFull&) {
+    auto not_full_subscription =
+        notifier->subscribe<VideoQueueNotFull>([&not_full_calls, &queue](const VideoQueueNotFull&) {
             ++not_full_calls;
             EXPECT_FALSE(queue.full());
         });

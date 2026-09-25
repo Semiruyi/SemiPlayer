@@ -50,9 +50,7 @@ struct RealtimeEventSpec<Event, RealTimeEventSpec<Event, MaxSinks>, Rest...> {
 };
 
 template <class Event, class First, class... Rest>
-struct RealtimeEventSpec<Event, First, Rest...>
-    : RealtimeEventSpec<Event, Rest...> {
-};
+struct RealtimeEventSpec<Event, First, Rest...> : RealtimeEventSpec<Event, Rest...> {};
 
 template <class Event>
 struct RealtimeEventSpec<Event>;
@@ -178,7 +176,9 @@ public:
         channel<Event>().notify(event);
     }
 
-    [[nodiscard]] bool sealed() const noexcept { return sealed_; }
+    [[nodiscard]] bool sealed() const noexcept {
+        return sealed_;
+    }
 
 private:
     template <class Event>
@@ -190,7 +190,8 @@ private:
     }
 
     template <class Event>
-    [[nodiscard]] const detail::RealTimeChannel<Event, EventSpec<Event>::max_sinks>& channel() const noexcept {
+    [[nodiscard]] const detail::RealTimeChannel<Event, EventSpec<Event>::max_sinks>&
+    channel() const noexcept {
         return std::get<detail::RealTimeChannel<Event, EventSpec<Event>::max_sinks>>(channels_);
     }
 

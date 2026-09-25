@@ -35,12 +35,9 @@ public:
         cv_.notify_all();
     }
 
-    [[nodiscard]] bool wait_for_count(std::size_t expected,
-                                      std::chrono::milliseconds timeout) {
+    [[nodiscard]] bool wait_for_count(std::size_t expected, std::chrono::milliseconds timeout) {
         std::unique_lock lock(mutex_);
-        return cv_.wait_for(lock, timeout, [&] {
-            return snapshot_.count >= expected;
-        });
+        return cv_.wait_for(lock, timeout, [&] { return snapshot_.count >= expected; });
     }
 
     [[nodiscard]] FrameSnapshot snapshot() const {
@@ -77,9 +74,7 @@ void configure_frame_observation(const std::shared_ptr<ApiLayer>& api_layer,
                                  FrameObservation& frames,
                                  CommandResult& result) {
     VideoPresentationConfig config;
-    config.on_frame = [&frames](const domain::RenderedVideoFrame& frame) {
-        frames.record(frame);
-    };
+    config.on_frame = [&frames](const domain::RenderedVideoFrame& frame) { frames.record(frame); };
     const CommandHandle configure = api_layer->configure_video_output(std::move(config));
     ASSERT_NE(configure, 0U);
     ASSERT_EQ(api_layer->await(configure, result), SEMI_OK);
@@ -128,8 +123,7 @@ TEST(IoCPipelineTest, PresentsFinalFrameBeforePublishingSinglePlaybackFinished) 
     open_sample(api_layer, result);
     const auto duration_us = result.media_info.duration_us;
 
-    const auto seek =
-        api_layer->seek(1'000'000, contracts::demuxer::SeekMode::NextKeyframe);
+    const auto seek = api_layer->seek(1'000'000, contracts::demuxer::SeekMode::NextKeyframe);
     ASSERT_NE(seek, 0U);
     EXPECT_EQ(api_layer->await(seek, result), SEMI_OK);
 
@@ -169,9 +163,8 @@ TEST(IoCPipelineTest, SeekNearEndFinishesWithTheNewGeneration) {
     ASSERT_TRUE(frames.wait_for_count(1, std::chrono::seconds(3)));
     const auto generation_before_seek = frames.snapshot().generation;
 
-    const CommandHandle seek = api_layer->seek(
-        duration_us - 250'000,
-        contracts::demuxer::SeekMode::PreviousKeyframe);
+    const CommandHandle seek =
+        api_layer->seek(duration_us - 250'000, contracts::demuxer::SeekMode::PreviousKeyframe);
     ASSERT_NE(seek, 0U);
     ASSERT_EQ(api_layer->await(seek, result), SEMI_OK);
     ASSERT_TRUE(wait_for_playback_finished(api_layer, std::chrono::seconds(5)));

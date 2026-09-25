@@ -14,11 +14,12 @@ TEST(AudioOutputEvents, PlaybackFinishedCarriesGeneration) {
 TEST(AudioOutputEvents, BackendFailureCarriesGenerationAndError) {
     const AudioOutputBackendFailure failure{
         .generation = 7,
-        .error = AudioOutputBackendError{
-            .operation = AudioOutputBackendOperation::Drain,
-            .native_code = -1,
-            .message = "device drain failed",
-        },
+        .error =
+            AudioOutputBackendError{
+                .operation = AudioOutputBackendOperation::Drain,
+                .native_code = -1,
+                .message = "device drain failed",
+            },
     };
 
     EXPECT_EQ(failure.generation, 7U);
@@ -30,11 +31,12 @@ TEST(AudioOutputError, CanCarryBackendFailureDetails) {
     const AudioOutputError error{
         .code = AudioOutputErrorCode::BackendFailure,
         .message = "audio output backend failed",
-        .backend_error = AudioOutputBackendError{
-            .operation = AudioOutputBackendOperation::Configure,
-            .native_code = -22,
-            .message = "unsupported device",
-        },
+        .backend_error =
+            AudioOutputBackendError{
+                .operation = AudioOutputBackendOperation::Configure,
+                .native_code = -22,
+                .message = "unsupported device",
+            },
     };
 
     ASSERT_TRUE(error.backend_error.has_value());

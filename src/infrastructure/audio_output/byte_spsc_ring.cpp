@@ -14,8 +14,7 @@ struct ByteSpscRing::Impl {
     std::atomic<std::uint64_t> write_index{0};
 };
 
-ByteSpscRing::ByteSpscRing()
-    : impl_(std::make_unique<Impl>()) {}
+ByteSpscRing::ByteSpscRing() : impl_(std::make_unique<Impl>()) {}
 
 ByteSpscRing::~ByteSpscRing() = default;
 

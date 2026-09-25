@@ -55,18 +55,17 @@ void VideoSyncMetrics::on_wait_overshoot(std::uint64_t overshoot_us) noexcept {
     max_wait_overshoot_us_ = std::max(max_wait_overshoot_us_, overshoot_us);
 }
 
-void VideoSyncMetrics::on_wakeup_error(
-    std::int64_t error_us,
-    std::int64_t compensation_us) noexcept {
+void VideoSyncMetrics::on_wakeup_error(std::int64_t error_us,
+                                       std::int64_t compensation_us) noexcept {
     ++wakeup_error_events_;
     wakeup_error_total_us_ += error_us;
     wakeup_compensation_us_ = compensation_us;
     if (error_us > 0) {
-        max_wakeup_lateness_us_ = std::max(
-            max_wakeup_lateness_us_, static_cast<std::uint64_t>(error_us));
+        max_wakeup_lateness_us_ =
+            std::max(max_wakeup_lateness_us_, static_cast<std::uint64_t>(error_us));
     } else if (error_us < 0) {
-        max_wakeup_earliness_us_ = std::max(
-            max_wakeup_earliness_us_, static_cast<std::uint64_t>(-error_us));
+        max_wakeup_earliness_us_ =
+            std::max(max_wakeup_earliness_us_, static_cast<std::uint64_t>(-error_us));
     }
 }
 
@@ -85,12 +84,11 @@ void VideoSyncMetrics::on_frame_presented(
 
     if (observation.frame_pts_us && observation.clock_pts_us &&
         *observation.clock_pts_us > *observation.frame_pts_us) {
-        const auto lateness_us = static_cast<std::uint64_t>(
-            *observation.clock_pts_us - *observation.frame_pts_us);
+        const auto lateness_us =
+            static_cast<std::uint64_t>(*observation.clock_pts_us - *observation.frame_pts_us);
         ++presented_late_frames_;
         presented_lateness_total_us_ += lateness_us;
-        max_presented_lateness_us_ =
-            std::max(max_presented_lateness_us_, lateness_us);
+        max_presented_lateness_us_ = std::max(max_presented_lateness_us_, lateness_us);
     }
 }
 
@@ -129,33 +127,27 @@ VideoSyncMetricsSnapshot VideoSyncMetrics::snapshot() const noexcept {
     };
 
     if (playback_started_at_) {
-        result.elapsed_ms = std::chrono::duration<double, std::milli>(
-                                Clock::now() - *playback_started_at_)
-                                .count();
+        result.elapsed_ms =
+            std::chrono::duration<double, std::milli>(Clock::now() - *playback_started_at_).count();
     }
     if (result.elapsed_ms > 0.0) {
-        result.fps = static_cast<double>(result.frames_presented) * 1000.0 /
-                     result.elapsed_ms;
+        result.fps = static_cast<double>(result.frames_presented) * 1000.0 / result.elapsed_ms;
     }
     if (result.wait_events > 0) {
-        result.wait_target_average_us =
-            static_cast<double>(result.wait_target_total_us) /
-            static_cast<double>(result.wait_events);
+        result.wait_target_average_us = static_cast<double>(result.wait_target_total_us) /
+                                        static_cast<double>(result.wait_events);
     }
     if (result.wait_overshoot_events > 0) {
-        result.wait_overshoot_average_us =
-            static_cast<double>(result.wait_overshoot_total_us) /
-            static_cast<double>(result.wait_overshoot_events);
+        result.wait_overshoot_average_us = static_cast<double>(result.wait_overshoot_total_us) /
+                                           static_cast<double>(result.wait_overshoot_events);
     }
     if (result.wakeup_error_events > 0) {
-        result.wakeup_error_average_us =
-            static_cast<double>(result.wakeup_error_total_us) /
-            static_cast<double>(result.wakeup_error_events);
+        result.wakeup_error_average_us = static_cast<double>(result.wakeup_error_total_us) /
+                                         static_cast<double>(result.wakeup_error_events);
     }
     if (result.busy_wait_events > 0) {
-        result.busy_wait_average_us =
-            static_cast<double>(result.busy_wait_total_us) /
-            static_cast<double>(result.busy_wait_events);
+        result.busy_wait_average_us = static_cast<double>(result.busy_wait_total_us) /
+                                      static_cast<double>(result.busy_wait_events);
     }
     if (result.presented_late_frames > 0) {
         result.presented_lateness_average_us =
@@ -202,44 +194,28 @@ void VideoSyncMetrics::reset() noexcept {
 
 void VideoSyncMetrics::log_snapshot(std::string_view reason) const noexcept {
     const auto metrics = snapshot();
-    SEMI_LOG_INFO(
-        "presentation stats reason={} generation={} elapsed_ms={:.3f} fps={:.3f} "
-        "popped={} presented={} catchup_dropped={} stale_dropped={} empty_pop={} "
-        "audio_clock_unavailable={} wait_events={} wait_target_avg_us={:.3f} "
-        "wait_target_max_us={} wait_overshoot_avg_us={:.3f} "
-        "wait_overshoot_max_us={} presented_late={} "
-        "presented_lateness_avg_us={:.3f} presented_lateness_max_us={} "
-        "wakeup_events={} wakeup_error_avg_us={:.3f} wakeup_late_max_us={} "
-        "wakeup_early_max_us={} wakeup_compensation_us={} "
-        "busy_wait_avg_us={:.3f} busy_wait_max_us={} "
-        "callback_avg_us={:.3f} callback_max_us={}",
-        reason,
-        metrics.generation,
-        metrics.elapsed_ms,
-        metrics.fps,
-        metrics.rendered_frames_popped,
-        metrics.frames_presented,
-        metrics.frames_dropped_for_catchup,
-        metrics.stale_items_dropped,
-        metrics.empty_pop_attempts,
-        metrics.audio_clock_unavailable,
-        metrics.wait_events,
-        metrics.wait_target_average_us,
-        metrics.max_wait_target_us,
-        metrics.wait_overshoot_average_us,
-        metrics.max_wait_overshoot_us,
-        metrics.presented_late_frames,
-        metrics.presented_lateness_average_us,
-        metrics.max_presented_lateness_us,
-        metrics.wakeup_error_events,
-        metrics.wakeup_error_average_us,
-        metrics.max_wakeup_lateness_us,
-        metrics.max_wakeup_earliness_us,
-        metrics.wakeup_compensation_us,
-        metrics.busy_wait_average_us,
-        metrics.max_busy_wait_us,
-        metrics.callback_duration_average_us,
-        metrics.max_callback_duration_us);
+    SEMI_LOG_INFO("presentation stats reason={} generation={} elapsed_ms={:.3f} fps={:.3f} "
+                  "popped={} presented={} catchup_dropped={} stale_dropped={} empty_pop={} "
+                  "audio_clock_unavailable={} wait_events={} wait_target_avg_us={:.3f} "
+                  "wait_target_max_us={} wait_overshoot_avg_us={:.3f} "
+                  "wait_overshoot_max_us={} presented_late={} "
+                  "presented_lateness_avg_us={:.3f} presented_lateness_max_us={} "
+                  "wakeup_events={} wakeup_error_avg_us={:.3f} wakeup_late_max_us={} "
+                  "wakeup_early_max_us={} wakeup_compensation_us={} "
+                  "busy_wait_avg_us={:.3f} busy_wait_max_us={} "
+                  "callback_avg_us={:.3f} callback_max_us={}",
+                  reason, metrics.generation, metrics.elapsed_ms, metrics.fps,
+                  metrics.rendered_frames_popped, metrics.frames_presented,
+                  metrics.frames_dropped_for_catchup, metrics.stale_items_dropped,
+                  metrics.empty_pop_attempts, metrics.audio_clock_unavailable, metrics.wait_events,
+                  metrics.wait_target_average_us, metrics.max_wait_target_us,
+                  metrics.wait_overshoot_average_us, metrics.max_wait_overshoot_us,
+                  metrics.presented_late_frames, metrics.presented_lateness_average_us,
+                  metrics.max_presented_lateness_us, metrics.wakeup_error_events,
+                  metrics.wakeup_error_average_us, metrics.max_wakeup_lateness_us,
+                  metrics.max_wakeup_earliness_us, metrics.wakeup_compensation_us,
+                  metrics.busy_wait_average_us, metrics.max_busy_wait_us,
+                  metrics.callback_duration_average_us, metrics.max_callback_duration_us);
 }
 
 } // namespace semi::domain

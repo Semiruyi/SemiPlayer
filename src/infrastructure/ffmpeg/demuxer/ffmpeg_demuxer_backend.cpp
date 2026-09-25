@@ -86,8 +86,8 @@ std::optional<std::int64_t> rescale_duration(std::int64_t value, AVRational time
     return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
 }
 
-std::expected<EncodedPacket, DemuxerBackendError>
-copy_packet(const AVPacket& packet, AVRational time_base) {
+std::expected<EncodedPacket, DemuxerBackendError> copy_packet(const AVPacket& packet,
+                                                              AVRational time_base) {
     if (!valid_time_base(time_base)) {
         return std::unexpected(DemuxerBackendError{
             .operation = DemuxerBackendOperation::Read,
@@ -150,20 +150,23 @@ StreamDescriptor make_stream_descriptor(const AVStream& stream) {
         descriptor.config = VideoCodecConfig{
             .common = make_common(parameters),
             .coded_width = parameters.width > 0 ? static_cast<std::uint32_t>(parameters.width) : 0U,
-            .coded_height = parameters.height > 0 ? static_cast<std::uint32_t>(parameters.height) : 0U,
-            .profile = parameters.profile == AV_PROFILE_UNKNOWN
-                ? std::nullopt
-                : std::optional{parameters.profile},
-            .level = parameters.level == AV_LEVEL_UNKNOWN ? std::nullopt : std::optional{parameters.level},
+            .coded_height =
+                parameters.height > 0 ? static_cast<std::uint32_t>(parameters.height) : 0U,
+            .profile = parameters.profile == AV_PROFILE_UNKNOWN ? std::nullopt
+                                                                : std::optional{parameters.profile},
+            .level = parameters.level == AV_LEVEL_UNKNOWN ? std::nullopt
+                                                          : std::optional{parameters.level},
         };
         break;
     case AVMEDIA_TYPE_AUDIO:
         descriptor.config = AudioCodecConfig{
             .common = make_common(parameters),
-            .sample_rate = parameters.sample_rate > 0 ? static_cast<std::uint32_t>(parameters.sample_rate) : 0U,
+            .sample_rate = parameters.sample_rate > 0
+                               ? static_cast<std::uint32_t>(parameters.sample_rate)
+                               : 0U,
             .channels = parameters.ch_layout.nb_channels > 0
-                ? static_cast<std::uint32_t>(parameters.ch_layout.nb_channels)
-                : 0U,
+                            ? static_cast<std::uint32_t>(parameters.ch_layout.nb_channels)
+                            : 0U,
         };
         break;
     case AVMEDIA_TYPE_SUBTITLE:
@@ -240,8 +243,7 @@ FfmpegDemuxerBackend::open(std::string_view source) {
     return result;
 }
 
-std::expected<BackendReadResult, DemuxerBackendError>
-FfmpegDemuxerBackend::read_packet() {
+std::expected<BackendReadResult, DemuxerBackendError> FfmpegDemuxerBackend::read_packet() {
     if (impl_->format_context == nullptr) {
         return std::unexpected(DemuxerBackendError{
             .operation = DemuxerBackendOperation::Read,
@@ -275,8 +277,8 @@ FfmpegDemuxerBackend::read_packet() {
         });
     }
 
-    const auto stream_id = contracts::media::DemuxerStreamId{
-        static_cast<std::uint32_t>(packet->stream_index)};
+    const auto stream_id =
+        contracts::media::DemuxerStreamId{static_cast<std::uint32_t>(packet->stream_index)};
     const AVStream& stream = *impl_->format_context->streams[packet->stream_index];
     auto encoded = copy_packet(*packet, stream.time_base);
     if (!encoded) {
@@ -297,8 +299,8 @@ void FfmpegDemuxerBackend::close() noexcept {
     }
 }
 
-std::expected<void, DemuxerBackendError>
-FfmpegDemuxerBackend::seek(std::int64_t position_us, SeekMode mode) {
+std::expected<void, DemuxerBackendError> FfmpegDemuxerBackend::seek(std::int64_t position_us,
+                                                                    SeekMode mode) {
     if (impl_->format_context == nullptr) {
         return std::unexpected(DemuxerBackendError{
             .operation = DemuxerBackendOperation::Seek,
@@ -338,11 +340,10 @@ FfmpegDemuxerBackend::seek(std::int64_t position_us, SeekMode mode) {
         stream_index = -1;
     }
 
-    const int flags = mode == SeekMode::PreviousKeyframe || mode == SeekMode::Accurate
-                          ? AVSEEK_FLAG_BACKWARD
-                          : 0;
-    const int status = av_seek_frame(impl_->format_context.get(), stream_index,
-                                     target_timestamp, flags);
+    const int flags =
+        mode == SeekMode::PreviousKeyframe || mode == SeekMode::Accurate ? AVSEEK_FLAG_BACKWARD : 0;
+    const int status =
+        av_seek_frame(impl_->format_context.get(), stream_index, target_timestamp, flags);
     if (status < 0) {
         return std::unexpected(make_error(DemuxerBackendOperation::Seek, status));
     }

@@ -32,9 +32,9 @@ std::expected<contracts::audio_output::AudioOutputConfigureResult,
               contracts::audio_output::AudioOutputBackendError>
 NullAudioOutputBackend::configure(const contracts::audio_output::AudioOutputOptions&) {
     if (configured_) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Configure,
-            "null audio output backend is already configured"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Configure,
+                        "null audio output backend is already configured"));
     }
 
     playback_format_ = default_playback_format();
@@ -47,9 +47,9 @@ NullAudioOutputBackend::configure(const contracts::audio_output::AudioOutputOpti
 std::expected<void, contracts::audio_output::AudioOutputBackendError>
 NullAudioOutputBackend::pause() {
     if (!configured_) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Pause,
-            "null audio output backend is not configured"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Pause,
+                        "null audio output backend is not configured"));
     }
     return {};
 }
@@ -57,26 +57,25 @@ NullAudioOutputBackend::pause() {
 std::expected<void, contracts::audio_output::AudioOutputBackendError>
 NullAudioOutputBackend::resume() {
     if (!configured_) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Resume,
-            "null audio output backend is not configured"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Resume,
+                        "null audio output backend is not configured"));
     }
     return {};
 }
 
 std::expected<contracts::audio_output::AudioOutputSubmitStatus,
               contracts::audio_output::AudioOutputBackendError>
-NullAudioOutputBackend::try_submit(
-    const contracts::media::DecodedAudio& audio) {
+NullAudioOutputBackend::try_submit(const contracts::media::DecodedAudio& audio) {
     if (!configured_) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Submit,
-            "null audio output backend is not configured"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Submit,
+                        "null audio output backend is not configured"));
     }
     if (!same_format(audio.format, playback_format_)) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Submit,
-            "null audio output backend received an unexpected PCM format"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Submit,
+                        "null audio output backend received an unexpected PCM format"));
     }
 
     if (realtime_notifier_) {
@@ -89,9 +88,9 @@ std::expected<contracts::audio_output::AudioOutputDrainStatus,
               contracts::audio_output::AudioOutputBackendError>
 NullAudioOutputBackend::try_drain() {
     if (!configured_) {
-        return std::unexpected(state_error(
-            contracts::audio_output::AudioOutputBackendOperation::Drain,
-            "null audio output backend is not configured"));
+        return std::unexpected(
+            state_error(contracts::audio_output::AudioOutputBackendOperation::Drain,
+                        "null audio output backend is not configured"));
     }
 
     return contracts::audio_output::AudioOutputDrainStatus::Drained;
@@ -108,9 +107,8 @@ void NullAudioOutputBackend::unconfigure() noexcept {
 }
 
 contracts::audio_output::AudioOutputBackendError
-NullAudioOutputBackend::state_error(
-    contracts::audio_output::AudioOutputBackendOperation operation,
-    const char* message) const {
+NullAudioOutputBackend::state_error(contracts::audio_output::AudioOutputBackendOperation operation,
+                                    const char* message) const {
     return contracts::audio_output::AudioOutputBackendError{
         .operation = operation,
         .native_code = 0,

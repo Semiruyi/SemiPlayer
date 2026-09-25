@@ -17,8 +17,7 @@ semi_command_result_t await_ok(semi_handle_t handle) {
     return result;
 }
 
-bool wait_for_event(semi_player_event_type_t expected,
-                    std::chrono::milliseconds timeout) {
+bool wait_for_event(semi_player_event_type_t expected, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         semi_player_event_t event{};
@@ -78,15 +77,13 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     const semi_handle_t idle_play = semi_player_play();
     ASSERT_NE(idle_play, 0U);
     semi_command_result_t idle_play_result{};
-    EXPECT_EQ(semi_player_handle_await(idle_play, &idle_play_result),
-              SEMI_ERR_INVALID_STATE);
+    EXPECT_EQ(semi_player_handle_await(idle_play, &idle_play_result), SEMI_ERR_INVALID_STATE);
 
     EXPECT_EQ(semi_player_configure_video_output(nullptr), 0U);
     semi_video_output_config_t too_small{};
     too_small.struct_size = sizeof(too_small.struct_size);
     semi_command_result_t invalid_config_result{};
-    const semi_handle_t invalid_config =
-        semi_player_configure_video_output(&too_small);
+    const semi_handle_t invalid_config = semi_player_configure_video_output(&too_small);
     ASSERT_NE(invalid_config, 0U);
     EXPECT_EQ(semi_player_handle_await(invalid_config, &invalid_config_result),
               SEMI_ERR_INVALID_ARGUMENT);
@@ -123,9 +120,8 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     await_ok(play);
     {
         std::unique_lock lock(capture.mutex);
-        ASSERT_TRUE(capture.cv.wait_for(lock, std::chrono::seconds(3), [&capture] {
-            return capture.received;
-        }));
+        ASSERT_TRUE(capture.cv.wait_for(lock, std::chrono::seconds(3),
+                                        [&capture] { return capture.received; }));
         EXPECT_GT(capture.width, 0U);
         EXPECT_GT(capture.height, 0U);
         EXPECT_GT(capture.generation, 0U);
@@ -134,19 +130,14 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
         EXPECT_NE(capture.has_pts, 0U);
         EXPECT_EQ(capture.plane_count, 1U);
         EXPECT_GE(capture.stride, capture.width * 4U);
-        EXPECT_GE(capture.plane_size,
-                  static_cast<std::uint64_t>(capture.stride) * capture.height);
+        EXPECT_GE(capture.plane_size, static_cast<std::uint64_t>(capture.stride) * capture.height);
     }
 
-    const semi_handle_t first_seek =
-        semi_player_seek(500'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
-    const semi_handle_t second_seek =
-        semi_player_seek(1'250'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
+    const semi_handle_t first_seek = semi_player_seek(500'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
+    const semi_handle_t second_seek = semi_player_seek(1'250'000, SEMI_SEEK_MODE_NEXT_KEYFRAME);
     const semi_handle_t pause = semi_player_pause();
-    const semi_handle_t final_seek =
-        semi_player_seek(2'000'000, SEMI_SEEK_MODE_PREVIOUS_KEYFRAME);
-    const semi_handle_t accurate_seek =
-        semi_player_seek(2'000'000, SEMI_SEEK_MODE_ACCURATE);
+    const semi_handle_t final_seek = semi_player_seek(2'000'000, SEMI_SEEK_MODE_PREVIOUS_KEYFRAME);
+    const semi_handle_t accurate_seek = semi_player_seek(2'000'000, SEMI_SEEK_MODE_ACCURATE);
     const semi_handle_t resume = semi_player_play();
     await_ok(first_seek);
     await_ok(second_seek);
@@ -154,8 +145,7 @@ TEST(SemiPlayerAbiTest, RunsSeekPauseResumeAndLifecycleThroughSharedLibrary) {
     await_ok(final_seek);
     await_ok(accurate_seek);
     await_ok(resume);
-    ASSERT_TRUE(wait_for_event(SEMI_PLAYER_EVENT_PLAYBACK_FINISHED,
-                               std::chrono::seconds(5)));
+    ASSERT_TRUE(wait_for_event(SEMI_PLAYER_EVENT_PLAYBACK_FINISHED, std::chrono::seconds(5)));
 
     const semi_command_result_t close_result = await_ok(semi_player_close());
     EXPECT_EQ(close_result.has_media_info, 0U);

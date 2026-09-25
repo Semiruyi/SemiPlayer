@@ -40,26 +40,23 @@ VideoRendererBackendError backend_exception(VideoRendererBackendOperation operat
 
 } // namespace
 
-DefaultVideoRenderer::DefaultVideoRenderer(
-    std::shared_ptr<VideoFrameSource> video_frame_source,
-    std::shared_ptr<VideoRenderedSink> video_rendered_sink,
-    std::shared_ptr<VideoRendererBackend> backend,
-    std::shared_ptr<infra::Notifier> notifier,
-    std::shared_ptr<Generation> generation)
+DefaultVideoRenderer::DefaultVideoRenderer(std::shared_ptr<VideoFrameSource> video_frame_source,
+                                           std::shared_ptr<VideoRenderedSink> video_rendered_sink,
+                                           std::shared_ptr<VideoRendererBackend> backend,
+                                           std::shared_ptr<infra::Notifier> notifier,
+                                           std::shared_ptr<Generation> generation)
     : video_frame_source_(std::move(video_frame_source)),
       video_rendered_sink_(std::move(video_rendered_sink)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
-    video_frame_store_not_empty_subscription_ = notifier_->subscribe<VideoFrameStoreNotEmpty>(
-        [this](const VideoFrameStoreNotEmpty&) {
+    video_frame_store_not_empty_subscription_ =
+        notifier_->subscribe<VideoFrameStoreNotEmpty>([this](const VideoFrameStoreNotEmpty&) {
             {
                 std::lock_guard lock(mutex_);
                 input_not_empty_hint_ = true;
@@ -67,18 +64,15 @@ DefaultVideoRenderer::DefaultVideoRenderer(
             cv_.notify_one();
         });
     video_rendered_store_not_full_subscription_ =
-        notifier_->subscribe<VideoRenderedStoreNotFull>(
-            [this](const VideoRenderedStoreNotFull&) {
-                {
-                    std::lock_guard lock(mutex_);
-                    output_not_full_hint_ = true;
-                }
-                cv_.notify_one();
-            });
-    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
+        notifier_->subscribe<VideoRenderedStoreNotFull>([this](const VideoRenderedStoreNotFull&) {
+            {
+                std::lock_guard lock(mutex_);
+                output_not_full_hint_ = true;
+            }
             cv_.notify_one();
         });
+    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
+        [this](const GenerationChanged&) { cv_.notify_one(); });
 }
 
 DefaultVideoRenderer::~DefaultVideoRenderer() {
@@ -184,9 +178,9 @@ void DefaultVideoRenderer::process_command(ConfigureCommand& command) noexcept {
     try {
         configured = backend_->configure(command.options);
     } catch (...) {
-        configured = std::unexpected(backend_exception(
-            VideoRendererBackendOperation::Configure,
-            "video renderer backend configuration threw an exception"));
+        configured = std::unexpected(
+            backend_exception(VideoRendererBackendOperation::Configure,
+                              "video renderer backend configuration threw an exception"));
     }
     if (!configured) {
         backend_->unconfigure();
@@ -247,8 +241,7 @@ bool DefaultVideoRenderer::should_process_data_locked() const noexcept {
         return output_not_full_hint_;
     }
 
-    if (input_exhausted_ &&
-        (!generation_ || active_generation_ == generation_->current())) {
+    if (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) {
         return false;
     }
 
@@ -260,7 +253,8 @@ void DefaultVideoRenderer::adopt_generation_if_needed(
     bool generation_changed = false;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+        if (session_state_ != SessionState::Configured ||
+            current_generation == active_generation_) {
             return;
         }
 
@@ -304,8 +298,7 @@ DefaultVideoRenderer::try_push_pending_output() noexcept {
     const auto pushed = video_rendered_sink->try_push(std::move(*pending_output));
 
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured) {
         return PendingOutputPushResult::Handled;
     }
 
@@ -327,8 +320,7 @@ void DefaultVideoRenderer::read_next_input_to_pending() noexcept {
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured ||
-            (input_exhausted_ &&
-             (!generation_ || active_generation_ == generation_->current())) ||
+            (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) ||
             !pending_outputs_.empty()) {
             return;
         }
@@ -376,8 +368,8 @@ void DefaultVideoRenderer::handle_input_item(VideoFrameStoreItem item) noexcept 
     handle_end_of_input(current_generation);
 }
 
-void DefaultVideoRenderer::handle_video_frame(
-    VideoFrame frame, Generation::Value current_generation) noexcept {
+void DefaultVideoRenderer::handle_video_frame(VideoFrame frame,
+                                              Generation::Value current_generation) noexcept {
     std::shared_ptr<VideoRendererBackend> backend;
     {
         std::lock_guard lock(mutex_);
@@ -392,9 +384,9 @@ void DefaultVideoRenderer::handle_video_frame(
     try {
         rendered = backend->render(frame.decoded());
     } catch (...) {
-        rendered = std::unexpected(backend_exception(
-            VideoRendererBackendOperation::Render,
-            "video renderer backend render threw an exception"));
+        rendered =
+            std::unexpected(backend_exception(VideoRendererBackendOperation::Render,
+                                              "video renderer backend render threw an exception"));
     }
 
     if (!rendered) {
@@ -416,17 +408,16 @@ void DefaultVideoRenderer::handle_end_of_input(Generation::Value generation) noe
     output_not_full_hint_ = true;
 }
 
-void DefaultVideoRenderer::store_rendered_output(
-    contracts::media::RenderedVideo rendered,
-    Generation::Value generation) noexcept {
+void DefaultVideoRenderer::store_rendered_output(contracts::media::RenderedVideo rendered,
+                                                 Generation::Value generation) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured || active_generation_ != generation) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
+        active_generation_ != generation) {
         return;
     }
 
-    pending_outputs_.emplace_back(
-        std::in_place_type<RenderedVideoFrame>, std::move(rendered), generation);
+    pending_outputs_.emplace_back(std::in_place_type<RenderedVideoFrame>, std::move(rendered),
+                                  generation);
     output_not_full_hint_ = true;
 }
 
@@ -471,8 +462,7 @@ bool DefaultVideoRenderer::transition_worker_locked(WorkerEvent event) noexcept 
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -508,8 +498,7 @@ bool DefaultVideoRenderer::transition_session_locked(SessionEvent event) noexcep
         }
         return false;
     case SessionEvent::UnconfigureRequested:
-        if (session_state_ == SessionState::Configured ||
-            session_state_ == SessionState::Failed) {
+        if (session_state_ == SessionState::Configured || session_state_ == SessionState::Failed) {
             session_state_ = SessionState::Unconfiguring;
             return true;
         }

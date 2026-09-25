@@ -20,8 +20,9 @@ video_frame_store_item_generation(const VideoFrameStoreItem& item) noexcept {
     return std::get<VideoFrameEndOfInput>(item).generation;
 }
 
-[[nodiscard]] inline bool is_current_video_frame_store_item(
-    const VideoFrameStoreItem& item, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool
+is_current_video_frame_store_item(const VideoFrameStoreItem& item,
+                                  Generation::Value current_generation) noexcept {
     return video_frame_store_item_generation(item) == current_generation;
 }
 

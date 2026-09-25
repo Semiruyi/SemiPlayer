@@ -151,8 +151,8 @@ struct OtherStreamConfig {
     OtherStreamKind kind = OtherStreamKind::Unknown;
 };
 
-using StreamConfig = std::variant<VideoCodecConfig, AudioCodecConfig, SubtitleCodecConfig,
-                                  OtherStreamConfig>;
+using StreamConfig =
+    std::variant<VideoCodecConfig, AudioCodecConfig, SubtitleCodecConfig, OtherStreamConfig>;
 
 struct StreamDescriptor {
     DemuxerStreamId id;

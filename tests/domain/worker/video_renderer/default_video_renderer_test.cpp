@@ -42,9 +42,15 @@ public:
         return contracts::media::VideoPixelFormat::Rgba8;
     }
 
-    [[nodiscard]] std::uint32_t width() const noexcept override { return 1; }
-    [[nodiscard]] std::uint32_t height() const noexcept override { return 1; }
-    [[nodiscard]] std::size_t plane_count() const noexcept override { return 1; }
+    [[nodiscard]] std::uint32_t width() const noexcept override {
+        return 1;
+    }
+    [[nodiscard]] std::uint32_t height() const noexcept override {
+        return 1;
+    }
+    [[nodiscard]] std::size_t plane_count() const noexcept override {
+        return 1;
+    }
 
     [[nodiscard]] contracts::media::VideoPlaneView
     plane(std::size_t index) const noexcept override {
@@ -109,8 +115,12 @@ public:
         };
     }
 
-    void reset() noexcept override { ++reset_calls; }
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void reset() noexcept override {
+        ++reset_calls;
+    }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     void set_configure_error(VideoRendererBackendError error) {
         std::lock_guard lock(mutex_);
@@ -146,7 +156,9 @@ public:
     }
 
     void reset() noexcept override {}
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     std::atomic_int unconfigure_calls = 0;
 };
@@ -226,13 +238,11 @@ struct RendererDependencies {
     std::shared_ptr<Generation> generation;
 };
 
-std::unique_ptr<DefaultVideoRenderer>
-make_renderer(RendererDependencies dependencies) {
-    return std::make_unique<DefaultVideoRenderer>(std::move(dependencies.source),
-                                                   std::move(dependencies.sink),
-                                                   std::move(dependencies.backend),
-                                                   std::move(dependencies.notifier),
-                                                   std::move(dependencies.generation));
+std::unique_ptr<DefaultVideoRenderer> make_renderer(RendererDependencies dependencies) {
+    return std::make_unique<DefaultVideoRenderer>(
+        std::move(dependencies.source), std::move(dependencies.sink),
+        std::move(dependencies.backend), std::move(dependencies.notifier),
+        std::move(dependencies.generation));
 }
 
 RendererDependencies complete_dependencies() {
@@ -424,9 +434,7 @@ TEST(DefaultVideoRendererTest, ReportsRenderFailureAndRequiresUnconfigureForReco
     auto notifier = dependencies.notifier;
     std::atomic_int failure_events = 0;
     auto failure_subscription = notifier->subscribe<VideoRendererBackendFailure>(
-        [&failure_events](const VideoRendererBackendFailure&) {
-            ++failure_events;
-        });
+        [&failure_events](const VideoRendererBackendFailure&) { ++failure_events; });
     backend->set_render_error(VideoRendererBackendError{
         .operation = VideoRendererBackendOperation::Render,
         .native_code = -1,

@@ -26,8 +26,7 @@ public:
     VideoRenderedStore(VideoRenderedStore&&) = delete;
     VideoRenderedStore& operator=(VideoRenderedStore&&) = delete;
 
-    [[nodiscard]] VideoRenderedPushResult
-    try_push(VideoRenderedStoreItem&& item) override;
+    [[nodiscard]] VideoRenderedPushResult try_push(VideoRenderedStoreItem&& item) override;
     [[nodiscard]] std::optional<VideoRenderedStoreItem> try_pop() override;
 
     [[nodiscard]] bool empty() const noexcept;

@@ -39,8 +39,7 @@ AudioDecoderBackendError backend_exception(AudioDecoderBackendOperation operatio
     };
 }
 
-std::optional<std::size_t> bytes_per_sample(
-    contracts::media::AudioSampleFormat format) noexcept {
+std::optional<std::size_t> bytes_per_sample(contracts::media::AudioSampleFormat format) noexcept {
     using contracts::media::AudioSampleFormat;
     switch (format) {
     case AudioSampleFormat::U8:
@@ -74,9 +73,8 @@ std::uint64_t positive_pts_delta(std::int64_t target, std::int64_t start) noexce
     return magnitude + positive_target;
 }
 
-std::uint64_t samples_to_reach(std::int64_t start,
-                               std::int64_t target,
-                               std::uint32_t sample_rate) noexcept {
+std::uint64_t
+samples_to_reach(std::int64_t start, std::int64_t target, std::uint32_t sample_rate) noexcept {
     constexpr std::uint64_t kMicrosPerSecond = 1'000'000;
     const auto delta = positive_pts_delta(target, start);
     const auto whole_seconds = delta / kMicrosPerSecond;
@@ -86,8 +84,8 @@ std::uint64_t samples_to_reach(std::int64_t start,
     }
     const auto whole_samples = whole_seconds * sample_rate;
     const auto partial_numerator = remainder * sample_rate;
-    const auto partial_samples = partial_numerator / kMicrosPerSecond +
-                                 (partial_numerator % kMicrosPerSecond != 0 ? 1 : 0);
+    const auto partial_samples =
+        partial_numerator / kMicrosPerSecond + (partial_numerator % kMicrosPerSecond != 0 ? 1 : 0);
     if (whole_samples > std::numeric_limits<std::uint64_t>::max() - partial_samples) {
         return std::numeric_limits<std::uint64_t>::max();
     }
@@ -107,17 +105,16 @@ bool trim_audio_to_target(contracts::media::DecodedAudio& frame,
     if (!sample_bytes) {
         return false;
     }
-    const auto drop_samples = samples_to_reach(*frame.pts_us,
-                                               target_pts_us,
-                                               frame.format.sample_rate);
+    const auto drop_samples =
+        samples_to_reach(*frame.pts_us, target_pts_us, frame.format.sample_rate);
     if (drop_samples >= frame.samples_per_channel) {
         return false;
     }
 
     const std::size_t expected_planes = frame.format.planar ? frame.format.channels : 1U;
-    const std::uint64_t bytes_per_channel_sample = frame.format.planar
-        ? *sample_bytes
-        : static_cast<std::uint64_t>(*sample_bytes) * frame.format.channels;
+    const std::uint64_t bytes_per_channel_sample =
+        frame.format.planar ? *sample_bytes
+                            : static_cast<std::uint64_t>(*sample_bytes) * frame.format.channels;
     if (frame.planes.size() != expected_planes ||
         drop_samples > std::numeric_limits<std::size_t>::max() / bytes_per_channel_sample) {
         return false;
@@ -134,10 +131,10 @@ bool trim_audio_to_target(contracts::media::DecodedAudio& frame,
     frame.samples_per_channel -= static_cast<std::uint32_t>(drop_samples);
     const auto offset_us = drop_samples * 1'000'000ULL / frame.format.sample_rate;
     if (offset_us <= static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) &&
-        *frame.pts_us <= std::numeric_limits<std::int64_t>::max() -
-                             static_cast<std::int64_t>(offset_us)) {
-        frame.pts_us = std::max(target_pts_us,
-                                *frame.pts_us + static_cast<std::int64_t>(offset_us));
+        *frame.pts_us <=
+            std::numeric_limits<std::int64_t>::max() - static_cast<std::int64_t>(offset_us)) {
+        frame.pts_us =
+            std::max(target_pts_us, *frame.pts_us + static_cast<std::int64_t>(offset_us));
     } else {
         frame.pts_us = target_pts_us;
     }
@@ -146,34 +143,31 @@ bool trim_audio_to_target(contracts::media::DecodedAudio& frame,
 
 } // namespace
 
-DefaultAudioDecoder::DefaultAudioDecoder(
-    std::shared_ptr<AudioPacketSource> audio_packet_source,
-    std::shared_ptr<AudioFrameSink> audio_frame_sink,
-    std::shared_ptr<AudioDecoderBackend> backend,
-    std::shared_ptr<infra::Notifier> notifier,
-    std::shared_ptr<Generation> generation)
+DefaultAudioDecoder::DefaultAudioDecoder(std::shared_ptr<AudioPacketSource> audio_packet_source,
+                                         std::shared_ptr<AudioFrameSink> audio_frame_sink,
+                                         std::shared_ptr<AudioDecoderBackend> backend,
+                                         std::shared_ptr<infra::Notifier> notifier,
+                                         std::shared_ptr<Generation> generation)
     : audio_packet_source_(std::move(audio_packet_source)),
       audio_frame_sink_(std::move(audio_frame_sink)),
       backend_(std::move(backend)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
-    audio_queue_not_empty_subscription_ = notifier_->subscribe<AudioQueueNotEmpty>(
-        [this](const AudioQueueNotEmpty&) {
+    audio_queue_not_empty_subscription_ =
+        notifier_->subscribe<AudioQueueNotEmpty>([this](const AudioQueueNotEmpty&) {
             {
                 std::lock_guard lock(mutex_);
                 input_not_empty_hint_ = true;
             }
             cv_.notify_one();
         });
-    audio_frame_store_not_full_subscription_ = notifier_->subscribe<AudioFrameStoreNotFull>(
-        [this](const AudioFrameStoreNotFull&) {
+    audio_frame_store_not_full_subscription_ =
+        notifier_->subscribe<AudioFrameStoreNotFull>([this](const AudioFrameStoreNotFull&) {
             {
                 std::lock_guard lock(mutex_);
                 output_not_full_hint_ = true;
@@ -181,9 +175,7 @@ DefaultAudioDecoder::DefaultAudioDecoder(
             cv_.notify_one();
         });
     generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
-            cv_.notify_one();
-        });
+        [this](const GenerationChanged&) { cv_.notify_one(); });
 }
 
 DefaultAudioDecoder::~DefaultAudioDecoder() {
@@ -193,8 +185,8 @@ DefaultAudioDecoder::~DefaultAudioDecoder() {
     generation_changed_subscription_.reset();
 }
 
-std::expected<AudioDecoderConfigureResult, AudioDecoderError> DefaultAudioDecoder::configure(
-    const contracts::media::AudioCodecConfig& config) {
+std::expected<AudioDecoderConfigureResult, AudioDecoderError>
+DefaultAudioDecoder::configure(const contracts::media::AudioCodecConfig& config) {
     ConfigureCommand command;
     command.config = config;
     auto completion = command.completion.get_future();
@@ -363,21 +355,22 @@ bool DefaultAudioDecoder::should_process_data_locked() const noexcept {
         return output_not_full_hint_;
     }
 
-    if (input_exhausted_ &&
-        (!generation_ || active_generation_ == generation_->current())) {
+    if (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) {
         return false;
     }
 
     return input_not_empty_hint_;
 }
 
-void DefaultAudioDecoder::adopt_generation_if_needed(Generation::Value current_generation) noexcept {
-    const auto seek_target = generation_ ? generation_->seek_target_for(current_generation)
-                                         : std::nullopt;
+void DefaultAudioDecoder::adopt_generation_if_needed(
+    Generation::Value current_generation) noexcept {
+    const auto seek_target =
+        generation_ ? generation_->seek_target_for(current_generation) : std::nullopt;
     bool generation_changed = false;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured || current_generation == active_generation_) {
+        if (session_state_ != SessionState::Configured ||
+            current_generation == active_generation_) {
             return;
         }
 
@@ -423,8 +416,7 @@ DefaultAudioDecoder::try_push_pending_output() noexcept {
     const auto pushed = audio_frame_sink->try_push(std::move(*pending_output));
 
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured) {
         return PendingOutputPushResult::Handled;
     }
 
@@ -446,8 +438,7 @@ void DefaultAudioDecoder::read_next_input_to_pending() noexcept {
     {
         std::lock_guard lock(mutex_);
         if (session_state_ != SessionState::Configured ||
-            (input_exhausted_ &&
-             (!generation_ || active_generation_ == generation_->current())) ||
+            (input_exhausted_ && (!generation_ || active_generation_ == generation_->current())) ||
             !pending_outputs_.empty()) {
             return;
         }
@@ -495,8 +486,8 @@ void DefaultAudioDecoder::handle_input_item(AudioPacketQueueItem item) noexcept 
     handle_end_of_input(current_generation);
 }
 
-void DefaultAudioDecoder::handle_audio_packet(
-    AudioPacket packet, Generation::Value current_generation) noexcept {
+void DefaultAudioDecoder::handle_audio_packet(AudioPacket packet,
+                                              Generation::Value current_generation) noexcept {
     std::shared_ptr<AudioDecoderBackend> backend;
     {
         std::lock_guard lock(mutex_);
@@ -511,9 +502,9 @@ void DefaultAudioDecoder::handle_audio_packet(
     try {
         decoded = backend->decode(packet.encoded());
     } catch (...) {
-        decoded = std::unexpected(backend_exception(
-            AudioDecoderBackendOperation::Decode,
-            "audio decoder backend decode threw an exception"));
+        decoded =
+            std::unexpected(backend_exception(AudioDecoderBackendOperation::Decode,
+                                              "audio decoder backend decode threw an exception"));
     }
 
     if (!decoded) {
@@ -541,8 +532,7 @@ void DefaultAudioDecoder::handle_end_of_input(Generation::Value generation) noex
         drained = backend->drain();
     } catch (...) {
         drained = std::unexpected(backend_exception(
-            AudioDecoderBackendOperation::Drain,
-            "audio decoder backend drain threw an exception"));
+            AudioDecoderBackendOperation::Drain, "audio decoder backend drain threw an exception"));
     }
 
     if (!drained) {
@@ -553,15 +543,12 @@ void DefaultAudioDecoder::handle_end_of_input(Generation::Value generation) noex
     store_decoded_outputs(std::move(*drained), generation, true);
 }
 
-void DefaultAudioDecoder::store_decoded_outputs(
-    contracts::audio_decoder::DecodedAudioBatch decoded,
-    Generation::Value generation,
-    bool append_end_of_input) noexcept {
+void DefaultAudioDecoder::store_decoded_outputs(contracts::audio_decoder::DecodedAudioBatch decoded,
+                                                Generation::Value generation,
+                                                bool append_end_of_input) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Configured ||
-        active_generation_ != generation ||
-        (generation_ && generation_->current() != generation)) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Configured ||
+        active_generation_ != generation || (generation_ && generation_->current() != generation)) {
         return;
     }
 
@@ -626,8 +613,7 @@ bool DefaultAudioDecoder::transition_worker_locked(WorkerEvent event) noexcept {
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -663,8 +649,7 @@ bool DefaultAudioDecoder::transition_session_locked(SessionEvent event) noexcept
         }
         return false;
     case SessionEvent::UnconfigureRequested:
-        if (session_state_ == SessionState::Configured ||
-            session_state_ == SessionState::Failed) {
+        if (session_state_ == SessionState::Configured || session_state_ == SessionState::Failed) {
             session_state_ = SessionState::Unconfiguring;
             return true;
         }

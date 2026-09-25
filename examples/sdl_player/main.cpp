@@ -48,18 +48,16 @@ bool await_command(std::string_view name,
                    semi_handle_t handle,
                    semi_command_result_t* result = nullptr) noexcept {
     if (handle == 0) {
-        std::fprintf(stderr, "[sdl host] %.*s returned no handle\n",
-                     static_cast<int>(name.size()), name.data());
+        std::fprintf(stderr, "[sdl host] %.*s returned no handle\n", static_cast<int>(name.size()),
+                     name.data());
         return false;
     }
 
     semi_command_result_t local_result{};
-    const int status = semi_player_handle_await(
-        handle, result != nullptr ? result : &local_result);
+    const int status = semi_player_handle_await(handle, result != nullptr ? result : &local_result);
     if (status != SEMI_OK) {
-        std::fprintf(stderr, "[sdl host] %.*s failed: %s (%d)\n",
-                     static_cast<int>(name.size()), name.data(),
-                     status_name(status), status);
+        std::fprintf(stderr, "[sdl host] %.*s failed: %s (%d)\n", static_cast<int>(name.size()),
+                     name.data(), status_name(status), status);
         return false;
     }
     return true;
@@ -93,8 +91,7 @@ public:
             cv_.notify_one();
             return true;
         } catch (...) {
-            std::fprintf(stderr,
-                         "[sdl host] could not queue %s completion; waiting inline\n",
+            std::fprintf(stderr, "[sdl host] could not queue %s completion; waiting inline\n",
                          name);
             return await_command(name, handle);
         }
@@ -163,8 +160,7 @@ public:
 
         frame_event_ = SDL_RegisterEvents(1);
         if (frame_event_ == 0) {
-            std::fprintf(stderr, "[sdl host] SDL event registration failed: %s\n",
-                         SDL_GetError());
+            std::fprintf(stderr, "[sdl host] SDL event registration failed: %s\n", SDL_GetError());
             return false;
         }
         mailbox_.set_wake_event(frame_event_);
@@ -174,8 +170,7 @@ public:
         video_config.pixel_format = SEMI_VIDEO_PIXEL_FORMAT_RGBA8888;
         video_config.on_frame = &SdlPlayerApplication::on_video_frame;
         video_config.user_data = &mailbox_;
-        if (!await_command("configure video",
-                           semi_player_configure_video_output(&video_config))) {
+        if (!await_command("configure video", semi_player_configure_video_output(&video_config))) {
             return false;
         }
 
@@ -192,15 +187,10 @@ public:
 
         int window_width = 1920;
         int window_height = 1080;
-        fit_initial_window(open_result.media_info.video_width,
-                           open_result.media_info.video_height,
-                           window_width,
-                           window_height);
-        window_ = SDL_CreateWindow("SemiPlayer SDL Host",
-                                   window_width,
-                                   window_height,
-                                   SDL_WINDOW_RESIZABLE |
-                                       SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        fit_initial_window(open_result.media_info.video_width, open_result.media_info.video_height,
+                           window_width, window_height);
+        window_ = SDL_CreateWindow("SemiPlayer SDL Host", window_width, window_height,
+                                   SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
         if (window_ == nullptr) {
             std::fprintf(stderr, "[sdl host] create window failed: %s\n", SDL_GetError());
             return false;
@@ -254,8 +244,7 @@ public:
     }
 
 private:
-    static void on_video_frame(void* user_data,
-                               const semi_video_frame_t* frame) noexcept {
+    static void on_video_frame(void* user_data, const semi_video_frame_t* frame) noexcept {
         if (user_data != nullptr) {
             static_cast<semi::example::LatestFrameMailbox*>(user_data)->publish(frame);
         }
@@ -270,8 +259,7 @@ private:
         }
         constexpr double max_width = 1280.0;
         constexpr double max_height = 720.0;
-        const double scale = std::min(
-            {1.0, max_width / video_width, max_height / video_height});
+        const double scale = std::min({1.0, max_width / video_width, max_height / video_height});
         window_width = std::max(320, static_cast<int>(video_width * scale));
         window_height = std::max(180, static_cast<int>(video_height * scale));
     }
@@ -283,8 +271,7 @@ private:
         if (event.type == frame_event_) {
             return true;
         }
-        if (event.type == SDL_EVENT_WINDOW_EXPOSED ||
-            event.type == SDL_EVENT_WINDOW_RESIZED ||
+        if (event.type == SDL_EVENT_WINDOW_EXPOSED || event.type == SDL_EVENT_WINDOW_RESIZED ||
             event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED) {
             if (!presenter_->redraw()) {
                 fatal_error_ = true;
@@ -311,8 +298,7 @@ private:
         case SDLK_F11:
             fullscreen_ = !fullscreen_;
             if (!SDL_SetWindowFullscreen(window_, fullscreen_)) {
-                std::fprintf(stderr, "[sdl host] fullscreen failed: %s\n",
-                             SDL_GetError());
+                std::fprintf(stderr, "[sdl host] fullscreen failed: %s\n", SDL_GetError());
                 fullscreen_ = !fullscreen_;
             }
             break;
@@ -323,24 +309,19 @@ private:
     }
 
     void toggle_playback() noexcept {
-        const semi_handle_t handle = play_requested_
-            ? semi_player_pause()
-            : semi_player_play();
+        const semi_handle_t handle = play_requested_ ? semi_player_pause() : semi_player_play();
         if (command_awaiter_.submit(handle, play_requested_ ? "pause" : "play")) {
             play_requested_ = !play_requested_;
-            SDL_SetWindowTitle(window_, play_requested_
-                ? "SemiPlayer SDL Host"
-                : "SemiPlayer SDL Host (paused)");
+            SDL_SetWindowTitle(window_, play_requested_ ? "SemiPlayer SDL Host"
+                                                        : "SemiPlayer SDL Host (paused)");
         }
     }
 
     void seek_relative(std::int64_t delta_us) noexcept {
         const std::int64_t current = presenter_->current_pts_us();
-        const std::int64_t target = std::clamp(
-            current + delta_us, std::int64_t{0}, duration_us_);
-        const semi_seek_mode_t mode = delta_us < 0
-            ? SEMI_SEEK_MODE_PREVIOUS_KEYFRAME
-            : SEMI_SEEK_MODE_NEXT_KEYFRAME;
+        const std::int64_t target = std::clamp(current + delta_us, std::int64_t{0}, duration_us_);
+        const semi_seek_mode_t mode =
+            delta_us < 0 ? SEMI_SEEK_MODE_PREVIOUS_KEYFRAME : SEMI_SEEK_MODE_NEXT_KEYFRAME;
         command_awaiter_.submit(semi_player_seek(target, mode), "seek");
     }
 
@@ -349,8 +330,8 @@ private:
             semi_player_event_t event{};
             const int status = semi_player_poll_event(&event);
             if (status != SEMI_OK) {
-                std::fprintf(stderr, "[sdl host] poll event failed: %s (%d)\n",
-                             status_name(status), status);
+                std::fprintf(stderr, "[sdl host] poll event failed: %s (%d)\n", status_name(status),
+                             status);
                 return false;
             }
             if (event.type == SEMI_PLAYER_EVENT_NONE) {
@@ -381,8 +362,8 @@ private:
         if (player_initialized_) {
             const int status = semi_player_shutdown();
             if (status != SEMI_OK) {
-                std::fprintf(stderr, "[sdl host] shutdown failed: %s (%d)\n",
-                             status_name(status), status);
+                std::fprintf(stderr, "[sdl host] shutdown failed: %s (%d)\n", status_name(status),
+                             status);
             }
             player_initialized_ = false;
         }
@@ -408,8 +389,7 @@ private:
 
 int main(int argc, char** argv) {
     if (argc > 2) {
-        std::fprintf(stderr, "usage: %s [media-file]\n",
-                     argc > 0 ? argv[0] : "semi_player_sdl");
+        std::fprintf(stderr, "usage: %s [media-file]\n", argc > 0 ? argv[0] : "semi_player_sdl");
         return 2;
     }
 

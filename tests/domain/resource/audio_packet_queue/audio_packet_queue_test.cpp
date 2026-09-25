@@ -13,13 +13,14 @@ namespace semi::domain {
 namespace {
 
 AudioPacket make_packet(std::uint8_t marker, Generation::Value generation) {
-    return AudioPacket({
-                           .payload = {std::byte{marker}},
-                           .pts_us = marker,
-                           .dts_us = marker,
-                           .duration_us = 1'000,
-                       },
-                       generation);
+    return AudioPacket(
+        {
+            .payload = {std::byte{marker}},
+            .pts_us = marker,
+            .dts_us = marker,
+            .duration_us = 1'000,
+        },
+        generation);
 }
 
 std::uint8_t packet_marker(const AudioPacket& packet) {
@@ -33,8 +34,10 @@ const AudioPacket* packet_value(const AudioPacketQueueItem& item) noexcept {
 TEST(AudioPacketQueue, PreservesFifoOrderAndGeneration) {
     AudioPacketQueue queue(std::make_shared<infra::DefaultNotifier>(), 2);
 
-    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
-    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(2, 11)}), AudioPacketPushResult::Accepted);
+    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
+              AudioPacketPushResult::Accepted);
+    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(2, 11)}),
+              AudioPacketPushResult::Accepted);
     EXPECT_TRUE(queue.full());
 
     auto first = queue.try_pop();
@@ -56,7 +59,8 @@ TEST(AudioPacketQueue, PreservesFifoOrderAndGeneration) {
 TEST(AudioPacketQueue, PreservesEndOfInputAfterAllPackets) {
     AudioPacketQueue queue(std::make_shared<infra::DefaultNotifier>(), 2);
 
-    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
+    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
+              AudioPacketPushResult::Accepted);
     ASSERT_EQ(queue.try_push(AudioPacketQueueItem{AudioPacketEndOfInput{.generation = 10}}),
               AudioPacketPushResult::Accepted);
 
@@ -87,7 +91,8 @@ TEST(AudioPacketQueueItem, ChecksPacketAndEndOfInputGeneration) {
 
 TEST(AudioPacketQueue, EndOfInputRespectsBackpressure) {
     AudioPacketQueue queue(std::make_shared<infra::DefaultNotifier>(), 1);
-    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
+    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
+              AudioPacketPushResult::Accepted);
 
     AudioPacketQueueItem end_item = AudioPacketEndOfInput{.generation = 10};
     EXPECT_EQ(queue.try_push(std::move(end_item)), AudioPacketPushResult::Full);
@@ -147,14 +152,16 @@ TEST(AudioPacketQueue, NotifiesConsumerOnEmptyBoundaryAndProducerOnFullBoundary)
             ++not_empty_calls;
             EXPECT_FALSE(queue.empty());
         });
-    auto not_full_subscription = notifier->subscribe<AudioQueueNotFull>(
-        [&not_full_calls, &queue](const AudioQueueNotFull&) {
+    auto not_full_subscription =
+        notifier->subscribe<AudioQueueNotFull>([&not_full_calls, &queue](const AudioQueueNotFull&) {
             ++not_full_calls;
             EXPECT_FALSE(queue.full());
         });
 
-    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
-    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(2, 11)}), AudioPacketPushResult::Accepted);
+    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
+              AudioPacketPushResult::Accepted);
+    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(2, 11)}),
+              AudioPacketPushResult::Accepted);
     EXPECT_EQ(not_empty_calls, 1);
     EXPECT_EQ(not_full_calls, 0);
 
@@ -163,7 +170,8 @@ TEST(AudioPacketQueue, NotifiesConsumerOnEmptyBoundaryAndProducerOnFullBoundary)
     ASSERT_TRUE(queue.try_pop().has_value());
     EXPECT_EQ(not_full_calls, 1);
 
-    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(3, 12)}), AudioPacketPushResult::Accepted);
+    EXPECT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(3, 12)}),
+              AudioPacketPushResult::Accepted);
     EXPECT_EQ(not_empty_calls, 2);
     EXPECT_EQ(not_full_calls, 1);
 
@@ -175,13 +183,14 @@ TEST(AudioPacketQueue, ClearFromFullNotifiesProducer) {
     auto notifier = std::make_shared<infra::DefaultNotifier>();
     AudioPacketQueue queue(notifier, 1);
     int not_full_calls = 0;
-    auto subscription = notifier->subscribe<AudioQueueNotFull>(
-        [&not_full_calls, &queue](const AudioQueueNotFull&) {
+    auto subscription =
+        notifier->subscribe<AudioQueueNotFull>([&not_full_calls, &queue](const AudioQueueNotFull&) {
             ++not_full_calls;
             EXPECT_FALSE(queue.full());
         });
 
-    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}), AudioPacketPushResult::Accepted);
+    ASSERT_EQ(queue.try_push(AudioPacketQueueItem{make_packet(1, 10)}),
+              AudioPacketPushResult::Accepted);
     queue.clear();
 
     EXPECT_EQ(not_full_calls, 1);

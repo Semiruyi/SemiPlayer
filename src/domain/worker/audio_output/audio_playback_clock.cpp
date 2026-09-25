@@ -10,8 +10,7 @@ std::int64_t now_ns() noexcept {
         .count();
 }
 
-std::int64_t frames_to_duration_us(std::uint64_t frames,
-                                   std::uint32_t sample_rate) noexcept {
+std::int64_t frames_to_duration_us(std::uint64_t frames, std::uint32_t sample_rate) noexcept {
     const auto whole_seconds = frames / sample_rate;
     const auto remainder = frames % sample_rate;
     return static_cast<std::int64_t>(whole_seconds) * 1'000'000 +
@@ -28,8 +27,7 @@ void AudioPlaybackClockState::end_write() noexcept {
     sequence_.fetch_add(1, std::memory_order_release);
 }
 
-void AudioPlaybackClockState::reset(std::uint64_t generation,
-                                    std::uint32_t sample_rate) noexcept {
+void AudioPlaybackClockState::reset(std::uint64_t generation, std::uint32_t sample_rate) noexcept {
     begin_write();
     sample_rate_.store(sample_rate, std::memory_order_relaxed);
     generation_.store(generation, std::memory_order_relaxed);
@@ -132,8 +130,8 @@ bool AudioPlaybackClockState::set_first_pts(std::uint64_t generation,
     return true;
 }
 
-void AudioPlaybackClockState::on_audio_frames_consumed(
-    std::uint64_t generation, std::uint32_t frames) noexcept {
+void AudioPlaybackClockState::on_audio_frames_consumed(std::uint64_t generation,
+                                                       std::uint32_t frames) noexcept {
     const auto sample_rate = sample_rate_.load(std::memory_order_acquire);
     if (frames == 0 || sample_rate == 0 ||
         generation_.load(std::memory_order_acquire) != generation) {
@@ -151,10 +149,9 @@ void AudioPlaybackClockState::on_audio_frames_consumed(
         consumed_frames_.fetch_add(frames, std::memory_order_relaxed) + frames;
     last_consumed_ns_.store(now_ns(), std::memory_order_relaxed);
     if (paused_.load(std::memory_order_relaxed)) {
-        frozen_pts_us_.store(
-            first_pts_us_.load(std::memory_order_relaxed) +
-                frames_to_duration_us(consumed_frames, sample_rate),
-            std::memory_order_relaxed);
+        frozen_pts_us_.store(first_pts_us_.load(std::memory_order_relaxed) +
+                                 frames_to_duration_us(consumed_frames, sample_rate),
+                             std::memory_order_relaxed);
         has_frozen_position_.store(true, std::memory_order_release);
     } else {
         has_frozen_position_.store(false, std::memory_order_release);
@@ -166,7 +163,8 @@ void AudioPlaybackClockState::on_audio_frames_consumed(
 std::optional<PlaybackPosition> AudioPlaybackClockState::current_position() const noexcept {
     for (;;) {
         const auto sequence = sequence_.load(std::memory_order_acquire);
-        if (sequence & 1U) continue;
+        if (sequence & 1U)
+            continue;
         const bool paused = paused_.load(std::memory_order_acquire);
         const bool finished = finished_.load(std::memory_order_acquire);
         const bool has_first_pts = has_first_pts_.load(std::memory_order_acquire);
@@ -192,11 +190,11 @@ std::optional<PlaybackPosition> AudioPlaybackClockState::current_position() cons
             result = PlaybackPosition{
                 .generation = generation_.load(std::memory_order_relaxed),
                 .pts_us = first_pts_us_.load(std::memory_order_relaxed) +
-                          frames_to_duration_us(consumed_frames, sample_rate) +
-                          elapsed / 1'000,
+                          frames_to_duration_us(consumed_frames, sample_rate) + elapsed / 1'000,
             };
         }
-        if (sequence_.load(std::memory_order_acquire) == sequence) return result;
+        if (sequence_.load(std::memory_order_acquire) == sequence)
+            return result;
     }
 }
 

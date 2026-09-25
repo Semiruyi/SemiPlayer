@@ -18,8 +18,7 @@ TEST(VideoSyncWakeupControllerTest, LearnsSignedTimerBiasFromAWindowOfSamples) {
 
     const auto first_target = VideoSyncWakeupController::Clock::now() + 100ms;
     const auto first_wake = controller.wake_deadline(first_target);
-    const auto first_observation = controller.observe_timer_wakeup(
-        first_target, first_wake + 4ms);
+    const auto first_observation = controller.observe_timer_wakeup(first_target, first_wake + 4ms);
 
     ASSERT_TRUE(first_observation);
     EXPECT_EQ(first_observation->error_us, 4'000);
@@ -29,16 +28,15 @@ TEST(VideoSyncWakeupControllerTest, LearnsSignedTimerBiasFromAWindowOfSamples) {
     const auto second_wake = controller.wake_deadline(second_target);
     EXPECT_EQ(second_wake, second_target - 5ms);
 
-    const auto second_observation = controller.observe_timer_wakeup(
-        second_target, second_wake - 2ms);
+    const auto second_observation =
+        controller.observe_timer_wakeup(second_target, second_wake - 2ms);
     ASSERT_TRUE(second_observation);
     EXPECT_EQ(second_observation->error_us, -2'000);
     EXPECT_EQ(second_observation->compensation_us, 1'000);
 
     const auto third_target = second_target + 100ms;
     const auto third_wake = controller.wake_deadline(third_target);
-    const auto third_observation = controller.observe_timer_wakeup(
-        third_target, third_wake + 2ms);
+    const auto third_observation = controller.observe_timer_wakeup(third_target, third_wake + 2ms);
 
     ASSERT_TRUE(third_observation);
     EXPECT_EQ(third_observation->error_us, 2'000);

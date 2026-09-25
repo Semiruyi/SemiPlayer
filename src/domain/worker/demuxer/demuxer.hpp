@@ -10,9 +10,9 @@
 
 namespace semi::domain {
 
-using contracts::demuxer::BackendProbeResult;
 using contracts::demuxer::BackendEndOfStream;
 using contracts::demuxer::BackendPacket;
+using contracts::demuxer::BackendProbeResult;
 using contracts::demuxer::DemuxerBackend;
 using contracts::demuxer::DemuxerBackendError;
 using contracts::demuxer::DemuxerBackendOperation;
@@ -66,8 +66,8 @@ public:
     [[nodiscard]] virtual std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) = 0;
 
-    [[nodiscard]] virtual std::expected<void, DemuxerError>
-    seek(std::int64_t position_us, SeekMode mode) = 0;
+    [[nodiscard]] virtual std::expected<void, DemuxerError> seek(std::int64_t position_us,
+                                                                 SeekMode mode) = 0;
 
     virtual void close() noexcept = 0;
 

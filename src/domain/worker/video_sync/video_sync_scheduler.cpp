@@ -18,11 +18,10 @@ void absorb_input_result(const VideoSyncInputResult& input_result,
 
 } // namespace
 
-VideoSyncScheduleResult VideoFrameScheduler::step(
-    VideoSyncInput& input,
-    VideoSyncClock& clock,
-    Generation::Value current_generation,
-    bool playback_enabled) noexcept {
+VideoSyncScheduleResult VideoFrameScheduler::step(VideoSyncInput& input,
+                                                  VideoSyncClock& clock,
+                                                  Generation::Value current_generation,
+                                                  bool playback_enabled) noexcept {
     VideoSyncScheduleResult result;
     const auto clock_snapshot = clock.snapshot();
 
@@ -47,11 +46,7 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
     std::optional<std::int64_t> clock_pts = clock_snapshot.pts_us;
     std::optional<RenderedVideoFrame> candidate;
     if (pending_frame_) {
-        if (!frame_is_due(*pending_frame_,
-                          clock,
-                          clock_pts,
-                          playback_enabled,
-                          result)) {
+        if (!frame_is_due(*pending_frame_, clock, clock_pts, playback_enabled, result)) {
             return result;
         }
 
@@ -82,11 +77,7 @@ VideoSyncScheduleResult VideoFrameScheduler::step(
                 break;
             }
             auto frame = std::move(*input_result.frame);
-            if (!frame_is_due(frame,
-                              clock,
-                              clock_pts,
-                              playback_enabled,
-                              result)) {
+            if (!frame_is_due(frame, clock, clock_pts, playback_enabled, result)) {
                 pending_frame_ = std::move(frame);
                 break;
             }
@@ -201,8 +192,7 @@ void VideoFrameScheduler::schedule_wait(std::int64_t frame_pts,
 
     waiting_for_resume_ = false;
     waiting_for_audio_position_ = false;
-    next_presentation_deadline_ =
-        Clock::now() + std::chrono::microseconds(frame_pts - clock_pts);
+    next_presentation_deadline_ = Clock::now() + std::chrono::microseconds(frame_pts - clock_pts);
 }
 
 } // namespace semi::domain

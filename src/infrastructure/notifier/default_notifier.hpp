@@ -28,9 +28,8 @@ public:
     [[nodiscard]] bool clear_all() noexcept override;
 
 protected:
-    std::shared_ptr<Subscription> subscribe_erased(
-        std::type_index type,
-        std::function<void(const void*)> cb) override;
+    std::shared_ptr<Subscription> subscribe_erased(std::type_index type,
+                                                   std::function<void(const void*)> cb) override;
 
     bool send_erased(std::type_index type, const void* event) override;
     bool clear_erased(std::type_index type) noexcept override;

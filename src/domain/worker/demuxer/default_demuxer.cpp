@@ -53,19 +53,18 @@ DemuxerOpenResult select_default_streams(BackendProbeResult probe) {
                 using Config = std::decay_t<decltype(config)>;
                 if constexpr (std::same_as<Config, VideoCodecConfig>) {
                     if (!result.video) {
-                        result.video = SelectedStream<VideoCodecConfig>{stream.id, stream.timing,
-                                                                         config};
+                        result.video =
+                            SelectedStream<VideoCodecConfig>{stream.id, stream.timing, config};
                     }
                 } else if constexpr (std::same_as<Config, AudioCodecConfig>) {
                     if (!result.audio) {
-                        result.audio = SelectedStream<AudioCodecConfig>{stream.id, stream.timing,
-                                                                         config};
+                        result.audio =
+                            SelectedStream<AudioCodecConfig>{stream.id, stream.timing, config};
                     }
                 } else if constexpr (std::same_as<Config, SubtitleCodecConfig>) {
                     if (!result.subtitle) {
-                        result.subtitle = SelectedStream<SubtitleCodecConfig>{stream.id,
-                                                                               stream.timing,
-                                                                               config};
+                        result.subtitle =
+                            SelectedStream<SubtitleCodecConfig>{stream.id, stream.timing, config};
                     }
                 }
             },
@@ -86,20 +85,18 @@ DefaultDemuxer::DefaultDemuxer(std::shared_ptr<DemuxerBackend> backend,
       video_packet_sink_(std::move(video_packet_sink)),
       notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
-    audio_queue_not_full_subscription_ = notifier_->subscribe<AudioQueueNotFull>(
-        [this](const AudioQueueNotFull&) {
+    audio_queue_not_full_subscription_ =
+        notifier_->subscribe<AudioQueueNotFull>([this](const AudioQueueNotFull&) {
             audio_queue_not_full_hint_.store(true, std::memory_order_release);
             cv_.notify_one();
         });
-    video_queue_not_full_subscription_ = notifier_->subscribe<VideoQueueNotFull>(
-        [this](const VideoQueueNotFull&) {
+    video_queue_not_full_subscription_ =
+        notifier_->subscribe<VideoQueueNotFull>([this](const VideoQueueNotFull&) {
             video_queue_not_full_hint_.store(true, std::memory_order_release);
             cv_.notify_one();
         });
@@ -111,8 +108,7 @@ DefaultDemuxer::~DefaultDemuxer() {
     video_queue_not_full_subscription_.reset();
 }
 
-std::expected<DemuxerOpenResult, DemuxerError>
-DefaultDemuxer::open(std::string_view source) {
+std::expected<DemuxerOpenResult, DemuxerError> DefaultDemuxer::open(std::string_view source) {
     OpenCommand command;
     command.source = source;
     auto completion = command.completion.get_future();
@@ -124,8 +120,7 @@ DefaultDemuxer::open(std::string_view source) {
     return completion.get();
 }
 
-std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us,
-                                                       SeekMode mode) {
+std::expected<void, DemuxerError> DefaultDemuxer::seek(std::int64_t position_us, SeekMode mode) {
     SeekCommand command;
     command.position_us = position_us;
     command.mode = mode;
@@ -250,9 +245,8 @@ void DefaultDemuxer::process_command(OpenCommand& command) noexcept {
     {
         std::lock_guard lock(mutex_);
         audio_stream_id_ = result.audio ? std::optional{result.audio->id} : std::nullopt;
-        video_stream_id_ = result.video && video_packet_sink_
-                               ? std::optional{result.video->id}
-                               : std::nullopt;
+        video_stream_id_ =
+            result.video && video_packet_sink_ ? std::optional{result.video->id} : std::nullopt;
         pending_output_.reset();
         session_generation_ = session_generation;
         pending_output_generation_ = session_generation;
@@ -270,8 +264,7 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
     std::shared_ptr<DemuxerBackend> backend;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Running &&
-            session_state_ != SessionState::Exhausted) {
+        if (session_state_ != SessionState::Running && session_state_ != SessionState::Exhausted) {
             command.completion.set_value(std::unexpected(invalid_command_state()));
             return;
         }
@@ -285,9 +278,9 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
         command.completion.set_value(std::unexpected(DemuxerError{
             .code = DemuxerErrorCode::InvalidState,
             .message = command.position_us < 0
-                ? "seek position must not be negative"
-                : (!valid_mode ? "seek mode is invalid"
-                               : "demuxer dependencies are unavailable"),
+                           ? "seek position must not be negative"
+                           : (!valid_mode ? "seek mode is invalid"
+                                          : "demuxer dependencies are unavailable"),
             .backend_error = std::nullopt,
         }));
         return;
@@ -295,7 +288,8 @@ void DefaultDemuxer::process_command(SeekCommand& command) noexcept {
 
     auto seek_result = backend->seek(command.position_us, command.mode);
     if (!seek_result) {
-        command.completion.set_value(std::unexpected(backend_failure(std::move(seek_result.error()))));
+        command.completion.set_value(
+            std::unexpected(backend_failure(std::move(seek_result.error()))));
         return;
     }
 
@@ -350,8 +344,7 @@ void DefaultDemuxer::process_command(CloseCommand& command) noexcept {
 }
 
 bool DefaultDemuxer::should_process_data_locked() const noexcept {
-    if (session_state_ != SessionState::Running ||
-        (!audio_stream_id_ && !video_stream_id_)) {
+    if (session_state_ != SessionState::Running || (!audio_stream_id_ && !video_stream_id_)) {
         return false;
     }
 
@@ -373,8 +366,7 @@ bool DefaultDemuxer::pending_output_can_be_pushed_locked() const noexcept {
 }
 
 DefaultDemuxer::PendingOutputPushResult
-DefaultDemuxer::take_pending_output_for_push(
-    std::optional<PendingOutput>& output) noexcept {
+DefaultDemuxer::take_pending_output_for_push(std::optional<PendingOutput>& output) noexcept {
     std::lock_guard lock(mutex_);
     if (session_state_ != SessionState::Running) {
         return PendingOutputPushResult::Handled;
@@ -407,23 +399,19 @@ bool DefaultDemuxer::push_pending_output(PendingOutput& output) noexcept {
         Overloaded{
             [this](AudioPacketQueueItem& item) {
                 assert(audio_packet_sink_);
-                return audio_packet_sink_->try_push(std::move(item)) ==
-                       AudioPacketPushResult::Full;
+                return audio_packet_sink_->try_push(std::move(item)) == AudioPacketPushResult::Full;
             },
             [this](VideoPacketQueueItem& item) {
                 assert(video_packet_sink_);
-                return video_packet_sink_->try_push(std::move(item)) ==
-                       VideoPacketPushResult::Full;
+                return video_packet_sink_->try_push(std::move(item)) == VideoPacketPushResult::Full;
             },
         },
         output);
 }
 
-void DefaultDemuxer::complete_pending_output_push(PendingOutput& output,
-                                                  bool was_full) noexcept {
+void DefaultDemuxer::complete_pending_output_push(PendingOutput& output, bool was_full) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Running) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Running) {
         return;
     }
 
@@ -432,26 +420,24 @@ void DefaultDemuxer::complete_pending_output_push(PendingOutput& output,
         return;
     }
 
-    std::visit(
-        Overloaded{
-            [this](AudioPacketQueueItem& item) {
-                if (std::holds_alternative<AudioPacketEndOfInput>(item)) {
-                    audio_end_of_input_accepted_ = true;
-                }
-            },
-            [this](VideoPacketQueueItem& item) {
-                if (std::holds_alternative<VideoPacketEndOfInput>(item)) {
-                    video_end_of_input_accepted_ = true;
-                }
-            },
-        },
-        output);
+    std::visit(Overloaded{
+                   [this](AudioPacketQueueItem& item) {
+                       if (std::holds_alternative<AudioPacketEndOfInput>(item)) {
+                           audio_end_of_input_accepted_ = true;
+                       }
+                   },
+                   [this](VideoPacketQueueItem& item) {
+                       if (std::holds_alternative<VideoPacketEndOfInput>(item)) {
+                           video_end_of_input_accepted_ = true;
+                       }
+                   },
+               },
+               output);
     prepare_next_end_of_input_locked();
     maybe_transition_to_exhausted_locked();
 }
 
-DefaultDemuxer::PendingOutputPushResult
-DefaultDemuxer::try_push_pending_output() noexcept {
+DefaultDemuxer::PendingOutputPushResult DefaultDemuxer::try_push_pending_output() noexcept {
     std::optional<PendingOutput> output;
     const auto take_result = take_pending_output_for_push(output);
     if (take_result == PendingOutputPushResult::NoPending || !output) {
@@ -470,8 +456,7 @@ void DefaultDemuxer::read_next_output_to_pending() noexcept {
     Generation::Value session_generation = 0;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Running || end_of_input_observed_ ||
-            pending_output_ ||
+        if (session_state_ != SessionState::Running || end_of_input_observed_ || pending_output_ ||
             (!audio_stream_id_ && !video_stream_id_)) {
             return;
         }
@@ -522,8 +507,7 @@ void DefaultDemuxer::handle_backend_read_result(
 
 void DefaultDemuxer::store_pending_output(PendingOutput output) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Running) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Running) {
         return;
     }
     assert(!pending_output_);
@@ -538,8 +522,7 @@ void DefaultDemuxer::store_pending_output(PendingOutput output) noexcept {
 
 void DefaultDemuxer::store_pending_end_of_input(Generation::Value generation) noexcept {
     std::lock_guard lock(mutex_);
-    if (worker_state_ == WorkerState::ShuttingDown ||
-        session_state_ != SessionState::Running) {
+    if (worker_state_ == WorkerState::ShuttingDown || session_state_ != SessionState::Running) {
         return;
     }
 
@@ -590,8 +573,7 @@ void DefaultDemuxer::handle_read_error(DemuxerBackendError error) noexcept {
     bool should_notify = false;
     {
         std::lock_guard lock(mutex_);
-        if (worker_state_ != WorkerState::ShuttingDown &&
-            session_state_ == SessionState::Running) {
+        if (worker_state_ != WorkerState::ShuttingDown && session_state_ == SessionState::Running) {
             pending_output_.reset();
             require_state_transition(transition_session_locked(SessionEvent::BackendFailed));
             should_notify = true;
@@ -625,8 +607,7 @@ bool DefaultDemuxer::transition_worker_locked(WorkerEvent event) noexcept {
         }
         return false;
     case WorkerEvent::ShutdownRequested:
-        if (worker_state_ == WorkerState::Starting ||
-            worker_state_ == WorkerState::Alive) {
+        if (worker_state_ == WorkerState::Starting || worker_state_ == WorkerState::Alive) {
             worker_state_ = WorkerState::ShuttingDown;
             return true;
         }
@@ -662,18 +643,15 @@ bool DefaultDemuxer::transition_session_locked(SessionEvent event) noexcept {
         }
         return false;
     case SessionEvent::SeekSucceeded:
-        if (session_state_ == SessionState::Running ||
-            session_state_ == SessionState::Exhausted) {
+        if (session_state_ == SessionState::Running || session_state_ == SessionState::Exhausted) {
             session_state_ = SessionState::Running;
             return true;
         }
         return false;
     case SessionEvent::SeekFailed:
-        return session_state_ == SessionState::Running ||
-               session_state_ == SessionState::Exhausted;
+        return session_state_ == SessionState::Running || session_state_ == SessionState::Exhausted;
     case SessionEvent::CloseRequested:
-        if (session_state_ != SessionState::Closed &&
-            session_state_ != SessionState::Closing) {
+        if (session_state_ != SessionState::Closed && session_state_ != SessionState::Closing) {
             session_state_ = SessionState::Closing;
             return true;
         }

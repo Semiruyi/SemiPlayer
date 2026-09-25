@@ -11,8 +11,7 @@ namespace semi::domain {
 // the PCM representation; generation is the domain-side invalidation marker.
 class AudioFrame final {
 public:
-    AudioFrame(contracts::media::DecodedAudio decoded_audio,
-               Generation::Value generation) noexcept
+    AudioFrame(contracts::media::DecodedAudio decoded_audio, Generation::Value generation) noexcept
         : decoded_audio_(std::move(decoded_audio)), generation_(generation) {}
 
     ~AudioFrame() = default;
@@ -35,8 +34,8 @@ private:
     Generation::Value generation_;
 };
 
-[[nodiscard]] inline bool is_current_audio_frame(
-    const AudioFrame& frame, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool is_current_audio_frame(const AudioFrame& frame,
+                                                 Generation::Value current_generation) noexcept {
     return frame.generation() == current_generation;
 }
 

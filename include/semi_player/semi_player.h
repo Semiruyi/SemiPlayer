@@ -12,13 +12,13 @@
 #include <stdint.h>
 
 #if defined(WIN32) || defined(_WIN32)
-  #ifdef SEMI_PLAYER_DLL_EXPORT
-    #define SEMI_API __declspec(dllexport)
-  #else
-    #define SEMI_API __declspec(dllimport)
-  #endif
+#ifdef SEMI_PLAYER_DLL_EXPORT
+#define SEMI_API __declspec(dllexport)
 #else
-  #define SEMI_API __attribute__((visibility("default")))
+#define SEMI_API __declspec(dllimport)
+#endif
+#else
+#define SEMI_API __attribute__((visibility("default")))
 #endif
 
 /* Opaque handle to an in-flight command. 0 == invalid/no handle. */
@@ -59,9 +59,7 @@ typedef struct semi_video_frame {
 } semi_video_frame_t;
 
 /* frame and all plane data are read-only and valid only during the callback. */
-typedef void (*semi_video_frame_callback)(
-    void *user_data,
-    const semi_video_frame_t *frame);
+typedef void (*semi_video_frame_callback)(void *user_data, const semi_video_frame_t *frame);
 
 typedef struct semi_video_output_config {
     uint32_t struct_size;
@@ -113,8 +111,7 @@ SEMI_API semi_handle_t semi_player_seek(long long position_us, semi_seek_mode_t 
 SEMI_API semi_handle_t semi_player_close(void);
 /* Copies config into the normal command queue. Returns 0 when no task can be
  * created; otherwise await the handle for SEMI_OK or SEMI_ERR_*. */
-SEMI_API semi_handle_t semi_player_configure_video_output(
-    const semi_video_output_config_t *config);
+SEMI_API semi_handle_t semi_player_configure_video_output(const semi_video_output_config_t *config);
 
 /* ---- Events ---- */
 /* Non-blocking. Returns SEMI_OK when out_event is written; no pending event is

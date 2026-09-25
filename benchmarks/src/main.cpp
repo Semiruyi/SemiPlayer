@@ -78,12 +78,10 @@ public:
         static_cast<FrameObserver*>(user_data)->on_frame(*frame);
     }
 
-    bool wait_for_count(std::uint64_t minimum_count,
-                        std::chrono::milliseconds timeout) {
+    bool wait_for_count(std::uint64_t minimum_count, std::chrono::milliseconds timeout) {
         std::unique_lock lock(mutex_);
-        return condition_.wait_for(lock, timeout, [&] {
-            return snapshot_locked().count >= minimum_count;
-        });
+        return condition_.wait_for(lock, timeout,
+                                   [&] { return snapshot_locked().count >= minimum_count; });
     }
 
     bool wait_for_new_generation(std::uint64_t previous_count,
@@ -141,11 +139,10 @@ bool await_command(std::string_view name,
     }
 
     semi_command_result_t local_result{};
-    const int status = semi_player_handle_await(
-        handle, result != nullptr ? result : &local_result);
+    const int status = semi_player_handle_await(handle, result != nullptr ? result : &local_result);
     if (status != SEMI_OK) {
-        std::cerr << "[benchmark] " << name << " failed: " << status_name(status)
-                  << " (" << status << ")\n";
+        std::cerr << "[benchmark] " << name << " failed: " << status_name(status) << " (" << status
+                  << ")\n";
         return false;
     }
     return true;
@@ -174,16 +171,14 @@ public:
         config.pixel_format = SEMI_VIDEO_PIXEL_FORMAT_RGBA8888;
         config.on_frame = &FrameObserver::callback;
         config.user_data = &frames_;
-        if (!await_command("configure_video_output",
-                           semi_player_configure_video_output(&config))) {
+        if (!await_command("configure_video_output", semi_player_configure_video_output(&config))) {
             return false;
         }
         return true;
     }
 
     bool open(const std::string& media_path, semi_media_info_t& media_info) {
-        if (!await_command("open", semi_player_open(media_path.c_str()),
-                           &open_result_)) {
+        if (!await_command("open", semi_player_open(media_path.c_str()), &open_result_)) {
             return false;
         }
         media_info = open_result_.media_info;
@@ -191,14 +186,17 @@ public:
         return true;
     }
 
-    bool play() { return await_command("play", semi_player_play()); }
+    bool play() {
+        return await_command("play", semi_player_play());
+    }
 
-    bool pause() { return await_command("pause", semi_player_pause()); }
+    bool pause() {
+        return await_command("pause", semi_player_pause());
+    }
 
     bool seek(std::int64_t position_us) {
-        return await_command(
-            "seek",
-            semi_player_seek(position_us, SEMI_SEEK_MODE_PREVIOUS_KEYFRAME));
+        return await_command("seek",
+                             semi_player_seek(position_us, SEMI_SEEK_MODE_PREVIOUS_KEYFRAME));
     }
 
     bool close() {
@@ -220,7 +218,9 @@ public:
         }
     }
 
-    FrameObserver& frames() noexcept { return frames_; }
+    FrameObserver& frames() noexcept {
+        return frames_;
+    }
 
 private:
     FrameObserver frames_;
@@ -253,11 +253,9 @@ public:
     void sample() noexcept {
         const auto now = Clock::now();
         const auto cpu = process_cpu_time();
-        const double wall_seconds =
-            std::chrono::duration<double>(now - last_wall_).count();
+        const double wall_seconds = std::chrono::duration<double>(now - last_wall_).count();
         if (last_cpu_ != 0U && cpu >= last_cpu_ && wall_seconds > 0.0) {
-            const double cpu_seconds =
-                static_cast<double>(cpu - last_cpu_) / 10'000'000.0;
+            const double cpu_seconds = static_cast<double>(cpu - last_cpu_) / 10'000'000.0;
             cpu_samples_.push_back(cpu_seconds / wall_seconds * 100.0);
         }
         last_wall_ = now;
@@ -278,8 +276,7 @@ public:
             const auto index = static_cast<std::size_t>(
                 std::ceil(0.95 * static_cast<double>(cpu_samples_.size())));
             result.cpu_p95_percent =
-                cpu_samples_[std::min(index == 0U ? 0U : index - 1U,
-                                      cpu_samples_.size() - 1U)];
+                cpu_samples_[std::min(index == 0U ? 0U : index - 1U, cpu_samples_.size() - 1U)];
         }
         result.peak_working_set_bytes = peak_working_set_bytes_;
         return result;
@@ -288,8 +285,7 @@ public:
 private:
     static std::uint64_t process_cpu_time() noexcept {
         FILETIME creation{}, exit{}, kernel{}, user{};
-        if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel,
-                             &user)) {
+        if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user)) {
             return 0U;
         }
         return filetime_value(kernel) + filetime_value(user);
@@ -298,11 +294,9 @@ private:
     void sample_memory() noexcept {
         PROCESS_MEMORY_COUNTERS counters{};
         counters.cb = sizeof(counters);
-        if (GetProcessMemoryInfo(GetCurrentProcess(), &counters,
-                                 sizeof(counters)) != FALSE) {
+        if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != FALSE) {
             peak_working_set_bytes_ =
-                std::max<std::uint64_t>(peak_working_set_bytes_,
-                                        counters.WorkingSetSize);
+                std::max<std::uint64_t>(peak_working_set_bytes_, counters.WorkingSetSize);
         }
     }
 
@@ -373,8 +367,7 @@ public:
         }
         output_.open(output_path, std::ios::out | std::ios::trunc);
         if (!output_) {
-            throw std::runtime_error("cannot open benchmark output: " +
-                                     output_path.string());
+            throw std::runtime_error("cannot open benchmark output: " + output_path.string());
         }
         output_ << "scenario,run,seek_fraction,open_to_first_frame_ms,"
                    "seek_to_first_frame_ms,target_pts_us,first_frame_pts_us,"
@@ -385,18 +378,14 @@ public:
 
     void write(const BenchmarkRow& row) {
         output_ << csv_escape(row.scenario) << ',' << row.run << ','
-                 << csv_number(row.seek_fraction) << ','
-                 << csv_number(row.open_to_first_frame_ms) << ','
-                 << csv_number(row.seek_to_first_frame_ms) << ','
-                 << csv_number(row.target_pts_us) << ','
-                 << csv_number(row.first_frame_pts_us) << ','
-                 << csv_signed_microseconds(row.seek_error_us) << ','
-                 << (row.paused_after_seek ? "1" : "0") << ','
-                 << csv_number(row.frames) << ',' << csv_number(row.elapsed_ms)
-                 << ',' << csv_number(row.cpu_average_percent) << ','
-                 << csv_number(row.cpu_p95_percent) << ','
-                 << csv_number(row.peak_working_set_bytes) << ',' << row.status
-                 << '\n';
+                << csv_number(row.seek_fraction) << ',' << csv_number(row.open_to_first_frame_ms)
+                << ',' << csv_number(row.seek_to_first_frame_ms) << ','
+                << csv_number(row.target_pts_us) << ',' << csv_number(row.first_frame_pts_us) << ','
+                << csv_signed_microseconds(row.seek_error_us) << ','
+                << (row.paused_after_seek ? "1" : "0") << ',' << csv_number(row.frames) << ','
+                << csv_number(row.elapsed_ms) << ',' << csv_number(row.cpu_average_percent) << ','
+                << csv_number(row.cpu_p95_percent) << ',' << csv_number(row.peak_working_set_bytes)
+                << ',' << row.status << '\n';
         output_.flush();
     }
 
@@ -433,16 +422,14 @@ int parse_nonnegative_int(std::string_view option, std::string_view value) {
         }
         return parsed;
     } catch (const std::exception&) {
-        throw std::invalid_argument(std::string(option) +
-                                    " requires a positive integer");
+        throw std::invalid_argument(std::string(option) + " requires a positive integer");
     }
 }
 
 int parse_positive_int(std::string_view option, std::string_view value) {
     const int parsed = parse_nonnegative_int(option, value);
     if (parsed == 0) {
-        throw std::invalid_argument(std::string(option) +
-                                    " requires a positive integer");
+        throw std::invalid_argument(std::string(option) + " requires a positive integer");
     }
     return parsed;
 }
@@ -453,8 +440,7 @@ Options parse_options(int argc, char** argv) {
         const std::string_view argument = argv[index];
         auto require_value = [&](std::string_view option) -> std::string_view {
             if (index + 1 >= argc) {
-                throw std::invalid_argument(std::string(option) +
-                                            " requires a value");
+                throw std::invalid_argument(std::string(option) + " requires a value");
             }
             return argv[++index];
         };
@@ -476,11 +462,9 @@ Options parse_options(int argc, char** argv) {
         } else if (argument == "--runs") {
             options.runs = parse_positive_int(argument, require_value(argument));
         } else if (argument == "--warmups") {
-            options.warmups =
-                parse_nonnegative_int(argument, require_value(argument));
+            options.warmups = parse_nonnegative_int(argument, require_value(argument));
         } else if (argument == "--steady-seconds") {
-            options.steady_seconds =
-                parse_positive_int(argument, require_value(argument));
+            options.steady_seconds = parse_positive_int(argument, require_value(argument));
         } else {
             throw std::invalid_argument("unknown option: " + std::string(argument));
         }
@@ -490,8 +474,7 @@ Options parse_options(int argc, char** argv) {
         throw std::invalid_argument("--media is required");
     }
     if (!std::filesystem::is_regular_file(options.media_path)) {
-        throw std::invalid_argument("media file does not exist: " +
-                                    options.media_path.string());
+        throw std::invalid_argument("media file does not exist: " + options.media_path.string());
     }
     return options;
 }
@@ -499,8 +482,7 @@ Options parse_options(int argc, char** argv) {
 bool prepare_session(PlayerSession& session,
                      const std::filesystem::path& media_path,
                      semi_media_info_t& media_info) {
-    return session.initialize() &&
-           session.open(media_path.string(), media_info);
+    return session.initialize() && session.open(media_path.string(), media_info);
 }
 
 std::optional<BenchmarkRow> run_startup(const Options& options, int run) {
@@ -511,8 +493,7 @@ std::optional<BenchmarkRow> run_startup(const Options& options, int run) {
     }
 
     const auto open_start = Clock::now();
-    if (!session.open(options.media_path.string(), media_info) ||
-        !session.play() ||
+    if (!session.open(options.media_path.string(), media_info) || !session.play() ||
         !session.frames().wait_for_count(1, kFrameWaitTimeout)) {
         return std::nullopt;
     }
@@ -526,30 +507,25 @@ std::optional<BenchmarkRow> run_startup(const Options& options, int run) {
     return row;
 }
 
-std::optional<BenchmarkRow> run_paused_seek(const Options& options,
-                                            int run,
-                                            double seek_fraction) {
+std::optional<BenchmarkRow> run_paused_seek(const Options& options, int run, double seek_fraction) {
     PlayerSession session;
     semi_media_info_t media_info{};
-    if (!prepare_session(session, options.media_path, media_info) ||
-        !session.play() ||
-        !session.frames().wait_for_count(1, kFrameWaitTimeout) ||
-        !session.pause()) {
+    if (!prepare_session(session, options.media_path, media_info) || !session.play() ||
+        !session.frames().wait_for_count(1, kFrameWaitTimeout) || !session.pause()) {
         return std::nullopt;
     }
 
     const FrameSnapshot before_seek = session.frames().snapshot();
-    const auto target_pts_us = static_cast<std::int64_t>(
-        static_cast<double>(media_info.duration_us) * seek_fraction);
+    const auto target_pts_us =
+        static_cast<std::int64_t>(static_cast<double>(media_info.duration_us) * seek_fraction);
     const auto seek_start = Clock::now();
     if (!session.seek(target_pts_us)) {
         return std::nullopt;
     }
 
     FrameSnapshot after_seek;
-    if (!session.frames().wait_for_new_generation(
-            before_seek.count, before_seek.generation, kFrameWaitTimeout,
-            after_seek)) {
+    if (!session.frames().wait_for_new_generation(before_seek.count, before_seek.generation,
+                                                  kFrameWaitTimeout, after_seek)) {
         std::cerr << "[benchmark] paused seek did not produce a new generation\n";
         return std::nullopt;
     }
@@ -566,7 +542,7 @@ std::optional<BenchmarkRow> run_paused_seek(const Options& options,
     row.target_pts_us = target_pts_us;
     row.first_frame_pts_us = after_seek.has_pts ? after_seek.pts_us : -1;
     if (after_seek.has_pts) {
-    row.seek_error_us = after_seek.pts_us - target_pts_us;
+        row.seek_error_us = after_seek.pts_us - target_pts_us;
     }
     row.paused_after_seek = settled.count == count_after_seek;
     row.frames = settled.count - before_seek.count;
@@ -577,24 +553,20 @@ std::optional<BenchmarkRow> run_paused_seek(const Options& options,
 std::optional<BenchmarkRow> run_steady_playback(const Options& options, int run) {
     PlayerSession session;
     semi_media_info_t media_info{};
-    if (!prepare_session(session, options.media_path, media_info) ||
-        !session.play() ||
+    if (!prepare_session(session, options.media_path, media_info) || !session.play() ||
         !session.frames().wait_for_count(1, kFrameWaitTimeout)) {
         return std::nullopt;
     }
 
-    const double media_seconds =
-        static_cast<double>(media_info.duration_us) / 1'000'000.0;
+    const double media_seconds = static_cast<double>(media_info.duration_us) / 1'000'000.0;
     const double requested_seconds = static_cast<double>(options.steady_seconds);
-    const double run_seconds =
-        std::max(0.25, std::min(requested_seconds, media_seconds - 0.25));
+    const double run_seconds = std::max(0.25, std::min(requested_seconds, media_seconds - 0.25));
 
     const auto initial_frame_count = session.frames().snapshot().count;
     ProcessSampler sampler;
     sampler.start();
     const auto playback_start = Clock::now();
-    while (std::chrono::duration<double>(Clock::now() - playback_start).count() <
-           run_seconds) {
+    while (std::chrono::duration<double>(Clock::now() - playback_start).count() < run_seconds) {
         std::this_thread::sleep_for(kProcessSamplePeriod);
         sampler.sample();
     }
@@ -613,9 +585,7 @@ std::optional<BenchmarkRow> run_steady_playback(const Options& options, int run)
 }
 
 template <typename Function>
-bool run_repeated(const Options& options,
-                  CsvWriter& writer,
-                  Function&& function) {
+bool run_repeated(const Options& options, CsvWriter& writer, Function&& function) {
     const int total_runs = options.warmups + options.runs;
     for (int index = 1; index <= total_runs; ++index) {
         const bool is_warmup = index <= options.warmups;
@@ -626,8 +596,8 @@ bool run_repeated(const Options& options,
         }
         if (!is_warmup) {
             writer.write(*row);
-            std::cout << "[benchmark] " << row->scenario << " run "
-                      << measured_run << " completed\n";
+            std::cout << "[benchmark] " << row->scenario << " run " << measured_run
+                      << " completed\n";
         }
     }
     return true;
@@ -635,9 +605,7 @@ bool run_repeated(const Options& options,
 
 bool run_all(const Options& options, CsvWriter& writer) {
     if (options.scenario == "all" || options.scenario == "startup") {
-        if (!run_repeated(options, writer, [&](int run) {
-                return run_startup(options, run);
-            })) {
+        if (!run_repeated(options, writer, [&](int run) { return run_startup(options, run); })) {
             return false;
         }
     }
@@ -645,18 +613,16 @@ bool run_all(const Options& options, CsvWriter& writer) {
     if (options.scenario == "all" || options.scenario == "paused-seek") {
         constexpr std::array<double, 3> kSeekFractions{0.25, 0.50, 0.75};
         for (const double fraction : kSeekFractions) {
-            if (!run_repeated(options, writer, [&](int run) {
-                    return run_paused_seek(options, run, fraction);
-                })) {
+            if (!run_repeated(options, writer,
+                              [&](int run) { return run_paused_seek(options, run, fraction); })) {
                 return false;
             }
         }
     }
 
     if (options.scenario == "all" || options.scenario == "steady") {
-        if (!run_repeated(options, writer, [&](int run) {
-                return run_steady_playback(options, run);
-            })) {
+        if (!run_repeated(options, writer,
+                          [&](int run) { return run_steady_playback(options, run); })) {
             return false;
         }
     }
@@ -673,8 +639,7 @@ int main(int argc, char** argv) {
             std::cerr << "[benchmark] benchmark failed\n";
             return 1;
         }
-        std::cout << "[benchmark] results: " << options.output_path.string()
-                  << '\n';
+        std::cout << "[benchmark] results: " << options.output_path.string() << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "[benchmark] error: " << error.what() << '\n';

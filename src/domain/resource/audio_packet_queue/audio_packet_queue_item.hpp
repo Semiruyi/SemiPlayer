@@ -24,8 +24,9 @@ audio_packet_queue_item_generation(const AudioPacketQueueItem& item) noexcept {
 }
 
 // Generation-only invalidation applies equally to packets and end markers.
-[[nodiscard]] inline bool is_current_audio_packet_queue_item(
-    const AudioPacketQueueItem& item, Generation::Value current_generation) noexcept {
+[[nodiscard]] inline bool
+is_current_audio_packet_queue_item(const AudioPacketQueueItem& item,
+                                   Generation::Value current_generation) noexcept {
     return audio_packet_queue_item_generation(item) == current_generation;
 }
 

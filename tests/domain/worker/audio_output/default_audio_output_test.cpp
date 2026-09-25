@@ -174,7 +174,9 @@ public:
         }
         return {};
     }
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     void push_submit_result(AudioOutputSubmitStatus status) {
         std::lock_guard lock(mutex_);
@@ -263,9 +265,13 @@ public:
         throw std::runtime_error("boom");
     }
 
-    std::expected<void, AudioOutputBackendError> pause() override { return {}; }
+    std::expected<void, AudioOutputBackendError> pause() override {
+        return {};
+    }
 
-    std::expected<void, AudioOutputBackendError> resume() override { return {}; }
+    std::expected<void, AudioOutputBackendError> resume() override {
+        return {};
+    }
 
     std::expected<AudioOutputSubmitStatus, AudioOutputBackendError>
     try_submit(const contracts::media::DecodedAudio&) override {
@@ -276,8 +282,12 @@ public:
         return AudioOutputDrainStatus::Drained;
     }
 
-    std::expected<void, AudioOutputBackendError> reset() override { return {}; }
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    std::expected<void, AudioOutputBackendError> reset() override {
+        return {};
+    }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     std::atomic_int unconfigure_calls = 0;
 };
@@ -305,11 +315,8 @@ OutputDependencies complete_dependencies() {
 
 std::unique_ptr<DefaultAudioOutput> make_output(const OutputDependencies& dependencies) {
     return std::make_unique<DefaultAudioOutput>(
-        dependencies.source,
-        dependencies.backend,
-        dependencies.notifier,
-        dependencies.realtime_notifier,
-        dependencies.generation);
+        dependencies.source, dependencies.backend, dependencies.notifier,
+        dependencies.realtime_notifier, dependencies.generation);
 }
 
 template <typename Predicate>
@@ -468,18 +475,16 @@ TEST(DefaultAudioOutputTest, PausePlaybackStopsConsumingUntilRestarted) {
     EXPECT_EQ(backend->submitted_marker_at(0), std::byte{0x07});
 }
 
-TEST(DefaultAudioOutputTest,
-     PausedGenerationChangeReannouncesClockAfterPlaybackResumes) {
+TEST(DefaultAudioOutputTest, PausedGenerationChangeReannouncesClockAfterPlaybackResumes) {
     auto dependencies = complete_dependencies();
     auto backend = std::static_pointer_cast<FakeAudioOutputBackend>(dependencies.backend);
     std::atomic_int position_ready_events = 0;
     std::atomic<Generation::Value> ready_generation = 0;
-    auto position_ready_subscription =
-        dependencies.notifier->subscribe<AudioPlaybackPositionReady>(
-            [&](const AudioPlaybackPositionReady& event) {
-                ready_generation.store(event.generation, std::memory_order_release);
-                position_ready_events.fetch_add(1, std::memory_order_release);
-            });
+    auto position_ready_subscription = dependencies.notifier->subscribe<AudioPlaybackPositionReady>(
+        [&](const AudioPlaybackPositionReady& event) {
+            ready_generation.store(event.generation, std::memory_order_release);
+            position_ready_events.fetch_add(1, std::memory_order_release);
+        });
     auto output = make_output(dependencies);
 
     ASSERT_TRUE(output->configure({}).has_value());
@@ -492,13 +497,11 @@ TEST(DefaultAudioOutputTest,
     ASSERT_TRUE(dependencies.notifier->send(AudioFrameStoreNotEmpty{}));
 
     ASSERT_TRUE(eventually([&] { return backend->reset_calls.load() == 1; }));
-    ASSERT_TRUE(eventually([&] {
-        return position_ready_events.load(std::memory_order_acquire) == 1;
-    }));
+    ASSERT_TRUE(
+        eventually([&] { return position_ready_events.load(std::memory_order_acquire) == 1; }));
     std::this_thread::sleep_for(std::chrono::milliseconds(30));
     EXPECT_EQ(backend->submit_calls, 0);
-    EXPECT_EQ(ready_generation.load(std::memory_order_acquire),
-              dependencies.generation->current());
+    EXPECT_EQ(ready_generation.load(std::memory_order_acquire), dependencies.generation->current());
     const auto paused_position = output->current_position();
     ASSERT_TRUE(paused_position);
     EXPECT_EQ(paused_position->generation, dependencies.generation->current());
@@ -510,9 +513,8 @@ TEST(DefaultAudioOutputTest,
 
     EXPECT_FALSE(output->current_position());
     backend->notify_progress();
-    ASSERT_TRUE(eventually([&] {
-        return position_ready_events.load(std::memory_order_acquire) == 2;
-    }));
+    ASSERT_TRUE(
+        eventually([&] { return position_ready_events.load(std::memory_order_acquire) == 2; }));
     const auto resumed_position = output->current_position();
     ASSERT_TRUE(resumed_position);
     EXPECT_EQ(resumed_position->generation, dependencies.generation->current());

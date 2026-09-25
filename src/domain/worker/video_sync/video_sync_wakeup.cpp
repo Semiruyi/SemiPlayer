@@ -9,16 +9,13 @@
 
 namespace semi::domain {
 
-VideoSyncWakeupController::VideoSyncWakeupController(
-    VideoSyncWakeupOptions options) noexcept {
+VideoSyncWakeupController::VideoSyncWakeupController(VideoSyncWakeupOptions options) noexcept {
     configure(options);
 }
 
-void VideoSyncWakeupController::configure(
-    VideoSyncWakeupOptions options) noexcept {
+void VideoSyncWakeupController::configure(VideoSyncWakeupOptions options) noexcept {
     spin_window_ = std::max(options.spin_window, std::chrono::microseconds::zero());
-    max_compensation_ =
-        std::max(options.max_compensation, std::chrono::microseconds::zero());
+    max_compensation_ = std::max(options.max_compensation, std::chrono::microseconds::zero());
     adaptive_ = options.adaptive;
     reset();
 }
@@ -39,14 +36,11 @@ void VideoSyncWakeupController::clear_active_plan() noexcept {
 }
 
 VideoSyncWakeupController::Clock::time_point
-VideoSyncWakeupController::wake_deadline(
-    Clock::time_point presentation_deadline) noexcept {
-    if (!active_presentation_deadline_ ||
-        *active_presentation_deadline_ != presentation_deadline) {
+VideoSyncWakeupController::wake_deadline(Clock::time_point presentation_deadline) noexcept {
+    if (!active_presentation_deadline_ || *active_presentation_deadline_ != presentation_deadline) {
         active_presentation_deadline_ = presentation_deadline;
-        const auto compensation = adaptive_
-                                       ? std::chrono::microseconds(compensation_us_)
-                                       : std::chrono::microseconds::zero();
+        const auto compensation = adaptive_ ? std::chrono::microseconds(compensation_us_)
+                                            : std::chrono::microseconds::zero();
         active_wake_deadline_ = presentation_deadline - spin_window_ - compensation;
         timer_wakeup_pending_ = false;
     }
@@ -60,11 +54,9 @@ bool VideoSyncWakeupController::timer_wakeup_pending(
 }
 
 std::optional<VideoSyncWakeupObservation>
-VideoSyncWakeupController::observe_timer_wakeup(
-    Clock::time_point presentation_deadline,
-    Clock::time_point actual_wakeup) noexcept {
-    if (timer_wakeup_pending_ || !active_presentation_deadline_ ||
-        !active_wake_deadline_ ||
+VideoSyncWakeupController::observe_timer_wakeup(Clock::time_point presentation_deadline,
+                                                Clock::time_point actual_wakeup) noexcept {
+    if (timer_wakeup_pending_ || !active_presentation_deadline_ || !active_wake_deadline_ ||
         *active_presentation_deadline_ != presentation_deadline) {
         return std::nullopt;
     }
@@ -82,8 +74,8 @@ VideoSyncWakeupController::observe_timer_wakeup(
     };
 }
 
-std::optional<std::uint64_t> VideoSyncWakeupController::wait_for_target(
-    Clock::time_point presentation_deadline) noexcept {
+std::optional<std::uint64_t>
+VideoSyncWakeupController::wait_for_target(Clock::time_point presentation_deadline) noexcept {
     if (!active_presentation_deadline_ || !active_wake_deadline_ ||
         *active_presentation_deadline_ != presentation_deadline ||
         (!timer_wakeup_pending_ && Clock::now() < *active_wake_deadline_)) {
@@ -100,10 +92,9 @@ std::optional<std::uint64_t> VideoSyncWakeupController::wait_for_target(
     while (Clock::now() < presentation_deadline) {
         spin_pause();
     }
-    const auto busy_wait_duration = std::chrono::duration_cast<
-        std::chrono::microseconds>(Clock::now() - busy_wait_started_at);
-    return static_cast<std::uint64_t>(std::max<std::int64_t>(
-        0, busy_wait_duration.count()));
+    const auto busy_wait_duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - busy_wait_started_at);
+    return static_cast<std::uint64_t>(std::max<std::int64_t>(0, busy_wait_duration.count()));
 }
 
 std::int64_t VideoSyncWakeupController::compensation_us() const noexcept {
@@ -121,13 +112,12 @@ void VideoSyncWakeupController::record_error(std::int64_t error_us) noexcept {
     }
     error_sum_us_ += error_us;
 
-    const auto average_error_us =
-        error_sum_us_ / static_cast<std::int64_t>(error_count_);
+    const auto average_error_us = error_sum_us_ / static_cast<std::int64_t>(error_count_);
     compensation_us_ = clamp_compensation(average_error_us);
 }
 
-std::int64_t VideoSyncWakeupController::clamp_compensation(
-    std::int64_t compensation_us) const noexcept {
+std::int64_t
+VideoSyncWakeupController::clamp_compensation(std::int64_t compensation_us) const noexcept {
     const auto limit = max_compensation_.count();
     return std::clamp(compensation_us, -limit, limit);
 }

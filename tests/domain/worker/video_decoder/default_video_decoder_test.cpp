@@ -31,11 +31,11 @@
 namespace semi::domain {
 namespace {
 
+using contracts::demuxer::packet::EncodedPacket;
 using contracts::video_decoder::DecodedVideoBatch;
 using contracts::video_decoder::VideoDecoderBackend;
 using contracts::video_decoder::VideoDecoderBackendError;
 using contracts::video_decoder::VideoDecoderBackendOperation;
-using contracts::demuxer::packet::EncodedPacket;
 
 class TestVideoFrameBuffer final : public contracts::media::VideoFrameBuffer {
 public:
@@ -74,8 +74,8 @@ private:
     std::array<std::byte, 4> bytes_;
 };
 
-contracts::media::DecodedVideo make_decoded_video(
-    std::uint8_t marker, std::optional<std::int64_t> pts_us = 123);
+contracts::media::DecodedVideo make_decoded_video(std::uint8_t marker,
+                                                  std::optional<std::int64_t> pts_us = 123);
 
 class FakeVideoDecoderBackend final : public VideoDecoderBackend {
 public:
@@ -124,17 +124,20 @@ public:
         return output;
     }
 
-    void reset() noexcept override { ++reset_calls; }
+    void reset() noexcept override {
+        ++reset_calls;
+    }
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     void set_configure_error(VideoDecoderBackendError error) {
         std::lock_guard lock(mutex_);
         configure_error_ = std::move(error);
     }
 
-    void set_decode_output(std::uint8_t marker,
-                           std::optional<std::int64_t> pts_us = 123) {
+    void set_decode_output(std::uint8_t marker, std::optional<std::int64_t> pts_us = 123) {
         std::lock_guard lock(mutex_);
         decode_marker_ = marker;
         decode_pts_us_ = pts_us;
@@ -184,7 +187,9 @@ public:
 
     void reset() noexcept override {}
 
-    void unconfigure() noexcept override { ++unconfigure_calls; }
+    void unconfigure() noexcept override {
+        ++unconfigure_calls;
+    }
 
     std::atomic_int unconfigure_calls = 0;
 };
@@ -265,11 +270,10 @@ struct DecoderDependencies {
 };
 
 std::unique_ptr<DefaultVideoDecoder> make_decoder(DecoderDependencies dependencies) {
-    return std::make_unique<DefaultVideoDecoder>(std::move(dependencies.source),
-                                                 std::move(dependencies.sink),
-                                                 std::move(dependencies.backend),
-                                                 std::move(dependencies.notifier),
-                                                 std::move(dependencies.generation));
+    return std::make_unique<DefaultVideoDecoder>(
+        std::move(dependencies.source), std::move(dependencies.sink),
+        std::move(dependencies.backend), std::move(dependencies.notifier),
+        std::move(dependencies.generation));
 }
 
 DecoderDependencies complete_dependencies() {
@@ -299,8 +303,8 @@ VideoPacketQueueItem make_packet_item(std::uint8_t marker, Generation::Value gen
     };
 }
 
-contracts::media::DecodedVideo make_decoded_video(
-    std::uint8_t marker, std::optional<std::int64_t> pts_us) {
+contracts::media::DecodedVideo make_decoded_video(std::uint8_t marker,
+                                                  std::optional<std::int64_t> pts_us) {
     return contracts::media::DecodedVideo{
         .buffer = std::make_unique<TestVideoFrameBuffer>(marker),
         .pts_us = pts_us,
@@ -555,9 +559,7 @@ TEST(DefaultVideoDecoderTest, ReportsDecodeFailureAndRequiresUnconfigureForRecov
     auto notifier = dependencies.notifier;
     std::atomic_int failure_events = 0;
     auto failure_subscription = notifier->subscribe<VideoDecoderBackendFailure>(
-        [&failure_events](const VideoDecoderBackendFailure&) {
-            ++failure_events;
-        });
+        [&failure_events](const VideoDecoderBackendFailure&) { ++failure_events; });
     backend->set_decode_error(VideoDecoderBackendError{
         .operation = VideoDecoderBackendOperation::Decode,
         .native_code = -1,

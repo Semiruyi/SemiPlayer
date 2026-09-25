@@ -28,8 +28,7 @@ class VideoSyncWakeupController final {
 public:
     using Clock = std::chrono::steady_clock;
 
-    explicit VideoSyncWakeupController(
-        VideoSyncWakeupOptions options = {}) noexcept;
+    explicit VideoSyncWakeupController(VideoSyncWakeupOptions options = {}) noexcept;
 
     VideoSyncWakeupController(const VideoSyncWakeupController&) = delete;
     VideoSyncWakeupController& operator=(const VideoSyncWakeupController&) = delete;
@@ -40,11 +39,9 @@ public:
     void reset() noexcept;
     void clear_active_plan() noexcept;
 
-    [[nodiscard]] Clock::time_point
-    wake_deadline(Clock::time_point presentation_deadline) noexcept;
+    [[nodiscard]] Clock::time_point wake_deadline(Clock::time_point presentation_deadline) noexcept;
 
-    [[nodiscard]] bool timer_wakeup_pending(
-        Clock::time_point presentation_deadline) const noexcept;
+    [[nodiscard]] bool timer_wakeup_pending(Clock::time_point presentation_deadline) const noexcept;
 
     [[nodiscard]] std::optional<VideoSyncWakeupObservation>
     observe_timer_wakeup(Clock::time_point presentation_deadline,
@@ -63,8 +60,7 @@ private:
     static constexpr std::size_t kErrorWindowSize = 32;
 
     void record_error(std::int64_t error_us) noexcept;
-    [[nodiscard]] std::int64_t clamp_compensation(
-        std::int64_t compensation_us) const noexcept;
+    [[nodiscard]] std::int64_t clamp_compensation(std::int64_t compensation_us) const noexcept;
     static void spin_pause() noexcept;
 
     bool adaptive_ = true;

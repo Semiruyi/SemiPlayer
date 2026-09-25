@@ -6,8 +6,7 @@
 
 namespace semi::infra::ffmpeg::audio_resampler {
 
-class FfmpegAudioResamplerBackend final
-    : public contracts::audio_resampler::AudioResamplerBackend {
+class FfmpegAudioResamplerBackend final : public contracts::audio_resampler::AudioResamplerBackend {
 public:
     FfmpegAudioResamplerBackend();
     ~FfmpegAudioResamplerBackend() override;
@@ -17,11 +16,11 @@ public:
               const contracts::media::AudioPcmFormat& output_format) override;
 
     [[nodiscard]] std::expected<contracts::audio_resampler::ResampledAudioBatch,
-                                 contracts::audio_resampler::AudioResamplerBackendError>
+                                contracts::audio_resampler::AudioResamplerBackendError>
     resample(const contracts::media::DecodedAudio& input) override;
 
     [[nodiscard]] std::expected<contracts::audio_resampler::ResampledAudioBatch,
-                                 contracts::audio_resampler::AudioResamplerBackendError>
+                                contracts::audio_resampler::AudioResamplerBackendError>
     drain() override;
 
     void reset() noexcept override;

@@ -40,11 +40,10 @@ public:
     VideoFrameScheduler(VideoFrameScheduler&&) = delete;
     VideoFrameScheduler& operator=(VideoFrameScheduler&&) = delete;
 
-    [[nodiscard]] VideoSyncScheduleResult
-    step(VideoSyncInput& input,
-         VideoSyncClock& clock,
-         Generation::Value current_generation,
-         bool playback_enabled) noexcept;
+    [[nodiscard]] VideoSyncScheduleResult step(VideoSyncInput& input,
+                                               VideoSyncClock& clock,
+                                               Generation::Value current_generation,
+                                               bool playback_enabled) noexcept;
 
     void reset(bool paused_generation_pending = false) noexcept;
     void on_generation_changed(bool playback_enabled) noexcept;
@@ -58,8 +57,7 @@ public:
     [[nodiscard]] bool paused_generation_pending() const noexcept;
     [[nodiscard]] bool waiting_for_audio_position() const noexcept;
     [[nodiscard]] bool waiting_for_resume() const noexcept;
-    [[nodiscard]] std::optional<Clock::time_point>
-    next_presentation_deadline() const noexcept;
+    [[nodiscard]] std::optional<Clock::time_point> next_presentation_deadline() const noexcept;
 
 private:
     [[nodiscard]] bool frame_is_due(const RenderedVideoFrame& frame,
@@ -67,9 +65,8 @@ private:
                                     std::optional<std::int64_t>& clock_pts,
                                     bool playback_enabled,
                                     VideoSyncScheduleResult& result) noexcept;
-    void schedule_wait(std::int64_t frame_pts,
-                       std::int64_t clock_pts,
-                       bool playback_enabled) noexcept;
+    void
+    schedule_wait(std::int64_t frame_pts, std::int64_t clock_pts, bool playback_enabled) noexcept;
 
     std::optional<RenderedVideoFrame> pending_frame_;
     std::optional<Clock::time_point> next_presentation_deadline_;

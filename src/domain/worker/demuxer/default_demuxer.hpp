@@ -35,8 +35,8 @@ public:
     [[nodiscard]] std::expected<DemuxerOpenResult, DemuxerError>
     open(std::string_view source) override;
 
-    [[nodiscard]] std::expected<void, DemuxerError>
-    seek(std::int64_t position_us, SeekMode mode) override;
+    [[nodiscard]] std::expected<void, DemuxerError> seek(std::int64_t position_us,
+                                                         SeekMode mode) override;
 
     void close() noexcept override;
 
@@ -106,16 +106,17 @@ private:
     void process_command(CloseCommand& command) noexcept;
     [[nodiscard]] bool should_process_data_locked() const noexcept;
     [[nodiscard]] bool pending_output_can_be_pushed_locked() const noexcept;
-    [[nodiscard]] PendingOutputPushResult take_pending_output_for_push(
-        std::optional<PendingOutput>& output) noexcept;
+    [[nodiscard]] PendingOutputPushResult
+    take_pending_output_for_push(std::optional<PendingOutput>& output) noexcept;
     [[nodiscard]] bool push_pending_output(PendingOutput& output) noexcept;
     void complete_pending_output_push(PendingOutput& output, bool was_full) noexcept;
     [[nodiscard]] PendingOutputPushResult try_push_pending_output() noexcept;
     void read_next_output_to_pending() noexcept;
-    void handle_backend_read_result(contracts::demuxer::BackendReadResult& result,
-                                    std::optional<contracts::media::DemuxerStreamId> audio_stream_id,
-                                    std::optional<contracts::media::DemuxerStreamId> video_stream_id,
-                                    Generation::Value session_generation) noexcept;
+    void
+    handle_backend_read_result(contracts::demuxer::BackendReadResult& result,
+                               std::optional<contracts::media::DemuxerStreamId> audio_stream_id,
+                               std::optional<contracts::media::DemuxerStreamId> video_stream_id,
+                               Generation::Value session_generation) noexcept;
     void store_pending_output(PendingOutput output) noexcept;
     void store_pending_end_of_input(Generation::Value generation) noexcept;
     void prepare_next_end_of_input_locked() noexcept;

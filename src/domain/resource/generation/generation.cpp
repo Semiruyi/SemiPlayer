@@ -7,10 +7,10 @@
 
 namespace semi::domain {
 
-Generation::Generation(std::shared_ptr<infra::Notifier> notifier) noexcept : notifier_(std::move(notifier)) {}
+Generation::Generation(std::shared_ptr<infra::Notifier> notifier) noexcept
+    : notifier_(std::move(notifier)) {}
 
-Generation::Value Generation::bump(
-    std::optional<std::int64_t> seek_target_pts_us) noexcept {
+Generation::Value Generation::bump(std::optional<std::int64_t> seek_target_pts_us) noexcept {
     Value next = 0;
     {
         // Serialize writers so the published value and its seek context cannot be paired

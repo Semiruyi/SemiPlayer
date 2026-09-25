@@ -8,11 +8,12 @@ namespace {
 
 TEST(VideoDecoderEvents, CarriesBackendFailure) {
     const VideoDecoderBackendFailure failure{
-        .error = VideoDecoderBackendError{
-            .operation = VideoDecoderBackendOperation::Decode,
-            .native_code = -1,
-            .message = "invalid packet",
-        },
+        .error =
+            VideoDecoderBackendError{
+                .operation = VideoDecoderBackendOperation::Decode,
+                .native_code = -1,
+                .message = "invalid packet",
+            },
     };
 
     EXPECT_EQ(failure.error.operation, VideoDecoderBackendOperation::Decode);

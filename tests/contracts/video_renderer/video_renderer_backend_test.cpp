@@ -7,8 +7,7 @@ namespace {
 
 class FakeVideoRendererBackend final : public VideoRendererBackend {
 public:
-    std::expected<void, VideoRendererBackendError>
-    configure(const VideoRendererOptions&) override {
+    std::expected<void, VideoRendererBackendError> configure(const VideoRendererOptions&) override {
         return {};
     }
 

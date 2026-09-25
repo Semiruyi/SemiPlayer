@@ -64,10 +64,12 @@ TEST(Generation, ConcurrentBumpsAreAtomic) {
     threads.reserve(kThreads);
     for (int i = 0; i < kThreads; ++i) {
         threads.emplace_back([&g] {
-            for (int j = 0; j < kBumpsPerThread; ++j) g.bump();
+            for (int j = 0; j < kBumpsPerThread; ++j)
+                g.bump();
         });
     }
-    for (auto& t : threads) t.join();
+    for (auto& t : threads)
+        t.join();
     // 并发 bump 必须无丢失：最终值 == 总 bump 次数。
     EXPECT_EQ(g.current(), static_cast<uint32_t>(kThreads * kBumpsPerThread));
 }

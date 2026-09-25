@@ -30,8 +30,7 @@ void VideoSyncClock::on_generation_changed(Generation::Value generation) noexcep
 
 void VideoSyncClock::on_audio_playback_finished(bool playback_enabled) noexcept {
     reset();
-    if (const auto position = audio_output_ ? audio_output_->current_position()
-                                            : std::nullopt;
+    if (const auto position = audio_output_ ? audio_output_->current_position() : std::nullopt;
         position && position->generation == active_generation_) {
         local_clock_start_pts_us_ = position->pts_us;
         local_clock_started_at_ = Clock::now();
@@ -100,8 +99,8 @@ std::optional<std::int64_t> VideoSyncClock::current_pts() const noexcept {
                 return std::nullopt;
             }
             return local_clock_start_pts_us_ +
-                   std::chrono::duration_cast<std::chrono::microseconds>(
-                       Clock::now() - *local_clock_started_at_)
+                   std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() -
+                                                                         *local_clock_started_at_)
                        .count();
         }
 
@@ -128,7 +127,7 @@ std::optional<std::int64_t> VideoSyncClock::current_pts() const noexcept {
 }
 
 void VideoSyncClock::anchor_local_clock_if_needed(std::int64_t pts_us,
-                                                   bool playback_enabled) noexcept {
+                                                  bool playback_enabled) noexcept {
     if (local_clock_started_at_ || local_clock_frozen_pts_us_) {
         return;
     }

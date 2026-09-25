@@ -24,7 +24,7 @@ class VideoRenderer;
 class VideoRenderedStore;
 class VideoPacketQueue;
 class VideoSync;
-}
+} // namespace semi::domain
 
 namespace semi::ioc {
 

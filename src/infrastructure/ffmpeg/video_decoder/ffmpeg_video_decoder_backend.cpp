@@ -55,11 +55,11 @@ std::optional<std::int64_t> timestamp_us(const AVFrame& frame) noexcept {
     return frame.best_effort_timestamp;
 }
 
-std::expected<void, VideoDecoderBackendError>
-prepare_packet(AVPacket& destination, const EncodedPacket& source,
-               VideoDecoderBackendOperation operation) {
+std::expected<void, VideoDecoderBackendError> prepare_packet(
+    AVPacket& destination, const EncodedPacket& source, VideoDecoderBackendOperation operation) {
     if (source.payload.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return std::unexpected(make_state_error(operation, "encoded packet payload is too large for FFmpeg"));
+        return std::unexpected(
+            make_state_error(operation, "encoded packet payload is too large for FFmpeg"));
     }
 
     av_packet_unref(&destination);
@@ -80,15 +80,16 @@ std::expected<std::unique_ptr<const FfmpegVideoFrameBuffer>, VideoDecoderBackend
 make_frame_buffer(AvFramePtr frame, VideoDecoderBackendOperation operation) {
     if (frame == nullptr || frame->format < 0 ||
         !FfmpegVideoFrameBuffer::media_pixel_format(static_cast<AVPixelFormat>(frame->format))) {
-        return std::unexpected(make_state_error(operation,
-                                                "FFmpeg video frame has an unsupported pixel format"));
+        return std::unexpected(
+            make_state_error(operation, "FFmpeg video frame has an unsupported pixel format"));
     }
 
     try {
         auto buffer = std::make_unique<FfmpegVideoFrameBuffer>(std::move(frame));
         if (buffer->pixel_format() == contracts::media::VideoPixelFormat::Unknown ||
             buffer->width() == 0 || buffer->height() == 0 || buffer->plane_count() == 0) {
-            return std::unexpected(make_state_error(operation, "FFmpeg video frame has invalid planes"));
+            return std::unexpected(
+                make_state_error(operation, "FFmpeg video frame has invalid planes"));
         }
         return std::unique_ptr<const FfmpegVideoFrameBuffer>(std::move(buffer));
     } catch (const std::bad_alloc&) {
@@ -97,7 +98,9 @@ make_frame_buffer(AvFramePtr frame, VideoDecoderBackendOperation operation) {
 }
 
 std::expected<void, VideoDecoderBackendError>
-append_received_frames(AVCodecContext& context, AVFrame& frame, DecodedVideoBatch& output,
+append_received_frames(AVCodecContext& context,
+                       AVFrame& frame,
+                       DecodedVideoBatch& output,
                        VideoDecoderBackendOperation operation) {
     try {
         for (;;) {
@@ -132,7 +135,9 @@ append_received_frames(AVCodecContext& context, AVFrame& frame, DecodedVideoBatc
 }
 
 std::expected<DecodedVideoBatch, VideoDecoderBackendError>
-send_packet_and_collect_frames(AVCodecContext& context, AVFrame& frame, AVPacket* packet,
+send_packet_and_collect_frames(AVCodecContext& context,
+                               AVFrame& frame,
+                               AVPacket* packet,
                                VideoDecoderBackendOperation operation) {
     try {
         DecodedVideoBatch output;
@@ -186,8 +191,9 @@ FfmpegVideoDecoderBackend::~FfmpegVideoDecoderBackend() {
 std::expected<void, VideoDecoderBackendError>
 FfmpegVideoDecoderBackend::configure(const contracts::media::VideoCodecConfig& config) {
     if (impl_->context != nullptr) {
-        return std::unexpected(make_state_error(VideoDecoderBackendOperation::Configure,
-                                                "FFmpeg video decoder backend is already configured"));
+        return std::unexpected(
+            make_state_error(VideoDecoderBackendOperation::Configure,
+                             "FFmpeg video decoder backend is already configured"));
     }
     if (config.common.codec_name.empty() ||
         config.coded_width > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -198,15 +204,17 @@ FfmpegVideoDecoderBackend::configure(const contracts::media::VideoCodecConfig& c
 
     const AVCodec* codec = avcodec_find_decoder_by_name(config.common.codec_name.c_str());
     if (codec == nullptr || codec->type != AVMEDIA_TYPE_VIDEO) {
-        return std::unexpected(make_state_error(VideoDecoderBackendOperation::Configure,
-                                                "FFmpeg could not find the requested video decoder"));
+        return std::unexpected(
+            make_state_error(VideoDecoderBackendOperation::Configure,
+                             "FFmpeg could not find the requested video decoder"));
     }
 
     AvCodecContextPtr context(avcodec_alloc_context3(codec));
     AvPacketPtr packet(av_packet_alloc());
     AvFramePtr frame(av_frame_alloc());
     if (context == nullptr || packet == nullptr || frame == nullptr) {
-        return std::unexpected(make_error(VideoDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
+        return std::unexpected(
+            make_error(VideoDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
     }
 
     if (config.coded_width != 0) {
@@ -225,17 +233,21 @@ FfmpegVideoDecoderBackend::configure(const contracts::media::VideoCodecConfig& c
 
     if (!config.common.extradata.empty()) {
         if (config.common.extradata.size() >
-            static_cast<std::size_t>(std::numeric_limits<int>::max() - AV_INPUT_BUFFER_PADDING_SIZE)) {
-            return std::unexpected(make_state_error(VideoDecoderBackendOperation::Configure,
-                                                    "video decoder extradata is too large for FFmpeg"));
+            static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                     AV_INPUT_BUFFER_PADDING_SIZE)) {
+            return std::unexpected(
+                make_state_error(VideoDecoderBackendOperation::Configure,
+                                 "video decoder extradata is too large for FFmpeg"));
         }
         context->extradata_size = static_cast<int>(config.common.extradata.size());
         context->extradata = static_cast<std::uint8_t*>(
             av_mallocz(config.common.extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
         if (context->extradata == nullptr) {
-            return std::unexpected(make_error(VideoDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
+            return std::unexpected(
+                make_error(VideoDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
         }
-        std::memcpy(context->extradata, config.common.extradata.data(), config.common.extradata.size());
+        std::memcpy(context->extradata, config.common.extradata.data(),
+                    config.common.extradata.size());
     }
 
     const int status = avcodec_open2(context.get(), codec, nullptr);
@@ -269,8 +281,7 @@ FfmpegVideoDecoderBackend::decode(const EncodedPacket& packet) {
                                           VideoDecoderBackendOperation::Decode);
 }
 
-std::expected<DecodedVideoBatch, VideoDecoderBackendError>
-FfmpegVideoDecoderBackend::drain() {
+std::expected<DecodedVideoBatch, VideoDecoderBackendError> FfmpegVideoDecoderBackend::drain() {
     if (impl_->context == nullptr) {
         return std::unexpected(make_state_error(VideoDecoderBackendOperation::Drain,
                                                 "FFmpeg video decoder backend is not configured"));
@@ -280,7 +291,7 @@ FfmpegVideoDecoderBackend::drain() {
     }
 
     auto output = send_packet_and_collect_frames(*impl_->context, *impl_->frame, nullptr,
-                                                  VideoDecoderBackendOperation::Drain);
+                                                 VideoDecoderBackendOperation::Drain);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }

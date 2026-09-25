@@ -105,12 +105,8 @@ TEST(FfmpegAudioResamplerBackendTest, ConvertsPackedS16ToPackedF32AndPreservesTi
     FfmpegAudioResamplerBackend backend;
     ASSERT_TRUE(backend.configure(s16_packed(48'000, 1), f32_packed(48'000, 1)).has_value());
 
-    const auto output = backend.resample(make_s16_packed_audio(
-        48'000,
-        1,
-        4,
-        bytes_from_i16({0, 16'384, -16'384, 32'767}),
-        123'456));
+    const auto output = backend.resample(
+        make_s16_packed_audio(48'000, 1, 4, bytes_from_i16({0, 16'384, -16'384, 32'767}), 123'456));
 
     ASSERT_TRUE(output.has_value()) << output.error().message;
     ASSERT_EQ(output->size(), 1U);
@@ -136,10 +132,10 @@ TEST(FfmpegAudioResamplerBackendTest, AdvancesOutputPtsFromEmittedSamples) {
     FfmpegAudioResamplerBackend backend;
     ASSERT_TRUE(backend.configure(s16_packed(48'000, 1), f32_packed(48'000, 1)).has_value());
 
-    const auto first = backend.resample(make_s16_packed_audio(
-        48'000, 1, 4, zero_i16_bytes(4), 1'000'000));
-    const auto second = backend.resample(make_s16_packed_audio(
-        48'000, 1, 4, zero_i16_bytes(4), 9'000'000));
+    const auto first =
+        backend.resample(make_s16_packed_audio(48'000, 1, 4, zero_i16_bytes(4), 1'000'000));
+    const auto second =
+        backend.resample(make_s16_packed_audio(48'000, 1, 4, zero_i16_bytes(4), 9'000'000));
 
     ASSERT_TRUE(first.has_value()) << first.error().message;
     ASSERT_TRUE(second.has_value()) << second.error().message;
@@ -154,10 +150,7 @@ TEST(FfmpegAudioResamplerBackendTest, ConvertsPlanarStereoToPackedStereo) {
     ASSERT_TRUE(backend.configure(s16_planar(48'000, 2), f32_packed(48'000, 2)).has_value());
 
     const auto output = backend.resample(make_s16_planar_audio(
-        48'000,
-        2,
-        2,
-        {bytes_from_i16({0, 32'767}), bytes_from_i16({16'384, -16'384})}));
+        48'000, 2, 2, {bytes_from_i16({0, 32'767}), bytes_from_i16({16'384, -16'384})}));
 
     ASSERT_TRUE(output.has_value()) << output.error().message;
     ASSERT_EQ(output->size(), 1U);
@@ -179,11 +172,8 @@ TEST(FfmpegAudioResamplerBackendTest, ResamplesSampleRateAndDrainsDelayedSamples
     FfmpegAudioResamplerBackend backend;
     ASSERT_TRUE(backend.configure(s16_packed(44'100, 1), f32_packed(48'000, 1)).has_value());
 
-    const auto output = backend.resample(make_s16_packed_audio(
-        44'100,
-        1,
-        100,
-        zero_i16_bytes(100)));
+    const auto output =
+        backend.resample(make_s16_packed_audio(44'100, 1, 100, zero_i16_bytes(100)));
     ASSERT_TRUE(output.has_value()) << output.error().message;
 
     const auto drained = backend.drain();
@@ -204,20 +194,13 @@ TEST(FfmpegAudioResamplerBackendTest, ResetMakesTheResamplerReusableAfterDrain) 
     ASSERT_TRUE(backend.configure(s16_packed(48'000, 1), f32_packed(48'000, 1)).has_value());
 
     ASSERT_TRUE(backend.drain().has_value());
-    const auto rejected = backend.resample(make_s16_packed_audio(
-        48'000,
-        1,
-        1,
-        bytes_from_i16({0})));
+    const auto rejected =
+        backend.resample(make_s16_packed_audio(48'000, 1, 1, bytes_from_i16({0})));
     ASSERT_FALSE(rejected.has_value());
     EXPECT_EQ(rejected.error().operation, AudioResamplerBackendOperation::Resample);
 
     backend.reset();
-    const auto output = backend.resample(make_s16_packed_audio(
-        48'000,
-        1,
-        1,
-        bytes_from_i16({0})));
+    const auto output = backend.resample(make_s16_packed_audio(48'000, 1, 1, bytes_from_i16({0})));
     ASSERT_TRUE(output.has_value()) << output.error().message;
     ASSERT_EQ(output->size(), 1U);
 }
@@ -226,11 +209,7 @@ TEST(FfmpegAudioResamplerBackendTest, RejectsInputFormatMismatch) {
     FfmpegAudioResamplerBackend backend;
     ASSERT_TRUE(backend.configure(s16_packed(48'000, 1), f32_packed(48'000, 1)).has_value());
 
-    const auto output = backend.resample(make_s16_packed_audio(
-        44'100,
-        1,
-        1,
-        bytes_from_i16({0})));
+    const auto output = backend.resample(make_s16_packed_audio(44'100, 1, 1, bytes_from_i16({0})));
 
     ASSERT_FALSE(output.has_value());
     EXPECT_EQ(output.error().operation, AudioResamplerBackendOperation::Resample);

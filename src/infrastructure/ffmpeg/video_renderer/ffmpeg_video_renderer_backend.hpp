@@ -6,8 +6,7 @@
 
 namespace semi::infra::ffmpeg::video_renderer {
 
-class FfmpegVideoRendererBackend final
-    : public contracts::video_renderer::VideoRendererBackend {
+class FfmpegVideoRendererBackend final : public contracts::video_renderer::VideoRendererBackend {
 public:
     FfmpegVideoRendererBackend();
     ~FfmpegVideoRendererBackend() override;
@@ -16,7 +15,7 @@ public:
     configure(const contracts::video_renderer::VideoRendererOptions& options) override;
 
     [[nodiscard]] std::expected<contracts::media::RenderedVideo,
-                                 contracts::video_renderer::VideoRendererBackendError>
+                                contracts::video_renderer::VideoRendererBackendError>
     render(const contracts::media::DecodedVideo& input) override;
 
     void reset() noexcept override;

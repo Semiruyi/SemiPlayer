@@ -38,33 +38,28 @@ VideoSyncError internal_error(std::string message) {
 
 } // namespace
 
-DefaultVideoSync::DefaultVideoSync(
-    std::shared_ptr<VideoRenderedSource> video_rendered_source,
-    std::shared_ptr<AudioOutput> audio_output,
-    std::shared_ptr<infra::Notifier> notifier,
-    std::shared_ptr<Generation> generation,
-    std::shared_ptr<VideoSyncTelemetry> telemetry)
+DefaultVideoSync::DefaultVideoSync(std::shared_ptr<VideoRenderedSource> video_rendered_source,
+                                   std::shared_ptr<AudioOutput> audio_output,
+                                   std::shared_ptr<infra::Notifier> notifier,
+                                   std::shared_ptr<Generation> generation,
+                                   std::shared_ptr<VideoSyncTelemetry> telemetry)
     : notifier_(std::move(notifier)),
       generation_(std::move(generation)),
-      telemetry_(telemetry ? std::move(telemetry)
-                           : std::make_shared<NullVideoSyncTelemetry>()),
+      telemetry_(telemetry ? std::move(telemetry) : std::make_shared<NullVideoSyncTelemetry>()),
       input_(std::move(video_rendered_source)),
       clock_(std::move(audio_output)),
-      worker_([this] {
-          worker_main();
-      }) {
+      worker_([this] { worker_main(); }) {
     if (!notifier_) {
         return;
     }
 
     video_rendered_store_not_empty_subscription_ =
-        notifier_->subscribe<VideoRenderedStoreNotEmpty>(
-            [this](const VideoRenderedStoreNotEmpty&) {
-                input_.mark_available();
-                cv_.notify_one();
-            });
-    generation_changed_subscription_ = notifier_->subscribe<GenerationChanged>(
-        [this](const GenerationChanged&) {
+        notifier_->subscribe<VideoRenderedStoreNotEmpty>([this](const VideoRenderedStoreNotEmpty&) {
+            input_.mark_available();
+            cv_.notify_one();
+        });
+    generation_changed_subscription_ =
+        notifier_->subscribe<GenerationChanged>([this](const GenerationChanged&) {
             {
                 std::lock_guard lock(mutex_);
                 generation_changed_hint_ = true;
@@ -83,8 +78,8 @@ DefaultVideoSync::DefaultVideoSync(
             }
             cv_.notify_one();
         });
-    audio_playback_finished_subscription_ = notifier_->subscribe<AudioPlaybackFinished>(
-        [this](const AudioPlaybackFinished& event) {
+    audio_playback_finished_subscription_ =
+        notifier_->subscribe<AudioPlaybackFinished>([this](const AudioPlaybackFinished& event) {
             {
                 std::lock_guard lock(mutex_);
                 if (event.generation != active_generation_) {
@@ -104,8 +99,7 @@ DefaultVideoSync::~DefaultVideoSync() {
     audio_playback_finished_subscription_.reset();
 }
 
-std::expected<void, VideoSyncError>
-DefaultVideoSync::configure(const VideoSyncOptions& options) {
+std::expected<void, VideoSyncError> DefaultVideoSync::configure(const VideoSyncOptions& options) {
     ConfigureCommand command;
     command.options = options;
     auto completion = command.completion.get_future();
@@ -182,20 +176,18 @@ void DefaultVideoSync::worker_main() noexcept {
             return worker_state_ == WorkerState::ShuttingDown || !commands_.empty() ||
                    should_process_data_locked();
         };
-        if (const auto presentation_deadline =
-                scheduler_.next_presentation_deadline()) {
+        if (const auto presentation_deadline = scheduler_.next_presentation_deadline()) {
             const auto wake_deadline = wakeup_.wake_deadline(*presentation_deadline);
             const auto wait_status = cv_.wait_until(lock, wake_deadline);
             const auto actual_wakeup = Clock::now();
             const bool interrupted_by_event =
                 wait_status == std::cv_status::no_timeout &&
-                (worker_state_ == WorkerState::ShuttingDown ||
-                 !commands_.empty() || generation_changed_hint_ ||
-                 audio_position_ready_hint_ || audio_playback_finished_hint_ ||
-                 input_.has_available_hint());
+                (worker_state_ == WorkerState::ShuttingDown || !commands_.empty() ||
+                 generation_changed_hint_ || audio_position_ready_hint_ ||
+                 audio_playback_finished_hint_ || input_.has_available_hint());
             if (!interrupted_by_event) {
-                if (const auto observation = wakeup_.observe_timer_wakeup(
-                        *presentation_deadline, actual_wakeup)) {
+                if (const auto observation =
+                        wakeup_.observe_timer_wakeup(*presentation_deadline, actual_wakeup)) {
                     record_wakeup_observation(*observation);
                 }
             }
@@ -348,8 +340,7 @@ bool DefaultVideoSync::should_process_data_locked() noexcept {
         if (scheduler_.waiting_for_resume()) {
             return playback_enabled_;
         }
-        if (const auto presentation_deadline =
-                scheduler_.next_presentation_deadline()) {
+        if (const auto presentation_deadline = scheduler_.next_presentation_deadline()) {
             return Clock::now() >= wakeup_.wake_deadline(*presentation_deadline);
         }
         return true;
@@ -374,10 +365,8 @@ void DefaultVideoSync::process_data_step() noexcept {
         return;
     }
 
-    if (const auto presentation_deadline =
-            scheduler_.next_presentation_deadline()) {
-        if (const auto busy_wait_us =
-                wakeup_.wait_for_target(*presentation_deadline)) {
+    if (const auto presentation_deadline = scheduler_.next_presentation_deadline()) {
+        if (const auto busy_wait_us = wakeup_.wait_for_target(*presentation_deadline)) {
             telemetry_->on_busy_wait(*busy_wait_us);
         }
     }
@@ -427,8 +416,8 @@ void DefaultVideoSync::adopt_generation_if_needed() noexcept {
 
 void DefaultVideoSync::adopt_audio_playback_finished_if_needed() noexcept {
     std::lock_guard lock(mutex_);
-    if (session_state_ != SessionState::Configured ||
-        !audio_playback_finished_hint_ || clock_.audio_playback_finished()) {
+    if (session_state_ != SessionState::Configured || !audio_playback_finished_hint_ ||
+        clock_.audio_playback_finished()) {
         return;
     }
 
@@ -441,8 +430,7 @@ void DefaultVideoSync::adopt_audio_playback_finished_if_needed() noexcept {
 
 void DefaultVideoSync::record_wakeup_observation(
     const VideoSyncWakeupObservation& observation) noexcept {
-    telemetry_->on_wakeup_error(observation.error_us,
-                                observation.compensation_us);
+    telemetry_->on_wakeup_error(observation.error_us, observation.compensation_us);
 }
 
 void DefaultVideoSync::record_schedule_observations(
@@ -470,9 +458,8 @@ void DefaultVideoSync::record_schedule_observations(
     }
 }
 
-void DefaultVideoSync::present_frame(
-    RenderedVideoFrame&& frame,
-    std::optional<std::int64_t> clock_pts) noexcept {
+void DefaultVideoSync::present_frame(RenderedVideoFrame&& frame,
+                                     std::optional<std::int64_t> clock_pts) noexcept {
     if (!options_.on_frame) {
         telemetry_->on_frame_presented(VideoSyncPresentationObservation{
             .frame_pts_us = frame.rendered().pts_us,
@@ -487,8 +474,7 @@ void DefaultVideoSync::present_frame(
         SEMI_LOG_ERROR("video frame callback threw an exception");
     }
     const auto callback_duration_us = static_cast<std::uint64_t>(
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            Clock::now() - callback_started_at)
+        std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - callback_started_at)
             .count());
     telemetry_->on_frame_presented(VideoSyncPresentationObservation{
         .frame_pts_us = frame.rendered().pts_us,
@@ -501,8 +487,7 @@ void DefaultVideoSync::notify_playback_finished_if_needed() noexcept {
     Generation::Value generation = 0;
     {
         std::lock_guard lock(mutex_);
-        if (session_state_ != SessionState::Configured ||
-            !input_.end_of_input_observed() ||
+        if (session_state_ != SessionState::Configured || !input_.end_of_input_observed() ||
             playback_finished_notified_) {
             return;
         }

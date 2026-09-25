@@ -8,11 +8,12 @@ namespace {
 
 TEST(AudioDecoderEvents, CarriesBackendFailure) {
     const AudioDecoderBackendFailure failure{
-        .error = AudioDecoderBackendError{
-            .operation = AudioDecoderBackendOperation::Decode,
-            .native_code = -1,
-            .message = "invalid packet",
-        },
+        .error =
+            AudioDecoderBackendError{
+                .operation = AudioDecoderBackendOperation::Decode,
+                .native_code = -1,
+                .message = "invalid packet",
+            },
     };
 
     EXPECT_EQ(failure.error.operation, AudioDecoderBackendOperation::Decode);

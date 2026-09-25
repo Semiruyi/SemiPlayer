@@ -17,8 +17,8 @@ extern "C" {
 namespace semi::infra::ffmpeg::audio_decoder {
 namespace {
 
-using contracts::audio_decoder::AudioDecoderBackendError;
 using contracts::audio_decoder::AudioDecoderBackendConfigureResult;
+using contracts::audio_decoder::AudioDecoderBackendError;
 using contracts::audio_decoder::AudioDecoderBackendOperation;
 using contracts::audio_decoder::DecodedAudioBatch;
 using contracts::demuxer::packet::EncodedPacket;
@@ -87,15 +87,17 @@ std::expected<AudioPcmFormat, AudioDecoderBackendError>
 decoded_format_from_context(const AVCodecContext& context) {
     if (context.sample_rate <= 0 || context.ch_layout.nb_channels <= 0 ||
         context.sample_fmt == AV_SAMPLE_FMT_NONE) {
-        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
-                                                "FFmpeg audio decoder did not expose a PCM output format"));
+        return std::unexpected(
+            make_state_error(AudioDecoderBackendOperation::Configure,
+                             "FFmpeg audio decoder did not expose a PCM output format"));
     }
 
     const auto native_format = static_cast<AVSampleFormat>(context.sample_fmt);
     const auto contract_format = sample_format(native_format);
     if (!contract_format || av_get_bytes_per_sample(native_format) <= 0) {
-        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
-                                                "FFmpeg audio decoder output sample format is unsupported"));
+        return std::unexpected(
+            make_state_error(AudioDecoderBackendOperation::Configure,
+                             "FFmpeg audio decoder output sample format is unsupported"));
     }
 
     return AudioPcmFormat{
@@ -109,14 +111,16 @@ decoded_format_from_context(const AVCodecContext& context) {
 std::expected<DecodedAudio, AudioDecoderBackendError>
 copy_frame(const AVFrame& frame, AudioDecoderBackendOperation operation) {
     if (frame.nb_samples < 0 || frame.sample_rate <= 0 || frame.ch_layout.nb_channels <= 0) {
-        return std::unexpected(make_state_error(operation, "FFmpeg frame has invalid audio dimensions"));
+        return std::unexpected(
+            make_state_error(operation, "FFmpeg frame has invalid audio dimensions"));
     }
 
     const auto native_format = static_cast<AVSampleFormat>(frame.format);
     const auto contract_format = sample_format(native_format);
     const int bytes_per_sample = av_get_bytes_per_sample(native_format);
     if (!contract_format || bytes_per_sample <= 0) {
-        return std::unexpected(make_state_error(operation, "FFmpeg frame has an unsupported sample format"));
+        return std::unexpected(
+            make_state_error(operation, "FFmpeg frame has an unsupported sample format"));
     }
 
     const auto samples = static_cast<std::size_t>(frame.nb_samples);
@@ -137,19 +141,21 @@ copy_frame(const AVFrame& frame, AudioDecoderBackendOperation operation) {
 
     try {
         DecodedAudio result{
-            .format = AudioPcmFormat{
-                .sample_rate = static_cast<std::uint32_t>(frame.sample_rate),
-                .channels = static_cast<std::uint32_t>(frame.ch_layout.nb_channels),
-                .sample_format = *contract_format,
-                .planar = planar,
-            },
+            .format =
+                AudioPcmFormat{
+                    .sample_rate = static_cast<std::uint32_t>(frame.sample_rate),
+                    .channels = static_cast<std::uint32_t>(frame.ch_layout.nb_channels),
+                    .sample_format = *contract_format,
+                    .planar = planar,
+                },
             .samples_per_channel = static_cast<std::uint32_t>(frame.nb_samples),
             .planes = std::vector<std::vector<std::byte>>(plane_count),
             .pts_us = timestamp_us(frame),
         };
         for (std::size_t index = 0; index < plane_count; ++index) {
             if (frame.extended_data[index] == nullptr && plane_size != 0) {
-                return std::unexpected(make_state_error(operation, "FFmpeg frame has a missing PCM plane"));
+                return std::unexpected(
+                    make_state_error(operation, "FFmpeg frame has a missing PCM plane"));
             }
             auto& destination = result.planes[index];
             destination.resize(plane_size);
@@ -164,7 +170,9 @@ copy_frame(const AVFrame& frame, AudioDecoderBackendOperation operation) {
 }
 
 std::expected<void, AudioDecoderBackendError>
-append_received_frames(AVCodecContext& context, AVFrame& frame, DecodedAudioBatch& output,
+append_received_frames(AVCodecContext& context,
+                       AVFrame& frame,
+                       DecodedAudioBatch& output,
                        AudioDecoderBackendOperation operation) {
     for (;;) {
         const int status = avcodec_receive_frame(&context, &frame);
@@ -185,7 +193,9 @@ append_received_frames(AVCodecContext& context, AVFrame& frame, DecodedAudioBatc
 }
 
 std::expected<DecodedAudioBatch, AudioDecoderBackendError>
-send_packet_and_collect_frames(AVCodecContext& context, AVFrame& frame, AVPacket* packet,
+send_packet_and_collect_frames(AVCodecContext& context,
+                               AVFrame& frame,
+                               AVPacket* packet,
                                AudioDecoderBackendOperation operation) {
     try {
         DecodedAudioBatch output;
@@ -223,11 +233,11 @@ send_packet_and_collect_frames(AVCodecContext& context, AVFrame& frame, AVPacket
     }
 }
 
-std::expected<void, AudioDecoderBackendError>
-prepare_packet(AVPacket& destination, const EncodedPacket& source,
-               AudioDecoderBackendOperation operation) {
+std::expected<void, AudioDecoderBackendError> prepare_packet(
+    AVPacket& destination, const EncodedPacket& source, AudioDecoderBackendOperation operation) {
     if (source.payload.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-        return std::unexpected(make_state_error(operation, "encoded packet payload is too large for FFmpeg"));
+        return std::unexpected(
+            make_state_error(operation, "encoded packet payload is too large for FFmpeg"));
     }
 
     av_packet_unref(&destination);
@@ -262,8 +272,9 @@ FfmpegAudioDecoderBackend::~FfmpegAudioDecoderBackend() {
 std::expected<AudioDecoderBackendConfigureResult, AudioDecoderBackendError>
 FfmpegAudioDecoderBackend::configure(const contracts::media::AudioCodecConfig& config) {
     if (impl_->context != nullptr) {
-        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
-                                                "FFmpeg audio decoder backend is already configured"));
+        return std::unexpected(
+            make_state_error(AudioDecoderBackendOperation::Configure,
+                             "FFmpeg audio decoder backend is already configured"));
     }
     if (config.common.codec_name.empty() || config.sample_rate == 0 || config.channels == 0 ||
         config.sample_rate > static_cast<std::uint32_t>(std::numeric_limits<int>::max()) ||
@@ -274,15 +285,17 @@ FfmpegAudioDecoderBackend::configure(const contracts::media::AudioCodecConfig& c
 
     const AVCodec* codec = avcodec_find_decoder_by_name(config.common.codec_name.c_str());
     if (codec == nullptr || codec->type != AVMEDIA_TYPE_AUDIO) {
-        return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
-                                                "FFmpeg could not find the requested audio decoder"));
+        return std::unexpected(
+            make_state_error(AudioDecoderBackendOperation::Configure,
+                             "FFmpeg could not find the requested audio decoder"));
     }
 
     AvCodecContextPtr context(avcodec_alloc_context3(codec));
     AvPacketPtr packet(av_packet_alloc());
     AvFramePtr frame(av_frame_alloc());
     if (context == nullptr || packet == nullptr || frame == nullptr) {
-        return std::unexpected(make_error(AudioDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
+        return std::unexpected(
+            make_error(AudioDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
     }
 
     context->sample_rate = static_cast<int>(config.sample_rate);
@@ -290,17 +303,21 @@ FfmpegAudioDecoderBackend::configure(const contracts::media::AudioCodecConfig& c
     context->pkt_timebase = AV_TIME_BASE_Q;
     if (!config.common.extradata.empty()) {
         if (config.common.extradata.size() >
-            static_cast<std::size_t>(std::numeric_limits<int>::max() - AV_INPUT_BUFFER_PADDING_SIZE)) {
-            return std::unexpected(make_state_error(AudioDecoderBackendOperation::Configure,
-                                                    "audio decoder extradata is too large for FFmpeg"));
+            static_cast<std::size_t>(std::numeric_limits<int>::max() -
+                                     AV_INPUT_BUFFER_PADDING_SIZE)) {
+            return std::unexpected(
+                make_state_error(AudioDecoderBackendOperation::Configure,
+                                 "audio decoder extradata is too large for FFmpeg"));
         }
         context->extradata_size = static_cast<int>(config.common.extradata.size());
         context->extradata = static_cast<std::uint8_t*>(
             av_mallocz(config.common.extradata.size() + AV_INPUT_BUFFER_PADDING_SIZE));
         if (context->extradata == nullptr) {
-            return std::unexpected(make_error(AudioDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
+            return std::unexpected(
+                make_error(AudioDecoderBackendOperation::Configure, AVERROR(ENOMEM)));
         }
-        std::memcpy(context->extradata, config.common.extradata.data(), config.common.extradata.size());
+        std::memcpy(context->extradata, config.common.extradata.data(),
+                    config.common.extradata.size());
     }
 
     const int status = avcodec_open2(context.get(), codec, nullptr);
@@ -351,7 +368,7 @@ std::expected<DecodedAudioBatch, AudioDecoderBackendError> FfmpegAudioDecoderBac
     }
 
     auto output = send_packet_and_collect_frames(*impl_->context, *impl_->frame, nullptr,
-                                                  AudioDecoderBackendOperation::Drain);
+                                                 AudioDecoderBackendOperation::Drain);
     if (!output) {
         return std::unexpected(std::move(output.error()));
     }

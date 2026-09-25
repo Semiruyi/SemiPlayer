@@ -41,9 +41,8 @@ std::string ffmpeg_message(int error_code) {
     return buffer.data();
 }
 
-VideoRendererBackendError make_error(VideoRendererBackendOperation operation,
-                                     int error_code,
-                                     std::string message = {}) {
+VideoRendererBackendError
+make_error(VideoRendererBackendOperation operation, int error_code, std::string message = {}) {
     if (message.empty()) {
         message = ffmpeg_message(error_code);
     }
@@ -56,9 +55,7 @@ VideoRendererBackendError make_error(VideoRendererBackendOperation operation,
 
 VideoRendererBackendError make_state_error(VideoRendererBackendOperation operation,
                                            const char* message) {
-    return make_error(operation,
-                      AVERROR(EINVAL),
-                      message);
+    return make_error(operation, AVERROR(EINVAL), message);
 }
 
 std::optional<AVPixelFormat> native_pixel_format(VideoPixelFormat format) noexcept {
@@ -83,9 +80,8 @@ std::optional<AVPixelFormat> native_pixel_format(VideoPixelFormat format) noexce
     return std::nullopt;
 }
 
-std::size_t plane_height(VideoPixelFormat format,
-                         std::uint32_t height,
-                         std::size_t plane) noexcept {
+std::size_t
+plane_height(VideoPixelFormat format, std::uint32_t height, std::size_t plane) noexcept {
     switch (format) {
     case VideoPixelFormat::Yuv420p:
     case VideoPixelFormat::Yuv420p10le:
@@ -104,17 +100,14 @@ std::size_t plane_height(VideoPixelFormat format,
     return 0;
 }
 
-std::size_t plane_width(VideoPixelFormat format,
-                        std::uint32_t width,
-                        std::size_t plane) noexcept {
+std::size_t plane_width(VideoPixelFormat format, std::uint32_t width, std::size_t plane) noexcept {
     switch (format) {
     case VideoPixelFormat::Yuv420p:
     case VideoPixelFormat::Yuv422p:
         return plane == 0 ? width : (static_cast<std::size_t>(width) + 1U) / 2U;
     case VideoPixelFormat::Yuv420p10le:
-        return plane == 0
-            ? static_cast<std::size_t>(width) * 2U
-            : ((static_cast<std::size_t>(width) + 1U) / 2U) * 2U;
+        return plane == 0 ? static_cast<std::size_t>(width) * 2U
+                          : ((static_cast<std::size_t>(width) + 1U) / 2U) * 2U;
     case VideoPixelFormat::Yuv444p:
         return width;
     case VideoPixelFormat::Nv12:
@@ -203,16 +196,15 @@ FfmpegVideoRendererBackend::~FfmpegVideoRendererBackend() {
 std::expected<void, VideoRendererBackendError>
 FfmpegVideoRendererBackend::configure(const VideoRendererOptions& options) {
     if (impl_->configured) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Configure,
-            "video renderer backend is already configured"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Configure,
+                                                "video renderer backend is already configured"));
     }
     if (options.output_pixel_format != VideoPixelFormat::Rgba8 ||
         (options.output_width != 0 && !valid_dimension(options.output_width)) ||
         (options.output_height != 0 && !valid_dimension(options.output_height))) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Configure,
-            "video renderer output must be RGBA8 with valid optional dimensions"));
+        return std::unexpected(
+            make_state_error(VideoRendererBackendOperation::Configure,
+                             "video renderer output must be RGBA8 with valid optional dimensions"));
     }
 
     impl_->options = options;
@@ -223,64 +215,50 @@ FfmpegVideoRendererBackend::configure(const VideoRendererOptions& options) {
 std::expected<RenderedVideo, VideoRendererBackendError>
 FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
     if (!impl_->configured) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "video renderer backend is not configured"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "video renderer backend is not configured"));
     }
     if (!input.buffer) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "decoded video frame has no buffer"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "decoded video frame has no buffer"));
     }
 
     const auto source_format = input.buffer->pixel_format();
     const auto source_native = native_pixel_format(source_format);
     if (!source_native) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "decoded video pixel format is unsupported"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "decoded video pixel format is unsupported"));
     }
 
     const auto source_width = input.buffer->width();
     const auto source_height = input.buffer->height();
     if (!valid_source(input, source_format, source_width, source_height)) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "decoded video planes are invalid"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "decoded video planes are invalid"));
     }
 
-    const auto output_width = impl_->options.output_width == 0
-                                  ? source_width
-                                  : impl_->options.output_width;
-    const auto output_height = impl_->options.output_height == 0
-                                   ? source_height
-                                   : impl_->options.output_height;
+    const auto output_width =
+        impl_->options.output_width == 0 ? source_width : impl_->options.output_width;
+    const auto output_height =
+        impl_->options.output_height == 0 ? source_height : impl_->options.output_height;
     if (!valid_dimension(output_width) || !valid_dimension(output_height)) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "rendered video dimensions are invalid"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "rendered video dimensions are invalid"));
     }
 
     if (impl_->context == nullptr || impl_->source_format != source_format ||
         impl_->source_width != source_width || impl_->source_height != source_height ||
         impl_->output_width != output_width || impl_->output_height != output_height) {
-        SwsContext* context = sws_getCachedContext(
-            impl_->context.release(),
-            static_cast<int>(source_width),
-            static_cast<int>(source_height),
-            *source_native,
-            static_cast<int>(output_width),
-            static_cast<int>(output_height),
-            AV_PIX_FMT_RGBA,
-            SWS_BILINEAR,
-            nullptr,
-            nullptr,
-            nullptr);
+        SwsContext* context =
+            sws_getCachedContext(impl_->context.release(), static_cast<int>(source_width),
+                                 static_cast<int>(source_height), *source_native,
+                                 static_cast<int>(output_width), static_cast<int>(output_height),
+                                 AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
         impl_->context.reset(context);
         if (impl_->context == nullptr) {
             return std::unexpected(make_error(VideoRendererBackendOperation::Render,
-                                               AVERROR(ENOMEM),
-                                               "FFmpeg could not create the video scaler"));
+                                              AVERROR(ENOMEM),
+                                              "FFmpeg could not create the video scaler"));
         }
         impl_->source_format = source_format;
         impl_->source_width = source_width;
@@ -292,18 +270,16 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
     const std::size_t bytes_per_pixel = 4;
     const auto output_width_size = static_cast<std::size_t>(output_width);
     if (output_width_size > std::numeric_limits<std::size_t>::max() / bytes_per_pixel) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "rendered video stride overflows"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "rendered video stride overflows"));
     }
     const auto stride = output_width_size * bytes_per_pixel;
     const auto output_height_size = static_cast<std::size_t>(output_height);
     if (output_height_size > std::numeric_limits<std::size_t>::max() / stride ||
         stride > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
         stride > static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "rendered video buffer size overflows"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "rendered video buffer size overflows"));
     }
     const auto output_size = stride * output_height_size;
     // libswscale may use aligned SIMD stores that touch a small tail beyond
@@ -311,9 +287,8 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
     // expose only the tightly packed image through the media contract.
     constexpr std::size_t kSwscaleOutputPadding = 64;
     if (output_size > std::numeric_limits<std::size_t>::max() - kSwscaleOutputPadding) {
-        return std::unexpected(make_state_error(
-            VideoRendererBackendOperation::Render,
-            "rendered video buffer size overflows"));
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "rendered video buffer size overflows"));
     }
 
     try {
@@ -335,27 +310,22 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
             source_linesize[index] = static_cast<int>(plane.stride_bytes);
         }
 
-        std::uint8_t* destination_data[4] = {
-            reinterpret_cast<std::uint8_t*>(output.pixels.data()), nullptr, nullptr, nullptr};
+        std::uint8_t* destination_data[4] = {reinterpret_cast<std::uint8_t*>(output.pixels.data()),
+                                             nullptr, nullptr, nullptr};
         const int destination_linesize[4] = {static_cast<int>(stride), 0, 0, 0};
-        const int scaled = sws_scale(impl_->context.get(),
-                                     source_data.data(),
-                                     source_linesize.data(),
-                                     0,
-                                     static_cast<int>(source_height),
-                                     destination_data,
-                                     destination_linesize);
+        const int scaled =
+            sws_scale(impl_->context.get(), source_data.data(), source_linesize.data(), 0,
+                      static_cast<int>(source_height), destination_data, destination_linesize);
         if (scaled != static_cast<int>(output_height)) {
-            return std::unexpected(make_state_error(
-                VideoRendererBackendOperation::Render,
-                "FFmpeg video scaling returned an incomplete frame"));
+            return std::unexpected(
+                make_state_error(VideoRendererBackendOperation::Render,
+                                 "FFmpeg video scaling returned an incomplete frame"));
         }
         output.pixels.resize(output_size);
         return output;
     } catch (const std::bad_alloc&) {
-        return std::unexpected(make_error(VideoRendererBackendOperation::Render,
-                                           AVERROR(ENOMEM),
-                                           "video renderer allocation failed"));
+        return std::unexpected(make_error(VideoRendererBackendOperation::Render, AVERROR(ENOMEM),
+                                          "video renderer allocation failed"));
     }
 }
 

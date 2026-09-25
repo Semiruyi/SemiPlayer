@@ -52,8 +52,7 @@ bool IoCContainer::assemble() noexcept {
         auto decoded_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
-        auto demuxer_backend =
-            std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
+        auto demuxer_backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
         auto audio_decoder_backend =
             std::make_shared<infra::ffmpeg::audio_decoder::FfmpegAudioDecoderBackend>();
         auto audio_resampler_backend =
@@ -67,18 +66,21 @@ bool IoCContainer::assemble() noexcept {
             std::make_shared<infra::audio_output::NullAudioOutputBackend>(audio_realtime_notifier);
 #else
         auto audio_output_backend =
-            std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(audio_realtime_notifier);
+            std::make_shared<infra::audio_output::MiniaudioAudioOutputBackend>(
+                audio_realtime_notifier);
 #endif
 
         auto demuxer = std::make_shared<domain::DefaultDemuxer>(
             demuxer_backend, audio_packet_queue, notifier, generation, video_packet_queue);
         auto audio_decoder = std::make_shared<domain::DefaultAudioDecoder>(
-            audio_packet_queue, decoded_audio_frame_store, audio_decoder_backend, notifier, generation);
-        auto audio_resampler = std::make_shared<domain::DefaultAudioResampler>(
-            decoded_audio_frame_store, playback_audio_frame_store, audio_resampler_backend, notifier,
+            audio_packet_queue, decoded_audio_frame_store, audio_decoder_backend, notifier,
             generation);
+        auto audio_resampler = std::make_shared<domain::DefaultAudioResampler>(
+            decoded_audio_frame_store, playback_audio_frame_store, audio_resampler_backend,
+            notifier, generation);
         auto audio_output = std::make_shared<domain::DefaultAudioOutput>(
-            playback_audio_frame_store, audio_output_backend, notifier, audio_realtime_notifier, generation);
+            playback_audio_frame_store, audio_output_backend, notifier, audio_realtime_notifier,
+            generation);
         auto video_decoder = std::make_shared<domain::DefaultVideoDecoder>(
             video_packet_queue, video_frame_store, video_decoder_backend, notifier, generation);
         auto video_renderer = std::make_shared<domain::DefaultVideoRenderer>(
@@ -88,15 +90,8 @@ bool IoCContainer::assemble() noexcept {
             video_rendered_store, audio_output, notifier, generation, video_sync_metrics);
 
         auto api_layer = std::make_shared<application::ApiLayer>(
-            demuxer,
-            audio_decoder,
-            audio_resampler,
-            audio_output,
-            notifier,
-            generation,
-            video_decoder,
-            video_renderer,
-            video_sync);
+            demuxer, audio_decoder, audio_resampler, audio_output, notifier, generation,
+            video_decoder, video_renderer, video_sync);
         if (!api_layer->start()) {
             SEMI_LOG_ERROR("ApiLayer start failed");
             return false;
