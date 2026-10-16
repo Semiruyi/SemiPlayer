@@ -67,6 +67,7 @@ struct FrameSnapshot final {
     std::uint32_t generation = 0;
     std::int64_t pts_us = 0;
     bool has_pts = false;
+    Clock::time_point first_frame_at{};
 };
 
 class FrameObserver final {
@@ -103,8 +104,12 @@ public:
 
 private:
     void on_frame(const semi_video_frame_t& frame) noexcept {
+        const auto callback_at = Clock::now();
         {
             std::scoped_lock lock(mutex_);
+            if (count_ == 0 || generation_ != frame.generation) {
+                first_frame_at_ = callback_at;
+            }
             ++count_;
             generation_ = frame.generation;
             has_pts_ = frame.has_pts != 0U;
@@ -119,6 +124,7 @@ private:
             .generation = generation_,
             .pts_us = pts_us_,
             .has_pts = has_pts_,
+            .first_frame_at = first_frame_at_,
         };
     }
 
@@ -128,6 +134,7 @@ private:
     std::uint32_t generation_ = 0;
     std::int64_t pts_us_ = 0;
     bool has_pts_ = false;
+    Clock::time_point first_frame_at_{};
 };
 
 bool await_command(std::string_view name,
@@ -538,7 +545,9 @@ std::optional<BenchmarkRow> run_paused_seek(const Options& options, int run, dou
     row.scenario = "paused_seek";
     row.run = run;
     row.seek_fraction = seek_fraction;
-    row.seek_to_first_frame_ms = milliseconds_since(seek_start);
+    // Measure first delivery; the pause-settle check above is excluded.
+    row.seek_to_first_frame_ms = std::chrono::duration<double, std::milli>(
+        after_seek.first_frame_at - seek_start).count();
     row.target_pts_us = target_pts_us;
     row.first_frame_pts_us = after_seek.has_pts ? after_seek.pts_us : -1;
     if (after_seek.has_pts) {

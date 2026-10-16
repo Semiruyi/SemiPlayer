@@ -50,6 +50,10 @@ VideoSync telemetry `sync.csv`、隔离的 `logs/semi_player.log` 和 `summary.m
 
 ### Paused seek
 
+`seek_to_first_frame_ms` 从 Seek 命令下发前计时，到新 Generation 首帧回调入口结束。
+首帧之后仍等待 100 ms 检查暂停保持，但不计入此指标。修正前的历史结果包含
+该检查等待，不能直接作为首帧响应耗时或与修正后的结果比较。
+
 按 `open -> play -> pause -> seek -> 新 Generation 第一帧` 执行，在媒体的 25%、50%、
 75% 处测试。记录 Seek 恢复时间、首帧 PTS、目标与实际关键帧的差值，并确认 Seek
 后的短暂稳定窗口内没有继续交付视频帧。
