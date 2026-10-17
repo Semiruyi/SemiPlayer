@@ -7,6 +7,7 @@
 #include "domain/resource/video_packet_queue/video_packet_queue_events.hpp"
 #include "domain/resource/video_packet_queue/video_packet_source.hpp"
 #include "domain/worker/video_decoder/video_decoder.hpp"
+#include "domain/worker/video_decoder/video_decoder_statistics.hpp"
 #include "infrastructure/notifier/notifier.hpp"
 
 #include <condition_variable>
@@ -103,6 +104,10 @@ private:
                                bool append_end_of_input) noexcept;
     void handle_backend_failure(VideoDecoderBackendError error) noexcept;
     void notify_backend_failure(VideoDecoderBackendError error) noexcept;
+    void begin_statistics(const contracts::media::VideoCodecConfig& config) noexcept;
+    void record_statistics(std::uint64_t elapsed_ns,
+                           const contracts::video_decoder::DecodedVideoBatch* output) noexcept;
+    void publish_statistics(VideoDecoderStatisticsReason reason) noexcept;
 
     [[nodiscard]] bool transition_worker_locked(WorkerEvent event) noexcept;
     [[nodiscard]] bool transition_session_locked(SessionEvent event) noexcept;
@@ -119,6 +124,10 @@ private:
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
+    // Only accessed by the worker. Construct before starting that thread.
+    VideoDecoderStatistics statistics_;
+    std::int64_t statistics_started_ns_ = 0;
+    bool statistics_active_ = false;
     std::thread worker_;
     WorkerState worker_state_ = WorkerState::Starting;
     SessionState session_state_ = SessionState::Constructed;

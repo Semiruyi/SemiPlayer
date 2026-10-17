@@ -580,5 +580,116 @@ TEST(DefaultVideoDecoderTest, ReportsDecodeFailureAndRequiresUnconfigureForRecov
     EXPECT_TRUE(reconfigured.has_value());
 }
 
+TEST(DefaultVideoDecoderTest, ReportsConfigureIntervalWithDecodeAndDrainMetadata) {
+    auto dependencies = complete_dependencies();
+    auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
+    auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
+    auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
+    std::vector<VideoDecoderStatistics> reports;
+    auto subscription = dependencies.notifier->subscribe<VideoDecoderStatistics>(
+        [&](const VideoDecoderStatistics& report) { reports.push_back(report); });
+    backend->set_decode_output(1);
+    backend->set_drain_output(2);
+    source->push(make_packet_item(1, 0));
+    source->push(VideoPacketEndOfInput{.generation = 0});
+    auto decoder = make_decoder(std::move(dependencies));
+    contracts::media::VideoCodecConfig config;
+    config.common.codec_name = "h264";
+    config.coded_width = 1920;
+    config.coded_height = 1080;
+    ASSERT_TRUE(decoder->configure(config));
+    ASSERT_TRUE(eventually([&] { return sink->size() == 3; }));
+    decoder->unconfigure(); // Synchronizes report delivery with this thread.
+    decoder->unconfigure();
+    ASSERT_EQ(reports.size(), 1U);
+    const auto& report = reports.front();
+    EXPECT_EQ(report.codec, "h264");
+    EXPECT_EQ(report.coded_width, 1920U);
+    EXPECT_EQ(report.decode_calls, 1U);
+    EXPECT_EQ(report.drain_calls, 1U);
+    EXPECT_EQ(report.failed_calls, 0U);
+    EXPECT_EQ(report.output_frames, 2U);
+    EXPECT_EQ(report.output_format, contracts::media::VideoPixelFormat::Rgba8);
+    EXPECT_EQ(report.output_width, 2U);
+    EXPECT_EQ(report.output_height, 1U);
+    EXPECT_FALSE(report.format_changed);
+    EXPECT_GT(report.processing_total_ns, 0U);
+    EXPECT_LE(report.processing_max_ns, report.processing_total_ns);
+    EXPECT_LE(report.processing_total_ns, report.configured_duration_ns);
+    EXPECT_EQ(report.reason, VideoDecoderStatisticsReason::Unconfigure);
+    ASSERT_TRUE(decoder->configure(config));
+    decoder->unconfigure();
+    ASSERT_EQ(reports.size(), 2U);
+    EXPECT_EQ(reports.back().decode_calls, 0U);
+    EXPECT_EQ(reports.back().output_frames, 0U);
+    EXPECT_FALSE(reports.back().output_observed);
+}
+
+TEST(DefaultVideoDecoderTest, ReportsFailureOnceAndCountsFailedCall) {
+    auto dependencies = complete_dependencies();
+    auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
+    auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
+    std::vector<VideoDecoderStatistics> reports;
+    auto subscription = dependencies.notifier->subscribe<VideoDecoderStatistics>(
+        [&](const VideoDecoderStatistics& report) { reports.push_back(report); });
+    std::atomic_int failures = 0;
+    auto failure_subscription = dependencies.notifier->subscribe<VideoDecoderBackendFailure>(
+        [&](const VideoDecoderBackendFailure&) { ++failures; });
+    backend->set_decode_error({.operation = VideoDecoderBackendOperation::Decode, .message = "failure"});
+    source->push(make_packet_item(1, 0));
+    auto decoder = make_decoder(std::move(dependencies));
+    ASSERT_TRUE(decoder->configure({}));
+    ASSERT_TRUE(eventually([&] { return failures.load() == 1; }));
+    decoder->unconfigure();
+    decoder.reset();
+    ASSERT_EQ(reports.size(), 1U);
+    EXPECT_EQ(reports.front().reason, VideoDecoderStatisticsReason::BackendFailure);
+    EXPECT_EQ(reports.front().decode_calls, 1U);
+    EXPECT_EQ(reports.front().failed_calls, 1U);
+}
+
+TEST(DefaultVideoDecoderTest, ReportsOnDestructionButNotFailedConfigure) {
+    auto dependencies = complete_dependencies();
+    auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
+    std::vector<VideoDecoderStatistics> reports;
+    auto subscription = dependencies.notifier->subscribe<VideoDecoderStatistics>(
+        [&](const VideoDecoderStatistics& report) { reports.push_back(report); });
+    backend->set_configure_error({.message = "cannot configure"});
+    auto decoder = make_decoder(std::move(dependencies));
+    EXPECT_FALSE(decoder->configure({}));
+    decoder->unconfigure();
+    EXPECT_TRUE(reports.empty());
+    ASSERT_TRUE(decoder->configure({}));
+    decoder.reset();
+    ASSERT_EQ(reports.size(), 1U);
+    EXPECT_EQ(reports.front().reason, VideoDecoderStatisticsReason::Shutdown);
+}
+
+TEST(DefaultVideoDecoderTest, KeepsStatisticsAcrossSeekAndCountsDiscardedFrames) {
+    auto dependencies = complete_dependencies();
+    auto source = std::static_pointer_cast<FakeVideoPacketSource>(dependencies.source);
+    auto sink = std::static_pointer_cast<FakeVideoFrameSink>(dependencies.sink);
+    auto backend = std::static_pointer_cast<FakeVideoDecoderBackend>(dependencies.backend);
+    auto generation = dependencies.generation;
+    auto notifier = dependencies.notifier;
+    std::vector<VideoDecoderStatistics> reports;
+    auto subscription = notifier->subscribe<VideoDecoderStatistics>(
+        [&](const VideoDecoderStatistics& report) { reports.push_back(report); });
+    backend->set_decode_output(1, 100);
+    source->push(make_packet_item(1, 0));
+    auto decoder = make_decoder(std::move(dependencies));
+    ASSERT_TRUE(decoder->configure({}));
+    ASSERT_TRUE(eventually([&] { return sink->size() == 1; }));
+    generation->bump(1000);
+    source->push(make_packet_item(2, generation->current())); // Output PTS 100 is discarded.
+    ASSERT_TRUE(notifier->send(VideoQueueNotEmpty{}));
+    ASSERT_TRUE(eventually([&] { return backend->decode_calls.load() == 2; }));
+    decoder->unconfigure();
+    ASSERT_EQ(reports.size(), 1U);
+    EXPECT_EQ(reports.front().decode_calls, 2U);
+    EXPECT_EQ(reports.front().output_frames, 2U);
+    EXPECT_EQ(sink->size(), 1U);
+}
+
 } // namespace
 } // namespace semi::domain

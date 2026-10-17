@@ -1,0 +1,1 @@
+target_sources(semi_player_core PRIVATE performance_statistics.cpp)

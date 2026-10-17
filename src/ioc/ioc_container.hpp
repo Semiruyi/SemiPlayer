@@ -8,6 +8,7 @@ class ApiLayer;
 
 namespace semi::infra {
 class Notifier;
+class PerformanceStatistics;
 }
 
 namespace semi::domain {
@@ -69,6 +70,8 @@ private:
     ~IoCContainer() = default;
 
     bool assembled_ = false;
+    // Outlives all producers, including during member destruction.
+    std::shared_ptr<infra::PerformanceStatistics> performance_statistics_;
     std::shared_ptr<application::ApiLayer> api_layer_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<domain::Generation> generation_;

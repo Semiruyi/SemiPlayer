@@ -4,6 +4,11 @@
 #include "domain/worker/video_decoder/video_decoder_events.hpp"
 
 #include <cassert>
+#include <algorithm>
+#include <chrono>
+#include "infrastructure/log/log.hpp"
+
+#define SEMI_LOG_TAG "video_decoder"
 #include <exception>
 #include <optional>
 #include <string>
@@ -12,6 +17,16 @@
 
 namespace semi::domain {
 namespace {
+
+std::int64_t steady_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::int64_t unix_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
 void require_state_transition(bool succeeded) noexcept {
     assert(succeeded);
@@ -136,6 +151,9 @@ void DefaultVideoDecoder::worker_main() noexcept {
             lock.lock();
         }
     }
+    lock.unlock();
+    publish_statistics(VideoDecoderStatisticsReason::Shutdown);
+    lock.lock();
     require_state_transition(transition_worker_locked(WorkerEvent::Stopped));
     cv_.notify_all();
 }
@@ -193,6 +211,7 @@ void DefaultVideoDecoder::process_command(ConfigureCommand& command) noexcept {
         return;
     }
 
+    begin_statistics(command.config);
     std::lock_guard lock(mutex_);
     active_generation_ = generation_->current();
     seek_target_pts_us_ = generation_->seek_target_for(active_generation_);
@@ -215,6 +234,7 @@ void DefaultVideoDecoder::process_command(UnconfigureCommand& command) noexcept 
         require_state_transition(transition_session_locked(SessionEvent::UnconfigureRequested));
     }
 
+    publish_statistics(VideoDecoderStatisticsReason::Unconfigure);
     if (backend_) {
         backend_->unconfigure();
     }
@@ -388,6 +408,8 @@ void DefaultVideoDecoder::handle_video_packet(VideoPacket packet,
 
     assert(backend);
     std::expected<contracts::video_decoder::DecodedVideoBatch, VideoDecoderBackendError> decoded;
+    const auto started_ns = steady_ns();
+    if (statistics_active_) ++statistics_.decode_calls;
     try {
         decoded = backend->decode(packet.encoded());
     } catch (...) {
@@ -396,6 +418,7 @@ void DefaultVideoDecoder::handle_video_packet(VideoPacket packet,
                                               "video decoder backend decode threw an exception"));
     }
 
+    record_statistics(steady_ns() - started_ns, decoded ? &*decoded : nullptr);
     if (!decoded) {
         handle_backend_failure(std::move(decoded.error()));
         return;
@@ -417,6 +440,8 @@ void DefaultVideoDecoder::handle_end_of_input(Generation::Value generation) noex
 
     assert(backend);
     std::expected<contracts::video_decoder::DecodedVideoBatch, VideoDecoderBackendError> drained;
+    const auto started_ns = steady_ns();
+    if (statistics_active_) ++statistics_.drain_calls;
     try {
         drained = backend->drain();
     } catch (...) {
@@ -424,6 +449,7 @@ void DefaultVideoDecoder::handle_end_of_input(Generation::Value generation) noex
             VideoDecoderBackendOperation::Drain, "video decoder backend drain threw an exception"));
     }
 
+    record_statistics(steady_ns() - started_ns, drained ? &*drained : nullptr);
     if (!drained) {
         handle_backend_failure(std::move(drained.error()));
         return;
@@ -476,6 +502,7 @@ void DefaultVideoDecoder::handle_backend_failure(VideoDecoderBackendError error)
     }
 
     if (should_notify) {
+        publish_statistics(VideoDecoderStatisticsReason::BackendFailure);
         notify_backend_failure(std::move(error));
     }
 }
@@ -490,6 +517,60 @@ void DefaultVideoDecoder::notify_backend_failure(VideoDecoderBackendError error)
         (void)notifier_->send(event);
     } catch (...) {
         // Backend failure is already reflected in the session state.
+    }
+}
+
+void DefaultVideoDecoder::begin_statistics(const contracts::media::VideoCodecConfig& config) noexcept {
+    try {
+        statistics_ = VideoDecoderStatistics{};
+        statistics_.codec = config.common.codec_name;
+        statistics_.coded_width = config.coded_width;
+        statistics_.coded_height = config.coded_height;
+        statistics_.configured_at_unix_ms = unix_ms();
+        statistics_started_ns_ = steady_ns();
+        statistics_active_ = true;
+    } catch (...) {
+        statistics_active_ = false;
+        SEMI_LOG_WARN("cannot initialize decoder statistics");
+    }
+}
+
+void DefaultVideoDecoder::record_statistics(std::uint64_t elapsed_ns,
+    const contracts::video_decoder::DecodedVideoBatch* output) noexcept {
+    if (!statistics_active_) return;
+    statistics_.processing_total_ns += elapsed_ns;
+    statistics_.processing_max_ns = std::max(statistics_.processing_max_ns, elapsed_ns);
+    if (!output) { ++statistics_.failed_calls; return; }
+    statistics_.output_frames += output->size();
+    // Observe all decoded output, including frames discarded by accurate Seek
+    // or a concurrent generation change. They still consumed decoder work.
+    for (const auto& frame : *output) {
+        if (!frame.buffer) continue;
+        const auto format = frame.buffer->pixel_format();
+        const auto width = frame.buffer->width();
+        const auto height = frame.buffer->height();
+        if (!statistics_.output_observed) {
+            statistics_.output_observed = true;
+            statistics_.output_format = format;
+            statistics_.output_width = width;
+            statistics_.output_height = height;
+        } else if (format != statistics_.output_format || width != statistics_.output_width ||
+                   height != statistics_.output_height) {
+            statistics_.format_changed = true;
+        }
+    }
+}
+
+void DefaultVideoDecoder::publish_statistics(VideoDecoderStatisticsReason reason) noexcept {
+    if (!statistics_active_) return;
+    statistics_active_ = false; // Exactly once, including failure then unconfigure.
+    statistics_.reason = reason;
+    statistics_.finished_at_unix_ms = unix_ms();
+    statistics_.configured_duration_ns = steady_ns() - statistics_started_ns_;
+    try {
+        if (notifier_) (void)notifier_->send(statistics_);
+    } catch (...) {
+        SEMI_LOG_WARN("cannot submit decoder statistics");
     }
 }
 

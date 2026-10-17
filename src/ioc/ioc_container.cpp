@@ -23,6 +23,7 @@
 #include "infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
 #include "infrastructure/log/log.hpp"
+#include "infrastructure/statistics/performance_statistics.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
 #define SEMI_LOG_TAG "ioc"
@@ -42,6 +43,13 @@ bool IoCContainer::assemble() noexcept {
     SEMI_LOG_INFO("assemble begin");
     try {
         auto notifier = std::make_shared<infra::DefaultNotifier>();
+        std::shared_ptr<infra::PerformanceStatistics> performance_statistics;
+        try {
+            performance_statistics = std::make_shared<infra::PerformanceStatistics>(notifier);
+        } catch (...) {
+            // Optional diagnostics must not prevent player initialization.
+            SEMI_LOG_WARN("performance statistics unavailable");
+        }
         auto audio_realtime_notifier =
             std::make_shared<contracts::audio_output::AudioOutputRealTimeNotifier>();
         auto generation = std::make_shared<domain::Generation>(notifier);
@@ -96,6 +104,7 @@ bool IoCContainer::assemble() noexcept {
             SEMI_LOG_ERROR("ApiLayer start failed");
             return false;
         }
+        performance_statistics_ = std::move(performance_statistics);
         notifier_ = std::move(notifier);
         generation_ = std::move(generation);
         audio_packet_queue_ = std::move(audio_packet_queue);
@@ -148,6 +157,8 @@ bool IoCContainer::dispose() noexcept {
     decoded_audio_frame_store_.reset();
     audio_packet_queue_.reset();
     generation_.reset();
+    // Workers have submitted their final snapshots; drain the file writer.
+    performance_statistics_.reset();
     notifier_.reset();
     assembled_ = false;
     SEMI_LOG_INFO("dispose done");
