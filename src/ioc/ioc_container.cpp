@@ -23,6 +23,7 @@
 #include "infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
 #include "infrastructure/log/log.hpp"
+#include "infrastructure/gpu/gpu_device_manager.hpp"
 #include "infrastructure/statistics/performance_statistics.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
@@ -61,12 +62,13 @@ bool IoCContainer::assemble() noexcept {
         auto playback_audio_frame_store = std::make_shared<domain::AudioFrameStore>(notifier);
 
         auto demuxer_backend = std::make_shared<infra::ffmpeg::demuxer::FfmpegDemuxerBackend>();
+        auto gpu_devices = std::make_shared<infra::gpu::GpuDeviceManager>();
         auto audio_decoder_backend =
             std::make_shared<infra::ffmpeg::audio_decoder::FfmpegAudioDecoderBackend>();
         auto audio_resampler_backend =
             std::make_shared<infra::ffmpeg::audio_resampler::FfmpegAudioResamplerBackend>();
         auto video_decoder_backend =
-            std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>();
+            std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>(gpu_devices);
         auto video_renderer_backend =
             std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>();
 #if defined(SEMI_USE_NULL_AUDIO_OUTPUT)
@@ -105,6 +107,7 @@ bool IoCContainer::assemble() noexcept {
             return false;
         }
         performance_statistics_ = std::move(performance_statistics);
+        gpu_devices_ = std::move(gpu_devices);
         notifier_ = std::move(notifier);
         generation_ = std::move(generation);
         audio_packet_queue_ = std::move(audio_packet_queue);
@@ -157,6 +160,7 @@ bool IoCContainer::dispose() noexcept {
     decoded_audio_frame_store_.reset();
     audio_packet_queue_.reset();
     generation_.reset();
+    gpu_devices_.reset();
     // Workers have submitted their final snapshots; drain the file writer.
     performance_statistics_.reset();
     notifier_.reset();

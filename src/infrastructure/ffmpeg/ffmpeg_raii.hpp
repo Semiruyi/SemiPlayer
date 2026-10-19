@@ -3,6 +3,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/buffer.h>
 }
 
 #include <memory>
@@ -33,9 +34,16 @@ struct AvFormatInputContextDeleter {
     }
 };
 
+struct AvBufferRefDeleter {
+    void operator()(AVBufferRef* reference) const noexcept {
+        av_buffer_unref(&reference);
+    }
+};
+
 using AvCodecContextPtr = std::unique_ptr<AVCodecContext, AvCodecContextDeleter>;
 using AvFramePtr = std::unique_ptr<AVFrame, AvFrameDeleter>;
 using AvPacketPtr = std::unique_ptr<AVPacket, AvPacketDeleter>;
 using AvFormatInputContextPtr = std::unique_ptr<AVFormatContext, AvFormatInputContextDeleter>;
+using AvBufferRefPtr = std::unique_ptr<AVBufferRef, AvBufferRefDeleter>;
 
 } // namespace semi::infra::ffmpeg

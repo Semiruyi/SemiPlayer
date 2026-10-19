@@ -1,0 +1,1 @@
+target_sources(semi_player_tests PRIVATE gpu_device_manager_test.cpp)

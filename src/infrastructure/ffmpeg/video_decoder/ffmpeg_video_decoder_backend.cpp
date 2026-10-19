@@ -176,13 +176,19 @@ send_packet_and_collect_frames(AVCodecContext& context,
 } // namespace
 
 struct FfmpegVideoDecoderBackend::Impl {
+    // Retained for the next hardware-decoding stage; software configure does
+    // not acquire a device or require a functioning GPU.
+    std::shared_ptr<gpu::GpuDeviceManager> gpu_devices;
     AvCodecContextPtr context;
     AvPacketPtr packet;
     AvFramePtr frame;
     bool draining = false;
 };
 
-FfmpegVideoDecoderBackend::FfmpegVideoDecoderBackend() : impl_(std::make_unique<Impl>()) {}
+FfmpegVideoDecoderBackend::FfmpegVideoDecoderBackend(
+    std::shared_ptr<gpu::GpuDeviceManager> gpu_devices) : impl_(std::make_unique<Impl>()) {
+    impl_->gpu_devices = std::move(gpu_devices);
+}
 
 FfmpegVideoDecoderBackend::~FfmpegVideoDecoderBackend() {
     unconfigure();

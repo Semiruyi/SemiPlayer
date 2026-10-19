@@ -1,6 +1,6 @@
 # GPU 设备管理模块设计
 
-> 状态：待 review 的设计草案，尚未实现。
+> 状态：第一阶段已实现，硬解和 GPU 颜色转换尚未启用。
 > 位于 infrastructure/gpu，创建、复用原生 GPU 设备，不依赖 FFmpeg。
 > 第一版只实现 D3D11；FFmpeg 桥接与设备层分开。domain 和 contracts 不新增 GPU 设备接口。
 
@@ -62,7 +62,7 @@ src/infrastructure/
 
 | 模块 | 依赖 |
 |---|---|
-| GPU 设备管理 | D3D11 设备实现、普通日志、标准库同步 |
+| GPU 设备管理 | 当前平台的设备实现、普通日志、标准库同步 |
 | D3D11 设备实现 | Windows D3D11/DXGI、原生对象 RAII |
 | FFmpeg 桥接 | GPU 设备对象、libavutil |
 | 后续 GPU 转换 | GPU 设备对象、D3D11 |
@@ -76,15 +76,10 @@ Windows 原生类型只在对应基础设施头文件中出现，不进入 domai
 
 ## 对外接口（基础设施内部）
 
-以下为职责草案，省略构造、析构、PImpl 与具体 RAII 类型声明：
+以下为当前主要接口，省略构造、析构和 PImpl 声明：
 
 ```cpp
-enum class GpuDeviceOperation : std::uint8_t {
-    Create,
-};
-
 struct GpuDeviceError {
-    GpuDeviceOperation operation;
     std::int32_t native_code;  // 当前 D3D11 实现的 HRESULT
     std::string message;
 };
@@ -98,12 +93,16 @@ public:
 
 class D3D11Device final {
 public:
+    using ContextGuard = std::unique_lock<std::recursive_mutex>;
     // 借用视图；持有 D3D11Device 才能保持其有效。
     [[nodiscard]] ID3D11Device* native_device() const noexcept;
     [[nodiscard]] ID3D11DeviceContext* native_context() const noexcept;
 
     // 同一设备的所有 context 消费者遵守这一访问约定。
     [[nodiscard]] ContextGuard lock_context();
+
+    // 仅供原生桥接回调接入；回调存活期间必须持有设备所有者。
+    [[nodiscard]] std::recursive_mutex& context_mutex() noexcept;
 };
 ```
 
@@ -116,8 +115,8 @@ public:
 不是将原生借用指针转交给调用者释放。
 native_* 仅为基础设施原生接入使用，不允许消费者释放借用引用或改变同步约定。
 
-ContextGuard 是作用域锁，析构时解锁；具体类型在实现时确定。
-FFmpeg 回调还需要对应的内部 lock/unlock 接入，二者必须操作同一把递归锁，
+ContextGuard 是作用域锁，析构时解锁。
+FFmpeg 回调通过 context_mutex() 接入，二者操作同一把递归锁，
 不要求普通消费者手动配对 lock/unlock。
 
 ## 创建流程与缓存策略
@@ -135,8 +134,8 @@ acquire_d3d11()
 
 第一版缓存一个默认硬件设备，不增加多显卡评分、显卡切换或 WARP 软件设备兜底。
 原生创建按视频使用需求设置创建参数，但不枚举每一种编码格式的支持矩阵。
-创建参数与 feature level 的具体选择留到实现时依据 MSYS2 环境验证；
-不得为后端启用单线程假设，因为设备将跨解码和转换线程共享。
+当前设置 VIDEO_SUPPORT 和 BGRA_SUPPORT，尝试 feature level 11.0、10.1、10.0。
+不设置 SINGLETHREADED，因为设备将跨解码和转换线程共享；不要求调试层或创建 WARP 设备。
 
 默认适配器不意味着性能最好的显卡。失败不缓存，下次显式请求可以重试。
 消费者只在配置等低频路径请求设备，不能逐帧重试创建。
@@ -208,6 +207,8 @@ AvBufferRefPtr 放在 ffmpeg_raii.hpp，使用 av_buffer_unref 释放。
 ## 生命周期与所有权
 
 IoC 每次装配创建一个管理器，构造不创建设备，首次 acquire_d3d11 才触发创建。
+IoC 不按平台决定管理器是否存在；平台支持判断封装在设备管理模块内部。
+当前只提供按需获取 D3D11 的能力，尚未实现所有 GPU API 的统一枚举和自动选择。
 成功设备跨 Open/Close 复用，Seek 不清理设备缓存。
 不增加播放相关的 configure/unconfigure/start/stop 接口。
 
@@ -257,6 +258,8 @@ GPU RGBA 如何交付宿主，也属于后续呈现链路，不由设备管理�
 
 遵循[错误与结果约定](../../error_convention.md)：
 设备管理同步失败使用内部 std::expected，保留原生 HRESULT 和消息。
+不支持 D3D11 的平台在模块内部返回不支持错误，不调用原生 API；此时 native_code=0，
+表示没有原生错误码，不代表成功，成功与否始终由 expected 表达。
 FFmpeg 桥接保留 FFmpeg 错误码，在消费后端边界整理诊断，不与 HRESULT 混用。
 
 实际创建尝试记录 API、结果、原始错误码；缓存命中不逐次记录。
@@ -288,8 +291,19 @@ FFmpeg 桥接保留 FFmpeg 错误码，在消费后端边界整理诊断，不�
 - 现有软件播放、IoC 退出及装配失败清理不受影响。
 
 不为测试预先增加公共工厂接口，必要的失败注入限制在模块内部。
-构建使用 MSYS2 UCRT64：GPU 模块在 Windows 下按实际调用链接 D3D11/DXGI，
-FFmpeg 桥接沿用 libavutil。非 Windows 构建不编译 D3D11 实现，由 IoC 保留软件路径。
+构建使用 MSYS2 UCRT64：GPU 模块在 Windows 下链接 d3d11，当前没有直接调用 DXGI 函数，
+FFmpeg 桥接沿用 libavutil。管理器在所有平台编译和装配；只有 D3D11 实现与对应桥接按 Windows 条件编译。
+非 Windows 平台请求 D3D11 时由管理器返回不支持，后端据此保留软件路径。
+
+### 当前验证结果
+
+MSYS2 UCRT64 Release 构建通过，完整回归 304/304 通过，其中新增设备与桥接测试 9 项，
+本机 GPU 测试均实际执行、没有跳过。覆盖设备复用、并发首次获取、设备所有权、
+桥接设备一致性、统一递归锁、帧池和 GPU 帧引用，以及真实 NV12 硬件帧回读。
+现有 IoC 与 C ABI 播放回归通过。
+
+已覆盖空设备参数失败；设备创建失败、内存耗尽和驱动导致的桥接初始化失败未做确定性故障注入。
+非 Windows 路径尚未在本次环境中构建验证。
 
 ## 后续步骤
 

@@ -5,3 +5,4 @@ add_subdirectory(ffmpeg)
 add_subdirectory(audio_output)
 
 add_subdirectory(statistics)
+add_subdirectory(gpu)

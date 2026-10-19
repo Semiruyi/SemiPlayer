@@ -27,6 +27,8 @@ class VideoPacketQueue;
 class VideoSync;
 } // namespace semi::domain
 
+namespace semi::infra::gpu { class GpuDeviceManager; }
+
 namespace semi::ioc {
 
 // 模块体系装配器（见 docs/modules/ioc_container/ioc_container.md）。
@@ -72,6 +74,8 @@ private:
     bool assembled_ = false;
     // Outlives all producers, including during member destruction.
     std::shared_ptr<infra::PerformanceStatistics> performance_statistics_;
+    // Native devices outlive their consuming backends and queued frames.
+    std::shared_ptr<infra::gpu::GpuDeviceManager> gpu_devices_;
     std::shared_ptr<application::ApiLayer> api_layer_;
     std::shared_ptr<infra::Notifier> notifier_;
     std::shared_ptr<domain::Generation> generation_;
