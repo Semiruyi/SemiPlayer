@@ -31,6 +31,7 @@ public:
                 .stride_bytes = strides_[index],
             });
         }
+        resource_.planes = views_;
     }
 
     [[nodiscard]] VideoPixelFormat pixel_format() const noexcept override {
@@ -45,15 +46,8 @@ public:
         return height_;
     }
 
-    [[nodiscard]] std::size_t plane_count() const noexcept override {
-        return views_.size();
-    }
-
-    [[nodiscard]] VideoPlaneView plane(std::size_t index) const noexcept override {
-        if (index >= views_.size()) {
-            return {};
-        }
-        return views_[index];
+    [[nodiscard]] const contracts::media::VideoFrameResource& resource() const noexcept override {
+        return resource_;
     }
 
 private:
@@ -63,6 +57,7 @@ private:
     std::vector<std::vector<std::byte>> planes_;
     std::vector<std::uint32_t> strides_;
     std::vector<VideoPlaneView> views_;
+    contracts::media::CpuVideoFrameResource resource_;
 };
 
 TEST(DecodedAudioTest, RepresentsPlanarPcmWithOptionalTimestamp) {
@@ -121,11 +116,14 @@ TEST(DecodedVideoTest, ExposesFormatPlanesAndTimestampThroughOwnedBuffer) {
     };
 
     ASSERT_NE(decoded.buffer, nullptr);
+    const auto* cpu =
+        contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*decoded.buffer);
+    ASSERT_NE(cpu, nullptr);
     EXPECT_EQ(decoded.buffer->width(), 2U);
     EXPECT_EQ(decoded.buffer->height(), 1U);
     EXPECT_EQ(decoded.buffer->pixel_format(), VideoPixelFormat::Rgba8);
-    ASSERT_EQ(decoded.buffer->plane_count(), 1U);
-    const auto plane = decoded.buffer->plane(0);
+    ASSERT_EQ(cpu->plane_count(), 1U);
+    const auto plane = cpu->plane(0);
     EXPECT_EQ(plane.bytes().size(), 8U);
     EXPECT_EQ(plane.stride_bytes, 8U);
     EXPECT_EQ(plane.bytes().front(), std::byte{0x01});
@@ -142,7 +140,10 @@ TEST(DecodedVideoTest, BufferOwnerKeepsPlaneDataAlive) {
     EXPECT_EQ(buffer, nullptr);
 
     ASSERT_NE(decoded.buffer, nullptr);
-    const auto plane = decoded.buffer->plane(0);
+    const auto* cpu =
+        contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*decoded.buffer);
+    ASSERT_NE(cpu, nullptr);
+    const auto plane = cpu->plane(0);
     ASSERT_EQ(plane.bytes().size(), 2U);
     EXPECT_EQ(plane.bytes().front(), std::byte{0x11});
 }
@@ -152,6 +153,18 @@ TEST(DecodedVideoTest, DefaultsToAnUnknownEmptyFormatWithoutTimestamp) {
 
     EXPECT_EQ(decoded.buffer, nullptr);
     EXPECT_FALSE(decoded.pts_us.has_value());
+}
+
+TEST(VideoFrameResourceTest, CheckedQueryReturnsNullForUnrelatedResourceTypes) {
+    struct OtherResource final : VideoFrameResource {};
+    FakeVideoFrameBuffer buffer(VideoPixelFormat::Rgba8, 1, 1,
+                               {{std::byte{1}, std::byte{2}, std::byte{3}, std::byte{255}}}, {4});
+    const auto* cpu = resource_as<CpuVideoFrameResource>(buffer);
+    ASSERT_NE(cpu, nullptr);
+    EXPECT_EQ(resource_as<OtherResource>(buffer), nullptr);
+    EXPECT_EQ(resource_as<VideoFrameResource>(buffer), &buffer.resource());
+    EXPECT_EQ(cpu, resource_as<CpuVideoFrameResource>(buffer));
+    EXPECT_EQ(cpu->plane(99).data, nullptr);
 }
 
 } // namespace

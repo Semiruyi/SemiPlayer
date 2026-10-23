@@ -48,24 +48,14 @@ public:
     [[nodiscard]] std::uint32_t height() const noexcept override {
         return 1;
     }
-    [[nodiscard]] std::size_t plane_count() const noexcept override {
-        return 1;
-    }
-
-    [[nodiscard]] contracts::media::VideoPlaneView
-    plane(std::size_t index) const noexcept override {
-        if (index != 0) {
-            return {};
-        }
-        return contracts::media::VideoPlaneView{
-            .data = bytes_.data(),
-            .size_bytes = bytes_.size(),
-            .stride_bytes = 4,
-        };
+    [[nodiscard]] const contracts::media::VideoFrameResource& resource() const noexcept override {
+        return resource_;
     }
 
 private:
     std::array<std::byte, 4> bytes_;
+    contracts::media::VideoPlaneView view_{bytes_.data(), bytes_.size(), 4};
+    contracts::media::CpuVideoFrameResource resource_{std::span(&view_, 1)};
 };
 
 VideoFrame make_video_frame(std::uint8_t marker, Generation::Value generation) {
@@ -77,7 +67,7 @@ VideoFrame make_video_frame(std::uint8_t marker, Generation::Value generation) {
 }
 
 std::uint8_t input_marker(const contracts::media::DecodedVideo& decoded) {
-    return std::to_integer<std::uint8_t>(decoded.buffer->plane(0).bytes().front());
+    return std::to_integer<std::uint8_t>(contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*decoded.buffer)->plane(0).bytes().front());
 }
 
 class FakeVideoRendererBackend final : public VideoRendererBackend {

@@ -71,8 +71,8 @@ FfmpegVideoFrameBuffer::FfmpegVideoFrameBuffer(AvFramePtr frame) noexcept
     pixel_format_ = *media_format;
     width_ = width;
     height_ = height;
-    plane_count_ = static_cast<std::size_t>(native_plane_count);
     planes_ = planes;
+    resource_.planes = std::span(planes_).first(static_cast<std::size_t>(native_plane_count));
 }
 
 std::optional<VideoPixelFormat>
@@ -112,15 +112,8 @@ std::uint32_t FfmpegVideoFrameBuffer::height() const noexcept {
     return height_;
 }
 
-std::size_t FfmpegVideoFrameBuffer::plane_count() const noexcept {
-    return plane_count_;
-}
-
-contracts::media::VideoPlaneView FfmpegVideoFrameBuffer::plane(std::size_t index) const noexcept {
-    if (index >= plane_count_) {
-        return {};
-    }
-    return planes_[index];
+const contracts::media::VideoFrameResource& FfmpegVideoFrameBuffer::resource() const noexcept {
+    return resource_;
 }
 
 } // namespace semi::infra::ffmpeg::video_decoder

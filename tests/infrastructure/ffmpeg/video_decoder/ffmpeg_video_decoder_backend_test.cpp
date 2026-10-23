@@ -34,19 +34,22 @@ TEST(FfmpegVideoFrameBufferTest, ExposesNativePlanesAndOwnsTheAvFrame) {
     ASSERT_EQ(av_frame_make_writable(frame.get()), 0);
 
     auto buffer = std::make_unique<FfmpegVideoFrameBuffer>(std::move(frame));
+    const auto* cpu =
+        contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*buffer);
+    ASSERT_NE(cpu, nullptr);
 
     EXPECT_EQ(buffer->pixel_format(), VideoPixelFormat::Yuv420p);
     EXPECT_EQ(buffer->width(), 320U);
     EXPECT_EQ(buffer->height(), 180U);
-    ASSERT_EQ(buffer->plane_count(), 3U);
-    for (std::size_t index = 0; index < buffer->plane_count(); ++index) {
-        const auto plane = buffer->plane(index);
+    ASSERT_EQ(cpu->plane_count(), 3U);
+    for (std::size_t index = 0; index < cpu->plane_count(); ++index) {
+        const auto plane = cpu->plane(index);
         EXPECT_NE(plane.data, nullptr);
         EXPECT_GT(plane.stride_bytes, 0U);
         EXPECT_EQ(plane.size_bytes,
                   static_cast<std::size_t>(plane.stride_bytes) * (index == 0 ? 180U : 90U));
     }
-    EXPECT_EQ(buffer->plane(3).size_bytes, 0U);
+    EXPECT_EQ(cpu->plane(3).size_bytes, 0U);
 }
 
 TEST(FfmpegVideoFrameBufferTest, ExposesYuv420p10lePlanes) {
@@ -59,15 +62,18 @@ TEST(FfmpegVideoFrameBufferTest, ExposesYuv420p10lePlanes) {
     ASSERT_EQ(av_frame_make_writable(frame.get()), 0);
 
     auto buffer = std::make_unique<FfmpegVideoFrameBuffer>(std::move(frame));
+    const auto* cpu =
+        contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*buffer);
+    ASSERT_NE(cpu, nullptr);
 
     EXPECT_EQ(buffer->pixel_format(), VideoPixelFormat::Yuv420p10le);
     EXPECT_EQ(buffer->width(), 4U);
     EXPECT_EQ(buffer->height(), 2U);
-    ASSERT_EQ(buffer->plane_count(), 3U);
-    EXPECT_EQ(buffer->plane(0).size_bytes,
-              static_cast<std::size_t>(buffer->plane(0).stride_bytes) * 2U);
-    EXPECT_EQ(buffer->plane(1).size_bytes, static_cast<std::size_t>(buffer->plane(1).stride_bytes));
-    EXPECT_EQ(buffer->plane(2).size_bytes, static_cast<std::size_t>(buffer->plane(2).stride_bytes));
+    ASSERT_EQ(cpu->plane_count(), 3U);
+    EXPECT_EQ(cpu->plane(0).size_bytes,
+              static_cast<std::size_t>(cpu->plane(0).stride_bytes) * 2U);
+    EXPECT_EQ(cpu->plane(1).size_bytes, static_cast<std::size_t>(cpu->plane(1).stride_bytes));
+    EXPECT_EQ(cpu->plane(2).size_bytes, static_cast<std::size_t>(cpu->plane(2).stride_bytes));
 }
 
 TEST(FfmpegVideoDecoderBackendTest, RejectsDecodeBeforeConfiguration) {
@@ -123,18 +129,21 @@ TEST(FfmpegVideoDecoderBackendTest, DecodesSampleVideoAndKeepsFrameAfterUnconfig
     }
 
     ASSERT_NE(retained_buffer, nullptr);
+    const auto* cpu =
+        contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*retained_buffer);
+    ASSERT_NE(cpu, nullptr);
     EXPECT_EQ(retained_buffer->pixel_format(), VideoPixelFormat::Yuv420p);
     EXPECT_EQ(retained_buffer->width(), 320U);
     EXPECT_EQ(retained_buffer->height(), 180U);
-    ASSERT_EQ(retained_buffer->plane_count(), 3U);
-    EXPECT_NE(retained_buffer->plane(0).data, nullptr);
-    EXPECT_GT(retained_buffer->plane(0).size_bytes, 0U);
+    ASSERT_EQ(cpu->plane_count(), 3U);
+    EXPECT_NE(cpu->plane(0).data, nullptr);
+    EXPECT_GT(cpu->plane(0).size_bytes, 0U);
     EXPECT_TRUE(retained_pts.has_value());
 
-    const auto first_byte = retained_buffer->plane(0).bytes().front();
+    const auto first_byte = cpu->plane(0).bytes().front();
     backend.unconfigure();
 
-    EXPECT_EQ(retained_buffer->plane(0).bytes().front(), first_byte);
+    EXPECT_EQ(cpu->plane(0).bytes().front(), first_byte);
 }
 
 TEST(FfmpegVideoDecoderBackendTest, ResetMakesTheCodecReusableAfterDrain) {

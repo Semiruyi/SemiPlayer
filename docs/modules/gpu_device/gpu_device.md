@@ -6,7 +6,7 @@
 
 ## Context
 
-当前 FFmpeg 视频解码后端使用软件解码，VideoFrameBuffer 暴露 CPU plane，
+当前 FFmpeg 视频解码后端使用软件解码，VideoFrameBuffer 通过 CPU 资源描述提供 plane，
 转换后端通过 swscale 输出 CPU RGBA。
 
 后续明确分阶段实现：
@@ -307,7 +307,7 @@ MSYS2 UCRT64 Release 构建通过，完整回归 304/304 通过，其中新增�
 
 ## 后续步骤
 
-- 调整帧资源表达，分离 CPU plane 访问与 GPU 资源视图。
+- 帧资源表达已拆分 CPU 与 GPU 描述，见[视频帧资源描述](../video_frame/video_frame.md)。
 - 接入硬解配置、格式协商和软解回退。
 - 在 CPU 消费端按需回读，让精准 Seek 的中间帧在回读前被筛掉。
 - 接入复用同一原生设备的 GPU YUV → RGBA 转换后端。

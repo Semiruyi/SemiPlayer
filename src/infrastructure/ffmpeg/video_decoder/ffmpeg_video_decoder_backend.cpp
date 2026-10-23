@@ -86,8 +86,10 @@ make_frame_buffer(AvFramePtr frame, VideoDecoderBackendOperation operation) {
 
     try {
         auto buffer = std::make_unique<FfmpegVideoFrameBuffer>(std::move(frame));
+        const auto* cpu =
+            contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*buffer);
         if (buffer->pixel_format() == contracts::media::VideoPixelFormat::Unknown ||
-            buffer->width() == 0 || buffer->height() == 0 || buffer->plane_count() == 0) {
+            buffer->width() == 0 || buffer->height() == 0 || !cpu || cpu->planes.empty()) {
             return std::unexpected(
                 make_state_error(operation, "FFmpeg video frame has invalid planes"));
         }

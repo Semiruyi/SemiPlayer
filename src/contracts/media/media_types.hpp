@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -62,9 +63,29 @@ struct VideoPlaneView {
     }
 };
 
-// Backend-neutral ownership and access boundary for one decoded video frame.
-// Implementations may own copied memory or retain a reference-counted native
-// buffer. The domain only observes immutable frame metadata and plane views.
+// Extensible, read-only resource description. All views borrow storage from
+// their VideoFrameBuffer owner; querying a resource never transfers or maps it.
+class VideoFrameResource {
+public:
+    virtual ~VideoFrameResource() = default;
+};
+
+struct CpuVideoFrameResource final : VideoFrameResource {
+    explicit CpuVideoFrameResource(std::span<const VideoPlaneView> views = {}) noexcept
+        : planes(views) {}
+
+    std::span<const VideoPlaneView> planes;
+
+    [[nodiscard]] std::size_t plane_count() const noexcept {
+        return planes.size();
+    }
+    [[nodiscard]] VideoPlaneView plane(std::size_t index) const noexcept {
+        return index < planes.size() ? planes[index] : VideoPlaneView{};
+    }
+};
+
+// Owns one frame's backing resources. Domain code observes image metadata and
+// transports this owner without interpreting platform-specific descriptions.
 class VideoFrameBuffer {
 public:
     virtual ~VideoFrameBuffer() = default;
@@ -72,15 +93,19 @@ public:
     [[nodiscard]] virtual VideoPixelFormat pixel_format() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
     [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
-    [[nodiscard]] virtual std::size_t plane_count() const noexcept = 0;
-    [[nodiscard]] virtual VideoPlaneView plane(std::size_t index) const noexcept = 0;
+    [[nodiscard]] virtual const VideoFrameResource& resource() const noexcept = 0;
 
 protected:
     VideoFrameBuffer() = default;
 };
 
-// Ownership-transferred decoded video. The unique buffer owner keeps all plane
-// data alive while the consumer uses the immutable views exposed by the buffer.
+template <std::derived_from<VideoFrameResource> T>
+[[nodiscard]] const T* resource_as(const VideoFrameBuffer& frame) noexcept {
+    return dynamic_cast<const T*>(&frame.resource());
+}
+
+// Ownership-transferred decoded video. The unique buffer owner keeps the
+// resource description, backing storage and necessary device references alive.
 struct DecodedVideo {
     std::unique_ptr<const VideoFrameBuffer> buffer;
     std::optional<std::int64_t> pts_us;

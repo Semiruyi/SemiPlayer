@@ -41,20 +41,8 @@ public:
     [[nodiscard]] std::uint32_t height() const noexcept override {
         return height_;
     }
-    [[nodiscard]] std::size_t plane_count() const noexcept override {
-        return 1;
-    }
-
-    [[nodiscard]] contracts::media::VideoPlaneView
-    plane(std::size_t index) const noexcept override {
-        if (index != 0) {
-            return {};
-        }
-        return contracts::media::VideoPlaneView{
-            .data = bytes_.data(),
-            .size_bytes = bytes_.size(),
-            .stride_bytes = stride_,
-        };
+    [[nodiscard]] const contracts::media::VideoFrameResource& resource() const noexcept override {
+        return resource_;
     }
 
 private:
@@ -62,6 +50,8 @@ private:
     std::uint32_t height_ = 0;
     std::uint32_t stride_ = 0;
     std::vector<std::byte> bytes_;
+    contracts::media::VideoPlaneView view_{bytes_.data(), bytes_.size(), stride_};
+    contracts::media::CpuVideoFrameResource resource_{std::span(&view_, 1)};
 };
 
 DecodedVideo make_rgba_video(std::vector<std::byte> bytes,
@@ -193,6 +183,23 @@ TEST(FfmpegVideoRendererBackendTest, RejectsTruncatedInputPlane) {
 
     ASSERT_FALSE(rendered.has_value());
     EXPECT_EQ(rendered.error().operation, VideoRendererBackendOperation::Render);
+}
+
+TEST(FfmpegVideoRendererBackendTest, RejectsUnknownResourceTypeWithoutInterpretingItAsMemory) {
+    class UnknownFrame final : public contracts::media::VideoFrameBuffer {
+    public:
+        VideoPixelFormat pixel_format() const noexcept override { return VideoPixelFormat::Rgba8; }
+        std::uint32_t width() const noexcept override { return 1; }
+        std::uint32_t height() const noexcept override { return 1; }
+        const contracts::media::VideoFrameResource& resource() const noexcept override { return resource_; }
+    private:
+        contracts::media::VideoFrameResource resource_;
+    };
+    FfmpegVideoRendererBackend backend;
+    ASSERT_TRUE(backend.configure({}).has_value());
+    const auto rendered = backend.render(DecodedVideo{.buffer = std::make_unique<UnknownFrame>(), .pts_us = {}});
+    ASSERT_FALSE(rendered.has_value());
+    EXPECT_NE(rendered.error().message.find("CPU"), std::string::npos);
 }
 
 TEST(FfmpegVideoRendererBackendTest, ResetKeepsBackendReusable) {

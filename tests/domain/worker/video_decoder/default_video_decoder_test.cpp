@@ -54,24 +54,14 @@ public:
         return 1;
     }
 
-    [[nodiscard]] std::size_t plane_count() const noexcept override {
-        return 1;
-    }
-
-    [[nodiscard]] contracts::media::VideoPlaneView
-    plane(std::size_t index) const noexcept override {
-        if (index != 0) {
-            return {};
-        }
-        return contracts::media::VideoPlaneView{
-            .data = bytes_.data(),
-            .size_bytes = bytes_.size(),
-            .stride_bytes = 8,
-        };
+    [[nodiscard]] const contracts::media::VideoFrameResource& resource() const noexcept override {
+        return resource_;
     }
 
 private:
     std::array<std::byte, 4> bytes_;
+    contracts::media::VideoPlaneView view_{bytes_.data(), bytes_.size(), 8};
+    contracts::media::CpuVideoFrameResource resource_{std::span(&view_, 1)};
 };
 
 contracts::media::DecodedVideo make_decoded_video(std::uint8_t marker,

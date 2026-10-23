@@ -144,21 +144,21 @@ bool valid_dimension(std::uint32_t value) noexcept {
     return value > 0 && value <= static_cast<std::uint32_t>(std::numeric_limits<int>::max());
 }
 
-bool valid_source(const DecodedVideo& input,
+bool valid_source(const contracts::media::CpuVideoFrameResource& input,
                   VideoPixelFormat source_format,
                   std::uint32_t width,
                   std::uint32_t height) noexcept {
-    if (!input.buffer || !valid_dimension(width) || !valid_dimension(height)) {
+    if (!valid_dimension(width) || !valid_dimension(height)) {
         return false;
     }
 
     const auto expected_planes = expected_plane_count(source_format);
-    if (expected_planes == 0 || input.buffer->plane_count() != expected_planes) {
+    if (expected_planes == 0 || input.plane_count() != expected_planes) {
         return false;
     }
 
     for (std::size_t index = 0; index < expected_planes; ++index) {
-        const auto plane = input.buffer->plane(index);
+        const auto plane = input.plane(index);
         const auto row_bytes = plane_width(source_format, width, index);
         const auto rows = plane_height(source_format, height, index);
         if (row_bytes == 0 || rows == 0 || plane.data == nullptr ||
@@ -223,6 +223,12 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
                                                 "decoded video frame has no buffer"));
     }
 
+    const auto* cpu = contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*input.buffer);
+    if (!cpu) {
+        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                "video scaler requires CPU frame resources"));
+    }
+
     const auto source_format = input.buffer->pixel_format();
     const auto source_native = native_pixel_format(source_format);
     if (!source_native) {
@@ -232,7 +238,7 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
 
     const auto source_width = input.buffer->width();
     const auto source_height = input.buffer->height();
-    if (!valid_source(input, source_format, source_width, source_height)) {
+    if (!valid_source(*cpu, source_format, source_width, source_height)) {
         return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
                                                 "decoded video planes are invalid"));
     }
@@ -303,9 +309,9 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
 
         std::array<const std::uint8_t*, 4> source_data{};
         std::array<int, 4> source_linesize{};
-        const auto plane_count = input.buffer->plane_count();
+        const auto plane_count = cpu->plane_count();
         for (std::size_t index = 0; index < plane_count; ++index) {
-            const auto plane = input.buffer->plane(index);
+            const auto plane = cpu->plane(index);
             source_data[index] = reinterpret_cast<const std::uint8_t*>(plane.data);
             source_linesize[index] = static_cast<int>(plane.stride_bytes);
         }

@@ -31,16 +31,15 @@ public:
     [[nodiscard]] contracts::media::VideoPixelFormat pixel_format() const noexcept override;
     [[nodiscard]] std::uint32_t width() const noexcept override;
     [[nodiscard]] std::uint32_t height() const noexcept override;
-    [[nodiscard]] std::size_t plane_count() const noexcept override;
-    [[nodiscard]] contracts::media::VideoPlaneView plane(std::size_t index) const noexcept override;
+    [[nodiscard]] const contracts::media::VideoFrameResource& resource() const noexcept override;
 
 private:
     AvFramePtr frame_;
     contracts::media::VideoPixelFormat pixel_format_ = contracts::media::VideoPixelFormat::Unknown;
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
-    std::size_t plane_count_ = 0;
     std::array<contracts::media::VideoPlaneView, AV_NUM_DATA_POINTERS> planes_{};
+    contracts::media::CpuVideoFrameResource resource_;
 };
 
 } // namespace semi::infra::ffmpeg::video_decoder
