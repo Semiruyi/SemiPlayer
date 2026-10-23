@@ -1,0 +1,50 @@
+docs/modules/gpu_device/gpu_device.md
+  h_71186a0a6bfb09 9,310
+docs/modules/video_frame/video_frame.md
+  h_71186a0a6bfb09 1-110
+src/contracts/media/media_types.hpp
+  h_71186a0a6bfb09 3,66-88,96,102-108
+src/infrastructure/ffmpeg/video_decoder/CMakeLists.txt
+  h_71186a0a6bfb09 5-7
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_d3d11_video_frame_buffer.cpp
+  h_71186a0a6bfb09 1-105
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_d3d11_video_frame_buffer.hpp
+  h_71186a0a6bfb09 1-53
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.cpp
+  h_71186a0a6bfb09 89-90,92
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_video_frame_buffer.cpp
+  h_71186a0a6bfb09 75,115-116
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_video_frame_buffer.hpp
+  h_71186a0a6bfb09 34,42
+src/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.cpp
+  h_71186a0a6bfb09 147,151,156,161,226-231,241,312,314
+src/infrastructure/gpu/d3d11/d3d11_video_frame_resource.hpp
+  h_71186a0a6bfb09 1-23
+tests/contracts/media/media_types_test.cpp
+  h_71186a0a6bfb09 34,49-50,60,119-121,125-126,143-146,158-169
+tests/domain/resource/video_frame_store/video_frame_store_test.cpp
+  h_71186a0a6bfb09 32-33,38-39,50
+tests/domain/worker/video_decoder/default_video_decoder_test.cpp
+  h_71186a0a6bfb09 57-58,63-64
+tests/domain/worker/video_renderer/default_video_renderer_test.cpp
+  h_71186a0a6bfb09 51-52,57-58,70
+tests/infrastructure/ffmpeg/video_decoder/CMakeLists.txt
+  h_71186a0a6bfb09 4-6
+tests/infrastructure/ffmpeg/video_decoder/ffmpeg_d3d11_video_frame_buffer_test.cpp
+  h_71186a0a6bfb09 1-225
+tests/infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend_test.cpp
+  h_71186a0a6bfb09 37-39,44-46,52,65-67,72-76,132-134,138-140,143,146
+tests/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend_test.cpp
+  h_71186a0a6bfb09 44-45,53-54,188-204
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "5.30.7",
+  "base_commit_sha": "3f036f02e94d5f3a55239cc8857e9c0250a8cc4c",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  }
+}
