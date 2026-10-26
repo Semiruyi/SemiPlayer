@@ -1,0 +1,63 @@
+src/ioc/ioc_container.cpp
+  s_33070636a8a22f::t_0f956893152a4e 27,74-75
+src/infrastructure/gpu/readback/d3d11_video_readback.cpp
+  s_33070636a8a22f::t_5d472bbf81e56b 1-5,7-73,75-142
+  s_33070636a8a22f::t_216b8a2c10a5d3 6,74
+src/infrastructure/gpu/CMakeLists.txt
+  s_33070636a8a22f::t_216b8a2c10a5d3 3
+  s_33070636a8a22f::t_0f956893152a4e 2
+tests/infrastructure/gpu/d3d11_video_readback_test.cpp
+  s_33070636a8a22f::t_216b8a2c10a5d3 4,239
+  s_33070636a8a22f::t_fbd63ee2d94e9a 68-69,84-89,96,103,107-109,113-115,128,186-191,201-218
+  s_33070636a8a22f::t_4ab79c739c64b7 1-3,5-67,70-83,90-95,97-102,104-106,110-112,116-127,129-185,192-200,219-238,240-247
+tests/infrastructure/ffmpeg/video_renderer/CMakeLists.txt
+  s_33070636a8a22f::t_45a94006370ce6 3
+tests/infrastructure/gpu/readback/owned_cpu_video_frame_buffer_test.cpp
+  s_33070636a8a22f::t_216b8a2c10a5d3 1-35
+tests/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_readback_test.cpp
+  s_33070636a8a22f::t_45a94006370ce6 1-132
+docs/modules/video_readback/video_readback.md
+  s_33070636a8a22f::t_d0d81db55802ed 1-22,24-67,71-113
+  s_33070636a8a22f::t_216b8a2c10a5d3 23,68-70
+docs/modules/video_frame/video_frame.md
+  s_33070636a8a22f::t_d0d81db55802ed 3-4,84-86,93,100,110
+docs/modules/gpu_device/gpu_device.md
+  s_33070636a8a22f::t_d0d81db55802ed 312
+src/infrastructure/gpu/readback/detail/owned_cpu_video_frame_buffer.cpp
+  s_33070636a8a22f::t_216b8a2c10a5d3 1-65
+src/infrastructure/gpu/readback/d3d11_video_readback.hpp
+  s_33070636a8a22f::t_5d472bbf81e56b 1-25
+src/infrastructure/gpu/readback/detail/owned_cpu_video_frame_buffer.hpp
+  s_33070636a8a22f::t_216b8a2c10a5d3 1-35
+src/contracts/video_readback/video_readback.hpp
+  s_33070636a8a22f::t_5d472bbf81e56b 1-34
+src/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp
+  s_33070636a8a22f::t_0f956893152a4e 7-8,13-14
+src/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.cpp
+  s_33070636a8a22f::t_0f956893152a4e 2,181,192-196,232-234,236-258,261,268-269
+tests/infrastructure/gpu/CMakeLists.txt
+  s_33070636a8a22f::t_216b8a2c10a5d3 2
+  s_33070636a8a22f::t_4ab79c739c64b7 3-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "5.30.7",
+  "base_commit_sha": "f2b11a5f39aeeed6d0c8ce457f8e2f8b5c31086c",
+  "prompts": {},
+  "sessions": {
+    "s_33070636a8a22f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a161ad-a081-7422-8137-25bd9894b27d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuyuanyi <wuyuanyi@h-partners.com>",
+      "custom_attributes": {
+        "stats_model_totals": "{\"gpt-6.1-sol\":{\"additions\":1048,\"deletions\":177}}",
+        "stats_total_additions": "1048",
+        "stats_total_deletions": "177",
+        "stats_turn_models": "{\"t_0f956893152a4e\":\"gpt-6.1-sol\",\"t_216b8a2c10a5d3\":\"gpt-6.1-sol\",\"t_45a94006370ce6\":\"gpt-6.1-sol\",\"t_4ab79c739c64b7\":\"gpt-6.1-sol\",\"t_5d472bbf81e56b\":\"gpt-6.1-sol\",\"t_d0d81db55802ed\":\"gpt-6.1-sol\",\"t_fbd63ee2d94e9a\":\"gpt-6.1-sol\"}"
+      }
+    }
+  }
+}
