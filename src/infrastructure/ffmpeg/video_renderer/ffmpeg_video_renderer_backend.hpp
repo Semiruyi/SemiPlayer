@@ -4,11 +4,14 @@
 
 #include <memory>
 
+namespace semi::contracts::video_readback { class VideoReadback; }
+
 namespace semi::infra::ffmpeg::video_renderer {
 
 class FfmpegVideoRendererBackend final : public contracts::video_renderer::VideoRendererBackend {
 public:
-    FfmpegVideoRendererBackend();
+    explicit FfmpegVideoRendererBackend(
+        std::shared_ptr<contracts::video_readback::VideoReadback> readback = {});
     ~FfmpegVideoRendererBackend() override;
 
     [[nodiscard]] std::expected<void, contracts::video_renderer::VideoRendererBackendError>

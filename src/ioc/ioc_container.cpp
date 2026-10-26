@@ -24,6 +24,7 @@
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
 #include "infrastructure/log/log.hpp"
 #include "infrastructure/gpu/gpu_device_manager.hpp"
+#include "infrastructure/gpu/readback/d3d11_video_readback.hpp"
 #include "infrastructure/statistics/performance_statistics.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 
@@ -70,7 +71,8 @@ bool IoCContainer::assemble() noexcept {
         auto video_decoder_backend =
             std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>(gpu_devices);
         auto video_renderer_backend =
-            std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>();
+            std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>(
+                std::make_shared<infra::gpu::D3D11VideoReadback>());
 #if defined(SEMI_USE_NULL_AUDIO_OUTPUT)
         auto audio_output_backend =
             std::make_shared<infra::audio_output::NullAudioOutputBackend>(audio_realtime_notifier);

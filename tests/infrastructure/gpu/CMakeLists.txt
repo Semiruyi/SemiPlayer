@@ -1,1 +1,5 @@
 target_sources(semi_player_tests PRIVATE gpu_device_manager_test.cpp)
+target_sources(semi_player_tests PRIVATE readback/owned_cpu_video_frame_buffer_test.cpp)
+if(WIN32)
+    target_sources(semi_player_tests PRIVATE d3d11_video_readback_test.cpp)
+endif()

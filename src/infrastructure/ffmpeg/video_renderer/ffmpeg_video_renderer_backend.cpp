@@ -1,4 +1,5 @@
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
+#include "contracts/video_readback/video_readback.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -177,6 +178,7 @@ bool valid_source(const contracts::media::CpuVideoFrameResource& input,
 } // namespace
 
 struct FfmpegVideoRendererBackend::Impl {
+    std::shared_ptr<contracts::video_readback::VideoReadback> readback;
     SwsContextPtr context;
     VideoRendererOptions options{};
     VideoPixelFormat source_format = VideoPixelFormat::Unknown;
@@ -187,7 +189,11 @@ struct FfmpegVideoRendererBackend::Impl {
     bool configured = false;
 };
 
-FfmpegVideoRendererBackend::FfmpegVideoRendererBackend() : impl_(std::make_unique<Impl>()) {}
+FfmpegVideoRendererBackend::FfmpegVideoRendererBackend(
+    std::shared_ptr<contracts::video_readback::VideoReadback> readback)
+    : impl_(std::make_unique<Impl>()) {
+    impl_->readback = std::move(readback);
+}
 
 FfmpegVideoRendererBackend::~FfmpegVideoRendererBackend() {
     unconfigure();
@@ -223,21 +229,44 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
                                                 "decoded video frame has no buffer"));
     }
 
-    const auto* cpu = contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*input.buffer);
+    const auto* source = input.buffer.get();
+    std::unique_ptr<const contracts::media::VideoFrameBuffer> downloaded;
+    auto* cpu = contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*source);
     if (!cpu) {
-        return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
-                                                "video scaler requires CPU frame resources"));
+        if (!impl_->readback) {
+            return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                    "video scaler requires CPU frame resources or a readback backend"));
+        }
+        auto result = impl_->readback->readback(*source);
+        if (!result) {
+            return std::unexpected(make_error(VideoRendererBackendOperation::Render,
+                                              result.error().native_code,
+                                              "video readback failed: " + result.error().message));
+        }
+        downloaded = std::move(*result);
+        if (!downloaded || downloaded->width() != source->width() ||
+            downloaded->height() != source->height() ||
+            downloaded->pixel_format() != source->pixel_format()) {
+            return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                    "video readback returned invalid or changed image metadata"));
+        }
+        source = downloaded.get();
+        cpu = contracts::media::resource_as<contracts::media::CpuVideoFrameResource>(*source);
+        if (!cpu) {
+            return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
+                                                    "video readback result does not expose CPU resources"));
+        }
     }
 
-    const auto source_format = input.buffer->pixel_format();
+    const auto source_format = source->pixel_format();
     const auto source_native = native_pixel_format(source_format);
     if (!source_native) {
         return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
                                                 "decoded video pixel format is unsupported"));
     }
 
-    const auto source_width = input.buffer->width();
-    const auto source_height = input.buffer->height();
+    const auto source_width = source->width();
+    const auto source_height = source->height();
     if (!valid_source(*cpu, source_format, source_width, source_height)) {
         return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
                                                 "decoded video planes are invalid"));

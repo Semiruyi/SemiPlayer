@@ -1,6 +1,7 @@
 # 视频帧资源描述
 
-当前已实现资源表达与现有 CPU 链路迁移；尚未启用硬解、按需回读或 GPU 颜色转换。
+当前已实现资源表达与现有 CPU 链路迁移，消费端已接入[按需回读](../video_readback/video_readback.md)。
+尚未启用硬解或 GPU 颜色转换。
 公共 C API 与宿主收到的 CPU RGBA 帧不变。
 
 ## Context
@@ -80,22 +81,23 @@ FfmpegD3D11VideoFrameBuffer::create 接收并消耗 AvFramePtr，以及设备共
 ## 当前消费链路
 
 现有软件解码器仍只产生 CPU 帧，后端验证 CPU 描述后交付 domain。
-swscale 转换后端先查询 CpuVideoFrameResource，再验证 plane 数量、跨度和大小。
-GPU 或未知资源返回明确的“需要 CPU 资源”错误，不隐式回读。
+转换后端先查询 CpuVideoFrameResource；非 CPU 输入通过注入的 VideoReadback 契约取得 CPU 结果，
+再验证 plane 数量、跨度和大小。原生实现只接受 D3D11 NV12/P010，未知资源明确失败。
+未注入回读时，转换后端继续返回“需要 CPU 资源”错误。资源查询本身始终不执行回读。
 
 ```text
 软件解码 → CPU 资源描述 → Store → swscale → CPU RGBA → 宿主
 ```
 
 当前新增的 GPU 帧实现只通过独立 GPU 测试构造验证，不改变普通播放路径。
-后续硬解链路再接入 GPU 帧输出与消费端回读，使精准 Seek 中间帧可以在回读前被筛掉。
+消费端回读已就绪，后续硬解链路再接入 GPU 帧输出，使精准 Seek 中间帧可以在回读前被筛掉。
 RenderedVideo 当前仍为 CPU RGBA，GPU 转换输出及宿主交付另行设计。
 
 ## 验证范围
 
 - CPU 软件帧的格式、plane 布局与取消配置后的资源存活。
 - 类型查询支持基础/专属描述，不匹配类型返回 nullptr。
-- CPU 转换拒绝未知和真实 D3D11 资源，不把 GPU 地址解释成 CPU plane。
+- 纯 CPU 转换未注入回读时拒绝 GPU 资源；注入回读后的验证见回读模块文档。
 - 真实 NV12/P010 GPU 帧的描述、array slice 与所属设备。
 - GPU 帧进入 Store、弹出及随队列销毁时的所有权释放。
 - 帧仍被持有时，其 surface 不被另一个帧复用。
@@ -105,6 +107,6 @@ GPU 测试要求真实硬件；缺少硬件或 FFmpeg 未编译 D3D11VA 时保�
 P010 场景以设备的 P010 纹理支持为前提。已具备硬件前提的构造失败必须视为失败。
 非 Windows 不编译 D3D11 帧实现和测试；通用及 CPU 描述仍保持平台无关。
 
-本次 MSYS2 UCRT64 Release 构建通过，完整回归 316/316 通过，新增 12 项测试。
+帧资源改造阶段 MSYS2 UCRT64 Release 构建通过，完整回归 316/316 通过，新增 12 项测试。
 本机 GPU 场景均实际执行，没有跳过，包含 NV12/P010 资源描述与 Store 生命周期验证。
 非 Windows 构建与硬解输出接入尚未验证。

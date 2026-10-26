@@ -309,7 +309,7 @@ MSYS2 UCRT64 Release 构建通过，完整回归 304/304 通过，其中新增�
 
 - 帧资源表达已拆分 CPU 与 GPU 描述，见[视频帧资源描述](../video_frame/video_frame.md)。
 - 接入硬解配置、格式协商和软解回退。
-- 在 CPU 消费端按需回读，让精准 Seek 的中间帧在回读前被筛掉。
+- CPU 消费端已接入[按需回读](../video_readback/video_readback.md)，等待解码后端交付 GPU 帧。
 - 接入复用同一原生设备的 GPU YUV → RGBA 转换后端。
 - 实测 CPU 占用、端到端 Seek 和回读等待，不仅凭 decode 调用耗时评价收益。
 - 另行设计 GPU RGBA 的宿主交付，不在本模块预留整套 shader、纹理池或跨平台呈现接口。
