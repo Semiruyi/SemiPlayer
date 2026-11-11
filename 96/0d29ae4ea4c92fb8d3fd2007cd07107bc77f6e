@@ -1,0 +1,86 @@
+tests/infrastructure/ffmpeg/video_decoder/CMakeLists.txt
+  s_f8dbc85f552039::t_78a47e2f108bab 3
+src/infrastructure/ffmpeg/hardware_decode/d3d11_hardware_decode.cpp
+  s_f8dbc85f552039::t_d7ebd06db3d54b 61-62
+  s_f8dbc85f552039::t_0c24c9e2d12330 1-60,63-128
+docs/modules/hardware_decode/hardware_decode.md
+  s_f8dbc85f552039::t_46f401869ba7cd 1-78,81-102
+  s_f8dbc85f552039::t_d7ebd06db3d54b 79-80
+  s_f8dbc85f552039::t_d12f0d879a0077 103-115
+src/ioc/ioc_container.cpp
+  s_f8dbc85f552039::t_136e5894f75a31 23,73-74
+src/infrastructure/ffmpeg/hardware_decode/CMakeLists.txt
+  s_f8dbc85f552039::t_0c24c9e2d12330 1-4
+src/infrastructure/ffmpeg/hardware_decode/d3d11_hardware_decode.hpp
+  s_f8dbc85f552039::t_0c24c9e2d12330 1-17
+docs/modules/video_frame/video_frame.md
+  s_f8dbc85f552039::t_46f401869ba7cd 4,83,90,93,112
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.cpp
+  s_f8dbc85f552039::t_aa85c1ecb782f5 114-115,212-213,256-257,298
+  s_f8dbc85f552039::t_2688d427f79510 4,6,11,20-21,30-56,111-113,116-129,145,155-156,168-177,184,204-205,232,245-247,252,258,288,293-297,302-334,336-369,371,373-374,378,398,412,435,437
+docs/modules/video_readback/video_readback.md
+  s_f8dbc85f552039::t_46f401869ba7cd 5
+src/infrastructure/ffmpeg/hardware_decode/platform_hardware_decode_provider.cpp
+  s_f8dbc85f552039::t_0c24c9e2d12330 1-19
+src/infrastructure/ffmpeg/CMakeLists.txt
+  s_f8dbc85f552039::t_0c24c9e2d12330 7
+tests/infrastructure/ffmpeg/video_decoder/ffmpeg_hardware_decode_test.cpp
+  s_f8dbc85f552039::t_211fea9b320432 19,55,315-316,353,367-371,374-375
+  s_f8dbc85f552039::t_6f8ea93d66435f 109-111,210,232-243,247-302
+  s_f8dbc85f552039::t_767a19a13626e1 135,231
+  s_f8dbc85f552039::t_78a47e2f108bab 1-8,10-11,14-18,20-54,56-108,112-134,136-209,303-306,310-314,317-352,354-363,372-373,376-399
+  s_f8dbc85f552039::t_1cffc1905efd6a 9,12-13,211-230,244-246,307-309,364-366
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.hpp
+  s_f8dbc85f552039::t_136e5894f75a31 7,13-14
+docs/modules/gpu_device/gpu_device.md
+  s_f8dbc85f552039::t_46f401869ba7cd 3,9-10,311-312
+tests/resources/hardware_decode/README.md
+  s_f8dbc85f552039::t_349e2012a4c0fe 1-21
+src/infrastructure/ffmpeg/video_decoder/ffmpeg_d3d11_video_frame_buffer.hpp
+  s_f8dbc85f552039::t_46f401869ba7cd 11-12
+docs/modules/ioc_container/ioc_container.md
+  s_f8dbc85f552039::t_d7ebd06db3d54b 59-63
+src/infrastructure/ffmpeg/hardware_decode/ffmpeg_hardware_decode.hpp
+  s_f8dbc85f552039::t_0c24c9e2d12330 1-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "5.30.8",
+  "base_commit_sha": "960d29ae4ea4c92fb8d3fd2007cd07107bc77f6e",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  },
+  "sessions": {
+    "s_33070636a8a22f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a161ad-a081-7422-8137-25bd9894b27d",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuyuanyi <wuyuanyi@h-partners.com>",
+      "custom_attributes": {
+        "stats_model_totals": "{\"gpt-6.1-sol\":{\"additions\":572,\"deletions\":60}}",
+        "stats_total_additions": "572",
+        "stats_total_deletions": "60",
+        "stats_turn_models": "{\"t_00dac0e65efb69\":\"gpt-6.1-sol\",\"t_1a6b78a59b9bed\":\"gpt-6.1-sol\",\"t_1bf37be901fefd\":\"gpt-6.1-sol\",\"t_39e8198f719279\":\"gpt-6.1-sol\",\"t_63883d92506def\":\"gpt-6.1-sol\",\"t_754d288ebd1b4a\":\"gpt-6.1-sol\",\"t_a40e5606ef17c2\":\"gpt-6.1-sol\",\"t_a74c215ba7b2ed\":\"gpt-6.1-sol\",\"t_e08501d87ef47b\":\"gpt-6.1-sol\",\"t_e3de0ff689d885\":\"gpt-6.1-sol\"}"
+      }
+    },
+    "s_f8dbc85f552039": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18152-f6cf-7b20-81d6-85880ed657a7",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuyuanyi <wuyuanyi@h-partners.com>",
+      "custom_attributes": {
+        "stats_model_totals": "{\"gpt-6.1-sol\":{\"additions\":988,\"deletions\":274}}",
+        "stats_total_additions": "988",
+        "stats_total_deletions": "274",
+        "stats_turn_models": "{\"t_0c24c9e2d12330\":\"gpt-6.1-sol\",\"t_136e5894f75a31\":\"gpt-6.1-sol\",\"t_1cffc1905efd6a\":\"gpt-6.1-sol\",\"t_211fea9b320432\":\"gpt-6.1-sol\",\"t_2688d427f79510\":\"gpt-6.1-sol\",\"t_349e2012a4c0fe\":\"gpt-6.1-sol\",\"t_46f401869ba7cd\":\"gpt-6.1-sol\",\"t_6f8ea93d66435f\":\"gpt-6.1-sol\",\"t_767a19a13626e1\":\"gpt-6.1-sol\",\"t_78a47e2f108bab\":\"gpt-6.1-sol\",\"t_aa85c1ecb782f5\":\"gpt-6.1-sol\",\"t_d12f0d879a0077\":\"gpt-6.1-sol\",\"t_d7ebd06db3d54b\":\"gpt-6.1-sol\"}"
+      }
+    }
+  }
+}
