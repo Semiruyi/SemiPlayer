@@ -74,7 +74,7 @@ bool IoCContainer::assemble() noexcept {
                 infra::ffmpeg::hardware_decode::make_platform_hardware_decode_provider(gpu_devices));
         auto video_renderer_backend =
             std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>(
-                std::make_shared<infra::gpu::D3D11VideoReadback>());
+                std::make_shared<infra::gpu::D3D11VideoReadback>(notifier));
 #if defined(SEMI_USE_NULL_AUDIO_OUTPUT)
         auto audio_output_backend =
             std::make_shared<infra::audio_output::NullAudioOutputBackend>(audio_realtime_notifier);

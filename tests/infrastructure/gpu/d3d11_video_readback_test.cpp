@@ -3,6 +3,8 @@
 #include "infrastructure/gpu/d3d11/d3d11_video_frame_resource.hpp"
 #include "infrastructure/gpu/readback/detail/owned_cpu_video_frame_buffer.hpp"
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
+#include "infrastructure/gpu/readback/readback_statistics.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
 
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -139,6 +141,74 @@ TEST_P(D3D11VideoReadbackTest, ReadsSelectedSliceAndCroppedOddDimensionsIntoInde
     EXPECT_EQ((*output)->height(), 29U);
     input.reset();
     compare(**output, 64, 32, 1);
+}
+
+TEST_P(D3D11VideoReadbackTest, PublishesOneOwnedReportWithErrorsAndCachedStaging) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    std::vector<ReadbackStatistics> reports;
+    auto subscription = notifier->subscribe<ReadbackStatistics>(
+        [&](const ReadbackStatistics& report) { reports.push_back(report); });
+    std::uint64_t expected_bytes = 0;
+    {
+        D3D11VideoReadback measured(notifier);
+        auto input = make_frame();
+        ASSERT_NE(input, nullptr);
+        input->test_resource().array_slice = 99;
+        EXPECT_FALSE(measured.readback(*input));
+        input->test_resource().array_slice = 1;
+        for (int i = 0; i < 2; ++i) {
+            auto output = measured.readback(*input);
+            ASSERT_TRUE(output) << output.error().message;
+            const auto* cpu = resource_as<CpuVideoFrameResource>(**output);
+            expected_bytes += cpu->plane(0).size_bytes + cpu->plane(1).size_bytes;
+        }
+        EXPECT_TRUE(reports.empty()); // No per-frame notifications.
+    }
+    ASSERT_EQ(reports.size(), 1U);
+    const auto& report = reports.front();
+    EXPECT_EQ(report.total.calls, 3U);
+    EXPECT_EQ(report.successful_calls, 2U);
+    EXPECT_EQ(report.failed_calls, 1U);
+    EXPECT_EQ(report.copied_bytes, expected_bytes);
+    EXPECT_EQ(report.input_format, GetParam());
+    EXPECT_FALSE(report.input_changed);
+    EXPECT_EQ(report.allocate_cpu.calls, 2U);
+    EXPECT_EQ(report.create_staging.calls, 1U);
+    EXPECT_EQ(report.wait_context.calls, 2U);
+    EXPECT_EQ(report.submit_copy.calls, 2U);
+    EXPECT_EQ(report.map.calls, 2U);
+    EXPECT_EQ(report.copy_cpu.calls, 2U);
+    EXPECT_EQ(report.unmap.calls, 2U);
+    const auto phase_sum = report.allocate_cpu.total_ns + report.create_staging.total_ns +
+        report.wait_context.total_ns + report.submit_copy.total_ns + report.map.total_ns +
+        report.copy_cpu.total_ns + report.unmap.total_ns;
+    EXPECT_GE(report.total.total_ns, phase_sum);
+    EXPECT_GE(report.total.total_ns, report.total.max_ns);
+    EXPECT_GE(report.finished_at_unix_ms, report.started_at_unix_ms);
+}
+
+TEST_P(D3D11VideoReadbackTest, SuppressesUnusedReportAndMarksInputChanges) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    std::vector<ReadbackStatistics> reports;
+    auto subscription = notifier->subscribe<ReadbackStatistics>(
+        [&](const ReadbackStatistics& report) { reports.push_back(report); });
+    { D3D11VideoReadback unused(notifier); }
+    EXPECT_TRUE(reports.empty());
+    {
+        D3D11VideoReadback measured(notifier);
+        auto input = make_frame();
+        ASSERT_NE(input, nullptr);
+        ASSERT_TRUE(measured.readback(*input));
+        auto resized = make_frame(80, 48, 77, 45);
+        ASSERT_NE(resized, nullptr);
+        ASSERT_TRUE(measured.readback(*resized));
+    }
+    ASSERT_EQ(reports.size(), 1U);
+    EXPECT_EQ(reports[0].total.calls, 2U);
+    EXPECT_EQ(reports[0].create_staging.calls, 2U);
+    EXPECT_EQ(reports[0].input_width, 61U);
+    EXPECT_EQ(reports[0].input_height, 29U);
+    EXPECT_TRUE(reports[0].input_changed);
 }
 
 TEST_P(D3D11VideoReadbackTest, RepeatedFramesAndLayoutChangesHaveNoStalePixels) {

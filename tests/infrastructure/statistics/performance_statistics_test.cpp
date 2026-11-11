@@ -1,6 +1,7 @@
 #include "infrastructure/statistics/performance_statistics.hpp"
 #include "infrastructure/notifier/default_notifier.hpp"
 #include "domain/worker/video_decoder/video_decoder_statistics.hpp"
+#include "infrastructure/gpu/readback/readback_statistics.hpp"
 
 #include <gtest/gtest.h>
 
@@ -98,6 +99,56 @@ TEST_F(PerformanceStatisticsTest, DoesNotCreateAnEmptyFileWithoutReports) {
     auto notifier = std::make_shared<DefaultNotifier>();
     { PerformanceStatistics statistics(notifier, path); }
     EXPECT_FALSE(std::filesystem::exists(path));
+}
+
+TEST_F(PerformanceStatisticsTest, WritesReadbackPhasesAlongsideDecoderReports) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    {
+        PerformanceStatistics statistics(notifier, path);
+        gpu::ReadbackStatistics report;
+        report.backend = "d3d11";
+        report.total = {3, 9'000'000, 5'000'000};
+        report.successful_calls = 2;
+        report.failed_calls = 1;
+        report.copied_bytes = 1234;
+        report.input_format = contracts::media::VideoPixelFormat::Nv12;
+        report.input_width = 1920;
+        report.input_height = 1080;
+        report.map = {2, 6'000'000, 4'000'000};
+        report.input_changed = true;
+        ASSERT_TRUE(notifier->send(report));
+        report.map.total_ns = 0; // Queued report owns its values.
+        ASSERT_TRUE(notifier->send(domain::VideoDecoderStatistics{}));
+    }
+    const auto result = lines();
+    ASSERT_EQ(result.size(), 2U);
+    EXPECT_NE(result[0].find("\"module\":\"video_readback\""), std::string::npos);
+    EXPECT_NE(result[0].find("\"processing_mean_call_ms\":3.000000"), std::string::npos);
+    EXPECT_NE(result[0].find("\"successful_calls\":2,\"failed_calls\":1"), std::string::npos);
+    EXPECT_NE(result[0].find("\"copied_bytes\":1234"), std::string::npos);
+    EXPECT_NE(result[0].find("\"input_changed\":true"), std::string::npos);
+    EXPECT_NE(result[0].find("\"map\":{\"calls\":2,\"total_ms\":6.000000,\"max_ms\":4.000000,\"mean_call_ms\":3.000000}"),
+              std::string::npos);
+    EXPECT_NE(result[0].find("\"create_staging\":{\"calls\":0,\"total_ms\":0.000000,\"max_ms\":0.000000,\"mean_call_ms\":null}"),
+              std::string::npos);
+    EXPECT_NE(result[1].find("\"module\":\"video_decoder\""), std::string::npos);
+    EXPECT_FALSE(notifier->send(gpu::ReadbackStatistics{}));
+}
+
+TEST_F(PerformanceStatisticsTest, DrainsBothKindsFromConcurrentProducers) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    {
+        PerformanceStatistics statistics(notifier, path);
+        std::thread decoder([&] {
+            for (int i = 0; i < 12; ++i) (void)notifier->send(domain::VideoDecoderStatistics{});
+        });
+        std::thread readback([&] {
+            for (int i = 0; i < 12; ++i) (void)notifier->send(gpu::ReadbackStatistics{});
+        });
+        decoder.join();
+        readback.join();
+    }
+    EXPECT_EQ(lines().size(), 24U);
 }
 } // namespace
 } // namespace semi::infra
