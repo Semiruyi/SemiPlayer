@@ -20,6 +20,7 @@
 #include "infrastructure/ffmpeg/audio_decoder/ffmpeg_audio_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/audio_resampler/ffmpeg_audio_resampler_backend.hpp"
 #include "infrastructure/ffmpeg/demuxer/ffmpeg_demuxer_backend.hpp"
+#include "infrastructure/ffmpeg/hardware_decode/ffmpeg_hardware_decode.hpp"
 #include "infrastructure/ffmpeg/video_decoder/ffmpeg_video_decoder_backend.hpp"
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
 #include "infrastructure/log/log.hpp"
@@ -69,7 +70,8 @@ bool IoCContainer::assemble() noexcept {
         auto audio_resampler_backend =
             std::make_shared<infra::ffmpeg::audio_resampler::FfmpegAudioResamplerBackend>();
         auto video_decoder_backend =
-            std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>(gpu_devices);
+            std::make_shared<infra::ffmpeg::video_decoder::FfmpegVideoDecoderBackend>(
+                infra::ffmpeg::hardware_decode::make_platform_hardware_decode_provider(gpu_devices));
         auto video_renderer_backend =
             std::make_shared<infra::ffmpeg::video_renderer::FfmpegVideoRendererBackend>(
                 std::make_shared<infra::gpu::D3D11VideoReadback>());

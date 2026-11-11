@@ -2,7 +2,7 @@
 
 消费端按需取得 CPU 像素的同步能力。契约位于 contracts/video_readback，原生实现位于
 infrastructure/gpu/readback，不依赖 domain 或 FFmpeg。当前支持 D3D11 NV12/P010。
-转换后端已接入回读，正常播放仍使用软件解码；本次不启用硬解或 GPU 颜色转换。
+转换后端已接入回读，正常播放可接收 [D3D11 硬解](../hardware_decode/hardware_decode.md) 输出；GPU 颜色转换尚未启用。
 
 ## 职责与依赖
 

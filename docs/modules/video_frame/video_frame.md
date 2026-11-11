@@ -1,7 +1,7 @@
 # 视频帧资源描述
 
 当前已实现资源表达与现有 CPU 链路迁移，消费端已接入[按需回读](../video_readback/video_readback.md)。
-尚未启用硬解或 GPU 颜色转换。
+已接入 [D3D11 硬解](../hardware_decode/hardware_decode.md)，GPU 颜色转换尚未启用。
 公共 C API 与宿主收到的 CPU RGBA 帧不变。
 
 ## Context
@@ -80,17 +80,17 @@ FfmpegD3D11VideoFrameBuffer::create 接收并消耗 AvFramePtr，以及设备共
 
 ## 当前消费链路
 
-现有软件解码器仍只产生 CPU 帧，后端验证 CPU 描述后交付 domain。
+解码后端根据实际 AVFrame 输出 CPU 或 GPU 帧，统一通过 VideoFrameBuffer 交付 domain。
 转换后端先查询 CpuVideoFrameResource；非 CPU 输入通过注入的 VideoReadback 契约取得 CPU 结果，
 再验证 plane 数量、跨度和大小。原生实现只接受 D3D11 NV12/P010，未知资源明确失败。
 未注入回读时，转换后端继续返回“需要 CPU 资源”错误。资源查询本身始终不执行回读。
 
 ```text
 软件解码 → CPU 资源描述 → Store → swscale → CPU RGBA → 宿主
+硬件解码 → GPU 资源描述 → Seek 筛帧/Store → 按需回读 → swscale → CPU RGBA → 宿主
 ```
 
-当前新增的 GPU 帧实现只通过独立 GPU 测试构造验证，不改变普通播放路径。
-消费端回读已就绪，后续硬解链路再接入 GPU 帧输出，使精准 Seek 中间帧可以在回读前被筛掉。
+普通播放优先尝试硬解，具体回退边界见硬解适配模块。精准 Seek 中间帧在回读前被筛掉。
 RenderedVideo 当前仍为 CPU RGBA，GPU 转换输出及宿主交付另行设计。
 
 ## 验证范围
@@ -109,4 +109,4 @@ P010 场景以设备的 P010 纹理支持为前提。已具备硬件前提的构
 
 帧资源改造阶段 MSYS2 UCRT64 Release 构建通过，完整回归 316/316 通过，新增 12 项测试。
 本机 GPU 场景均实际执行，没有跳过，包含 NV12/P010 资源描述与 Store 生命周期验证。
-非 Windows 构建与硬解输出接入尚未验证。
+上述为帧资源改造阶段的历史验证；硬解输出接入验证见硬解适配模块。非 Windows 构建尚未验证。

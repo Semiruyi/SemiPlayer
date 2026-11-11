@@ -56,6 +56,11 @@ Player::shutdown() ──→ IoCContainer::dispose() ──→ 手动逆序释�
 
 当前 `IoCContainer::assemble()` 已经装配音频播放和 CPU 视频渲染链路：
 
+解码端现已优先尝试 [D3D11 硬解](../hardware_decode/hardware_decode.md)：IoC 创建平台无关的
+GpuDeviceManager，通过 FFmpeg 组装工厂生成硬解 provider，注入 FfmpegVideoDecoderBackend。
+设备与 bridge 延迟到解码配置时申请；渲染后端注入 VideoReadback，按需回读后仍输出 CPU RGBA。
+平台工厂只选择当前构建的实现，是否支持实际视频由 provider/session 判断。
+
 ```
 DefaultNotifier
 Generation

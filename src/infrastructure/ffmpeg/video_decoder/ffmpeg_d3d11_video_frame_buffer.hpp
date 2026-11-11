@@ -8,8 +8,8 @@
 
 namespace semi::infra::ffmpeg::video_decoder {
 
-// Native FFmpeg access is only needed by FFmpeg consumers (e.g. readback).
-// A D3D11 renderer can query the base resource without depending on FFmpeg.
+// Optional native access for FFmpeg-specific consumers. Native readback and
+// D3D11 renderers query the base resource without depending on FFmpeg.
 struct FfmpegD3D11VideoFrameResource final : gpu::D3D11VideoFrameResource {
     FfmpegD3D11VideoFrameResource(gpu::D3D11Device* device, ID3D11Texture2D* texture,
                                 std::uint32_t slice, const AVFrame* frame) noexcept

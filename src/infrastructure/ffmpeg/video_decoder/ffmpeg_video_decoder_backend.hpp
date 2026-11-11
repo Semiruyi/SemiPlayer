@@ -4,13 +4,14 @@
 
 #include <memory>
 
-namespace semi::infra::gpu { class GpuDeviceManager; }
+namespace semi::infra::ffmpeg::hardware_decode { class FfmpegHardwareDecodeProvider; }
 
 namespace semi::infra::ffmpeg::video_decoder {
 
 class FfmpegVideoDecoderBackend final : public contracts::video_decoder::VideoDecoderBackend {
 public:
-    explicit FfmpegVideoDecoderBackend(std::shared_ptr<gpu::GpuDeviceManager> gpu_devices = {});
+    explicit FfmpegVideoDecoderBackend(
+        std::shared_ptr<hardware_decode::FfmpegHardwareDecodeProvider> hardware = {});
     ~FfmpegVideoDecoderBackend() override;
 
     [[nodiscard]] std::expected<void, contracts::video_decoder::VideoDecoderBackendError>

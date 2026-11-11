@@ -1,13 +1,13 @@
 # GPU 设备管理模块设计
 
-> 状态：第一阶段已实现，硬解和 GPU 颜色转换尚未启用。
+> 状态：设备管理已实现，已接入 [D3D11 硬解](../hardware_decode/hardware_decode.md)，GPU 颜色转换尚未启用。
 > 位于 infrastructure/gpu，创建、复用原生 GPU 设备，不依赖 FFmpeg。
 > 第一版只实现 D3D11；FFmpeg 桥接与设备层分开。domain 和 contracts 不新增 GPU 设备接口。
 
 ## Context
 
-当前 FFmpeg 视频解码后端使用软件解码，VideoFrameBuffer 通过 CPU 资源描述提供 plane，
-转换后端通过 swscale 输出 CPU RGBA。
+当前 FFmpeg 视频解码后端优先尝试硬解，VideoFrameBuffer 表达 CPU 或 GPU 资源，
+转换后端按需回读后通过 swscale 输出 CPU RGBA。
 
 后续明确分阶段实现：
 先接入硬解和 CPU 消费端按需回读，再把 YUV → RGBA 转换放到 GPU。
@@ -308,8 +308,8 @@ MSYS2 UCRT64 Release 构建通过，完整回归 304/304 通过，其中新增�
 ## 后续步骤
 
 - 帧资源表达已拆分 CPU 与 GPU 描述，见[视频帧资源描述](../video_frame/video_frame.md)。
-- 接入硬解配置、格式协商和软解回退。
-- CPU 消费端已接入[按需回读](../video_readback/video_readback.md)，等待解码后端交付 GPU 帧。
+- 已接入[硬解配置、格式协商和准备阶段软解回退](../hardware_decode/hardware_decode.md)，通过 FFmpeg 内部 provider/session 隔离平台差异。
+- CPU 消费端通过[按需回读](../video_readback/video_readback.md)消费 GPU 帧。
 - 接入复用同一原生设备的 GPU YUV → RGBA 转换后端。
 - 实测 CPU 占用、端到端 Seek 和回读等待，不仅凭 decode 调用耗时评价收益。
 - 另行设计 GPU RGBA 的宿主交付，不在本模块预留整套 shader、纹理池或跨平台呈现接口。
