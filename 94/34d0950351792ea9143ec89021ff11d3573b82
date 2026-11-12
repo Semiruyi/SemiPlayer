@@ -1,0 +1,52 @@
+src/infrastructure/ffmpeg/video_renderer/video_renderer_statistics.hpp
+  s_f8dbc85f552039::t_9a966da182f398 1-38
+src/infrastructure/statistics/performance_statistics.hpp
+  s_f8dbc85f552039::t_c5920ff8ecf336 30
+tests/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend_test.cpp
+  s_f8dbc85f552039::t_5fd7b267352312 4-5,224-242
+src/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.cpp
+  s_f8dbc85f552039::t_c5920ff8ecf336 3-5,13-14,24-25,36-72,226-228,240-241,244,267-271,277-279,297-300,344-358,362,411-414,430-434,441-442,463-473
+src/infrastructure/statistics/performance_statistics.cpp
+  s_f8dbc85f552039::t_92aa36e2fd8dcb 5,26-27,101-102,147-182,215,224
+  h_71186a0a6bfb09 146
+tests/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_readback_test.cpp
+  s_f8dbc85f552039::t_f064b7acc22740 3-4,8-9,51,61,136-205
+  s_f8dbc85f552039::t_d9560456ca805e 206
+src/infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp
+  s_f8dbc85f552039::t_9a966da182f398 8,15-16
+src/ioc/ioc_container.cpp
+  s_f8dbc85f552039::t_c5920ff8ecf336 77
+docs/modules/performance_statistics.md
+  s_f8dbc85f552039::t_5fd7b267352312 5,70-100
+  h_71186a0a6bfb09 102-129
+  h_71186a0a6bfb09 101
+tests/infrastructure/statistics/performance_statistics_test.cpp
+  s_f8dbc85f552039::t_f064b7acc22740 5,154-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "5.30.8",
+  "base_commit_sha": "9434d0950351792ea9143ec89021ff11d3573b82",
+  "prompts": {},
+  "humans": {
+    "h_71186a0a6bfb09": {
+      "author": "wuyuanyi <wuyuanyi@h-partners.com>"
+    }
+  },
+  "sessions": {
+    "s_f8dbc85f552039": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a18152-f6cf-7b20-81d6-85880ed657a7",
+        "model": "gpt-6.1-sol"
+      },
+      "human_author": "wuyuanyi <wuyuanyi@h-partners.com>",
+      "custom_attributes": {
+        "stats_model_totals": "{\"gpt-6.1-sol\":{\"additions\":354,\"deletions\":14}}",
+        "stats_total_additions": "354",
+        "stats_total_deletions": "14",
+        "stats_turn_models": "{\"t_5fd7b267352312\":\"gpt-6.1-sol\",\"t_92aa36e2fd8dcb\":\"gpt-6.1-sol\",\"t_9a966da182f398\":\"gpt-6.1-sol\",\"t_c5920ff8ecf336\":\"gpt-6.1-sol\",\"t_f064b7acc22740\":\"gpt-6.1-sol\"}"
+      }
+    }
+  }
+}
