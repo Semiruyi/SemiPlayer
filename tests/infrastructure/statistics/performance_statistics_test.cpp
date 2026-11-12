@@ -2,6 +2,7 @@
 #include "infrastructure/notifier/default_notifier.hpp"
 #include "domain/worker/video_decoder/video_decoder_statistics.hpp"
 #include "infrastructure/gpu/readback/readback_statistics.hpp"
+#include "infrastructure/ffmpeg/video_renderer/video_renderer_statistics.hpp"
 
 #include <gtest/gtest.h>
 
@@ -150,5 +151,42 @@ TEST_F(PerformanceStatisticsTest, DrainsBothKindsFromConcurrentProducers) {
     }
     EXPECT_EQ(lines().size(), 24U);
 }
+TEST_F(PerformanceStatisticsTest, WritesRendererPhasesAndEmptyMetadataAlongsideOtherModules) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    {
+        PerformanceStatistics statistics(notifier, path);
+        ffmpeg::video_renderer::VideoRendererStatistics report;
+        report.total = {3, 12'000'000, 6'000'000};
+        report.successful_calls = 2;
+        report.failed_calls = 1;
+        report.output_bytes = 64;
+        report.input_observed = true;
+        report.input_format = contracts::media::VideoPixelFormat::Nv12;
+        report.input_width = report.output_width = 1920;
+        report.input_height = report.output_height = 1080;
+        report.scale = {2, 4'000'000, 3'000'000};
+        report.format_changed = true;
+        ASSERT_TRUE(notifier->send(report));
+        report = {}; // Queue owns the snapshot.
+        ASSERT_TRUE(notifier->send(report));
+        ASSERT_TRUE(notifier->send(domain::VideoDecoderStatistics{}));
+        ASSERT_TRUE(notifier->send(gpu::ReadbackStatistics{}));
+    }
+    const auto result = lines();
+    ASSERT_EQ(result.size(), 4U);
+    EXPECT_NE(result[0].find("\"module\":\"video_renderer\""), std::string::npos);
+    EXPECT_NE(result[0].find("\"processing_mean_call_ms\":4.000000"), std::string::npos);
+    EXPECT_NE(result[0].find("\"successful_calls\":2,\"failed_calls\":1"), std::string::npos);
+    EXPECT_NE(result[0].find("\"input_format\":\"nv12\""), std::string::npos);
+    EXPECT_NE(result[0].find("\"output_bytes\":64"), std::string::npos);
+    EXPECT_NE(result[0].find("\"format_changed\":true"), std::string::npos);
+    EXPECT_NE(result[0].find("\"scale\":{\"calls\":2,\"total_ms\":4.000000,\"max_ms\":3.000000,\"mean_call_ms\":2.000000}"), std::string::npos);
+    EXPECT_NE(result[1].find("\"input_format\":null"), std::string::npos);
+    EXPECT_NE(result[1].find("\"output_width\":null"), std::string::npos);
+    EXPECT_NE(result[1].find("\"processing_mean_call_ms\":null"), std::string::npos);
+    EXPECT_NE(result[1].find("\"scale\":{\"calls\":0,\"total_ms\":0.000000,\"max_ms\":0.000000,\"mean_call_ms\":null}"), std::string::npos);
+    EXPECT_FALSE(notifier->send(ffmpeg::video_renderer::VideoRendererStatistics{}));
+}
+
 } // namespace
 } // namespace semi::infra

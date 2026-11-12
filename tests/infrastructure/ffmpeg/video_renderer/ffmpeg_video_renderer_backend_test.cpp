@@ -1,6 +1,8 @@
 #include "infrastructure/ffmpeg/ffmpeg_raii.hpp"
 #include "infrastructure/ffmpeg/video_decoder/ffmpeg_video_frame_buffer.hpp"
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
+#include "infrastructure/ffmpeg/video_renderer/video_renderer_statistics.hpp"
+#include "infrastructure/notifier/default_notifier.hpp"
 
 #include <gtest/gtest.h>
 
@@ -217,6 +219,25 @@ TEST(FfmpegVideoRendererBackendTest, ResetKeepsBackendReusable) {
                          std::byte{11}, std::byte{12}, std::byte{255}}));
     ASSERT_TRUE(second.has_value()) << second.error().message;
     EXPECT_EQ(second->pixels[0], std::byte{7});
+}
+
+TEST(FfmpegVideoRendererBackendTest, StatisticsPreserveFirstMetadataWhenInputDimensionsChange) {
+    auto notifier = std::make_shared<DefaultNotifier>();
+    VideoRendererStatistics report;
+    auto subscription = notifier->subscribe<VideoRendererStatistics>(
+        [&](const auto& value) { report = value; });
+    {
+        FfmpegVideoRendererBackend backend({}, notifier);
+        ASSERT_TRUE(backend.configure({}));
+        ASSERT_TRUE(backend.render(make_rgba_video(std::vector<std::byte>(72), 2, 1, 8)));
+        ASSERT_TRUE(backend.render(make_rgba_video(std::vector<std::byte>(68), 1, 1, 4)));
+    }
+    EXPECT_TRUE(report.format_changed);
+    EXPECT_EQ(report.input_width, 2U);
+    EXPECT_EQ(report.output_width, 2U);
+    EXPECT_EQ(report.successful_calls, 2U);
+    EXPECT_EQ(report.create_scaler.calls, 2U);
+    EXPECT_EQ(report.output_bytes, 12U);
 }
 
 } // namespace

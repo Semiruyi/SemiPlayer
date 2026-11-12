@@ -27,6 +27,7 @@ private:
     std::shared_ptr<State> state_;
     std::shared_ptr<Notifier::Subscription> decoder_subscription_;
     std::shared_ptr<Notifier::Subscription> readback_subscription_;
+    std::shared_ptr<Notifier::Subscription> renderer_subscription_;
     std::thread writer_;
 };
 

@@ -2,7 +2,7 @@
 
 `infrastructure/statistics/PerformanceStatistics` 订阅模块统计快照，通过独立线程写 JSON Lines 文件。
 由 IoC 装配，先于 Worker 创建、晚于 Worker 释放；没有新增公开 C API。
-当前接入视频解码器和 GPU 回读模块，其他模块可后续定义自身快照并增加订阅。
+当前接入视频解码器、GPU 回读和 FFmpeg 视频渲染后端，其他模块可后续定义自身快照并增加订阅。
 
 ## 输出
 
@@ -67,8 +67,66 @@ GPU 执行时间。不插入 GPU timestamp、Flush 或额外同步点，保留�
 create_staging 只在实际创建/替换时计时，其 mean_call_ms 是单次创建成本；摊销成本应除以总回读次数。
 不包含后续 swscale 颜色转换、CPU 输出帧在消费者处的释放、整个解码表面生命周期。
 
-写入器使用两类快照的 variant，共用原有有界队列与异步写线程；不会把 GPU 资源交给统计线程。
-生产者必须先停止并提交，统计模块再取消两类订阅、排空队列并释放。
+写入器使用各模块快照的 variant，共用原有有界队列与异步写线程；不会把 GPU 资源交给统计线程。
+生产者必须先停止并提交，统计模块再取消所有订阅、排空队列并释放。
+
+## 视频渲染统计
+
+FFmpeg 渲染后端定义 `infrastructure/ffmpeg/video_renderer/VideoRendererStatistics`，
+IoC 注入 Notifier；不修改 domain、媒体契约或公共 API。不注入 Notifier 时不读取统计时钟。
+成功 configure 时开始新的窗口，unconfigure 时发送一次值快照，析构沿用 unconfigure；
+配置失败不报告，重复取消配置不重复报告。自然 EOF 不结束窗口，Close/Shutdown 会结束。
+Seek reset 清除转换器缓存，但不清零统计；窗口内出现渲染失败时继续累计，取消配置时统一提交。
+
+| 字段 | 含义 |
+|---|---|
+| module / backend / reason | video_renderer / ffmpeg_swscale / unconfigure（含析构调用） |
+| configured_at_unix_ms / finished_at_unix_ms / configured_duration_ms | 配置成功至取消配置的时间窗口，包含暂停和等待 |
+| calls / successful_calls / failed_calls | 配置期间 render 调用数及结果，包含验证失败与异常；配置外调用不计 |
+| output_bytes | 成功输出的有效 RGBA 字节数，不含 SIMD 尾部 |
+| input_format / input_width / input_height | 首个通过输入和输出尺寸验证的源格式、有效尺寸，无有效输入时为 null |
+| output_format / output_width / output_height | 固定 rgba8，尺寸对应上述首次输入；无有效输入时尺寸为 null |
+| format_changed | 后续有效输入或输出格式尺寸是否改变，首次元数据保持不变 |
+| processing_total_ms / processing_max_ms / processing_mean_call_ms | 完整 render 调用的累计、最大和平均墙钟耗时，无调用时均值为 null |
+| phases | 各阶段 calls / total_ms / max_ms / mean_call_ms，无调用时均值为 null |
+
+阶段分别为：readback（非 CPU 输入的回读调用）、create_scaler（创建/重建 swscale context）、
+allocate_rgba（输出 vector 分配和清零，含 SIMD 尾部）、scale（仅 sws_scale 调用，含颜色转换及可选缩放）。
+阶段彼此不嵌套，失败调用只累计实际执行的阶段。转换器缓存命中不增加 create_scaler 次数。
+readback 与 video_readback 报告描述同一次操作，不能相加；两个模块的统计窗口也可能不同。
+总耗时还包含参数验证、准备平面指针、临时回读帧释放、计时计数等开销，不要求等于阶段之和。
+不包含队列等待、配置/reset/取消配置、SDL 上传/呈现、回调交付或消费者释放 RGBA 帧的耗时。
+scale 是 CPU 调用墙钟时间，不是端到端帧延迟。评估转换成本应单看 scale，同时关注 allocate_rgba，
+避免把回读 Map 等待归因于 YUV→RGBA。
+
+### 渲染实测（2026-11-11）
+
+MSYS2 UCRT64 Release，Big Buck Bunny H.264 1920×1080 60fps，实际输出为 D3D11VA NV12，
+经原生同步回读后用 swscale 转换为同尺寸 RGBA。独立 5 秒预热后，测量 3 轮各 20 秒。
+统计包含每轮初始化和 Close 前实际执行的调用，不只统计最终交付帧；不添加额外同步点。
+
+3645 次 render 全部成功，均值 10.566 ms，最大单次 29.402 ms。
+三轮均值分别为 10.504 / 10.453 / 10.742 ms；下表按总调用次数加权汇总。
+
+| 阶段 | ms / 次渲染 | 占渲染总耗时 |
+|---|---:|---:|
+| 回读（含 GPU 等待） | 5.186 | 49.08% |
+| swscale 转换器创建（摊销） | 0.000221 | 0.002% |
+| RGBA 输出分配与清零 | 1.865 | 17.65% |
+| sws_scale：NV12→RGBA，无缩放 | 3.380 | 31.99% |
+| 验证、临时帧释放和其他开销 | 0.135 | 1.28% |
+
+每轮只创建一次转换器，共 3 次，单次创建均值 0.268 ms，缓存命中正常。
+benchmark 实际交付约 59 fps；render 调用数多于交付数，包含启动预取、缓存以及关闭前在途工作。
+354/354 回归测试通过，新增 4 项统计验证。
+
+当前颜色转换有优化价值：约占 render 调用墙钟耗时的三分之一，另外输出内存分配/清零也值得关注。
+这不是播放吞吐受限的证据，也不能据此承诺 GPU 转换会直接节省 3.380 ms：GPU 方案仍需评估
+转换执行、同步和宿主所需输出的回读成本。回读与转换目前串行发生，但解码在其他线程及 GPU
+异步执行，不能把解码后端均值再相加后当作端到端延迟。
+
+原始 JSONL、benchmark CSV、summary.json 和 phases.csv 保留于
+D:/w30075696/project/tmp/renderer-statistics-20261111/。
 
 ## 线程和退出
 

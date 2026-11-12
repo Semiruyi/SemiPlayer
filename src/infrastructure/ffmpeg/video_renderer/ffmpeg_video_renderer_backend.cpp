@@ -1,5 +1,8 @@
 #include "infrastructure/ffmpeg/video_renderer/ffmpeg_video_renderer_backend.hpp"
 #include "contracts/video_readback/video_readback.hpp"
+#include "infrastructure/ffmpeg/video_renderer/video_renderer_statistics.hpp"
+#include "infrastructure/notifier/notifier.hpp"
+#include "infrastructure/log/log.hpp"
 
 extern "C" {
 #include <libavutil/avutil.h>
@@ -7,6 +10,8 @@ extern "C" {
 }
 
 #include <array>
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -15,6 +20,8 @@ extern "C" {
 #include <optional>
 #include <string>
 #include <utility>
+
+#define SEMI_LOG_TAG "ffmpeg_video_renderer"
 
 namespace semi::infra::ffmpeg::video_renderer {
 namespace {
@@ -25,6 +32,43 @@ using contracts::media::VideoPixelFormat;
 using contracts::video_renderer::VideoRendererBackendError;
 using contracts::video_renderer::VideoRendererBackendOperation;
 using contracts::video_renderer::VideoRendererOptions;
+
+using Clock = std::chrono::steady_clock;
+
+std::int64_t unix_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+class PhaseTimer {
+public:
+    explicit PhaseTimer(RenderTiming* timing) noexcept : timing_(timing) {
+        if (timing_) started_ = Clock::now();
+    }
+    ~PhaseTimer() {
+        if (!timing_) return;
+        const auto elapsed = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - started_).count());
+        ++timing_->calls;
+        timing_->total_ns += elapsed;
+        timing_->max_ns = std::max(timing_->max_ns, elapsed);
+    }
+    PhaseTimer(const PhaseTimer&) = delete;
+    PhaseTimer& operator=(const PhaseTimer&) = delete;
+private:
+    RenderTiming* timing_;
+    Clock::time_point started_;
+};
+
+struct CallOutcome {
+    VideoRendererStatistics* report;
+    bool succeeded = false;
+    ~CallOutcome() {
+        if (!report) return;
+        if (succeeded) ++report->successful_calls;
+        else ++report->failed_calls;
+    }
+};
 
 struct SwsContextDeleter {
     void operator()(SwsContext* context) const noexcept {
@@ -179,6 +223,9 @@ bool valid_source(const contracts::media::CpuVideoFrameResource& input,
 
 struct FfmpegVideoRendererBackend::Impl {
     std::shared_ptr<contracts::video_readback::VideoReadback> readback;
+    std::shared_ptr<Notifier> notifier;
+    VideoRendererStatistics statistics;
+    Clock::time_point configured_at;
     SwsContextPtr context;
     VideoRendererOptions options{};
     VideoPixelFormat source_format = VideoPixelFormat::Unknown;
@@ -190,9 +237,11 @@ struct FfmpegVideoRendererBackend::Impl {
 };
 
 FfmpegVideoRendererBackend::FfmpegVideoRendererBackend(
-    std::shared_ptr<contracts::video_readback::VideoReadback> readback)
+    std::shared_ptr<contracts::video_readback::VideoReadback> readback,
+    std::shared_ptr<Notifier> notifier)
     : impl_(std::make_unique<Impl>()) {
     impl_->readback = std::move(readback);
+    impl_->notifier = std::move(notifier);
 }
 
 FfmpegVideoRendererBackend::~FfmpegVideoRendererBackend() {
@@ -215,11 +264,19 @@ FfmpegVideoRendererBackend::configure(const VideoRendererOptions& options) {
 
     impl_->options = options;
     impl_->configured = true;
+    if (impl_->notifier) {
+        impl_->statistics = {};
+        impl_->statistics.configured_at_unix_ms = unix_ms();
+        impl_->configured_at = Clock::now();
+    }
     return {};
 }
 
 std::expected<RenderedVideo, VideoRendererBackendError>
 FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
+    auto* report = impl_->configured && impl_->notifier ? &impl_->statistics : nullptr;
+    PhaseTimer total_timer(report ? &report->total : nullptr);
+    CallOutcome outcome{report};
     if (!impl_->configured) {
         return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
                                                 "video renderer backend is not configured"));
@@ -237,7 +294,10 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
             return std::unexpected(make_state_error(VideoRendererBackendOperation::Render,
                                                     "video scaler requires CPU frame resources or a readback backend"));
         }
-        auto result = impl_->readback->readback(*source);
+        auto result = [&] {
+            PhaseTimer timer(report ? &report->readback : nullptr);
+            return impl_->readback->readback(*source);
+        }();
         if (!result) {
             return std::unexpected(make_error(VideoRendererBackendOperation::Render,
                                               result.error().native_code,
@@ -281,9 +341,25 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
                                                 "rendered video dimensions are invalid"));
     }
 
+    if (report) {
+        if (!report->input_observed) {
+            report->input_observed = true;
+            report->input_format = source_format;
+            report->input_width = source_width;
+            report->input_height = source_height;
+            report->output_width = output_width;
+            report->output_height = output_height;
+        } else if (report->input_format != source_format || report->input_width != source_width ||
+                   report->input_height != source_height || report->output_width != output_width ||
+                   report->output_height != output_height) {
+            report->format_changed = true;
+        }
+    }
+
     if (impl_->context == nullptr || impl_->source_format != source_format ||
         impl_->source_width != source_width || impl_->source_height != source_height ||
         impl_->output_width != output_width || impl_->output_height != output_height) {
+        PhaseTimer timer(report ? &report->create_scaler : nullptr);
         SwsContext* context =
             sws_getCachedContext(impl_->context.release(), static_cast<int>(source_width),
                                  static_cast<int>(source_height), *source_native,
@@ -332,7 +408,10 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
             .width = output_width,
             .height = output_height,
             .stride_bytes = static_cast<std::uint32_t>(stride),
-            .pixels = std::vector<std::byte>(output_size + kSwscaleOutputPadding),
+            .pixels = [&] {
+                PhaseTimer timer(report ? &report->allocate_rgba : nullptr);
+                return std::vector<std::byte>(output_size + kSwscaleOutputPadding);
+            }(),
             .pts_us = input.pts_us,
         };
 
@@ -348,15 +427,19 @@ FfmpegVideoRendererBackend::render(const DecodedVideo& input) {
         std::uint8_t* destination_data[4] = {reinterpret_cast<std::uint8_t*>(output.pixels.data()),
                                              nullptr, nullptr, nullptr};
         const int destination_linesize[4] = {static_cast<int>(stride), 0, 0, 0};
-        const int scaled =
-            sws_scale(impl_->context.get(), source_data.data(), source_linesize.data(), 0,
-                      static_cast<int>(source_height), destination_data, destination_linesize);
+        const int scaled = [&] {
+            PhaseTimer timer(report ? &report->scale : nullptr);
+            return sws_scale(impl_->context.get(), source_data.data(), source_linesize.data(), 0,
+                             static_cast<int>(source_height), destination_data, destination_linesize);
+        }();
         if (scaled != static_cast<int>(output_height)) {
             return std::unexpected(
                 make_state_error(VideoRendererBackendOperation::Render,
                                  "FFmpeg video scaling returned an incomplete frame"));
         }
         output.pixels.resize(output_size);
+        if (report) report->output_bytes += output_size;
+        outcome.succeeded = true;
         return output;
     } catch (const std::bad_alloc&) {
         return std::unexpected(make_error(VideoRendererBackendOperation::Render, AVERROR(ENOMEM),
@@ -376,6 +459,17 @@ void FfmpegVideoRendererBackend::reset() noexcept {
 void FfmpegVideoRendererBackend::unconfigure() noexcept {
     if (!impl_) {
         return;
+    }
+    if (impl_->configured && impl_->notifier) {
+        auto& report = impl_->statistics;
+        report.finished_at_unix_ms = unix_ms();
+        report.configured_duration_ns = static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - impl_->configured_at).count());
+        try {
+            (void)impl_->notifier->send(report);
+        } catch (...) {
+            SEMI_LOG_WARN("cannot submit video renderer statistics");
+        }
     }
     reset();
     impl_->options = {};

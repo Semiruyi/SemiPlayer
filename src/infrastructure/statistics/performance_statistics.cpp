@@ -2,6 +2,7 @@
 
 #include "domain/worker/video_decoder/video_decoder_statistics.hpp"
 #include "infrastructure/gpu/readback/readback_statistics.hpp"
+#include "infrastructure/ffmpeg/video_renderer/video_renderer_statistics.hpp"
 #include "infrastructure/log/log.hpp"
 
 #include <atomic>
@@ -22,7 +23,8 @@
 namespace semi::infra {
 namespace {
 constexpr std::size_t kQueueCapacity = 64;
-using StatisticsReport = std::variant<domain::VideoDecoderStatistics, gpu::ReadbackStatistics>;
+using StatisticsReport = std::variant<domain::VideoDecoderStatistics, gpu::ReadbackStatistics,
+                                      ffmpeg::video_renderer::VideoRendererStatistics>;
 
 std::filesystem::path default_path() {
     static std::atomic<std::uint64_t> sequence{0};
@@ -96,7 +98,8 @@ std::string serialize(const domain::VideoDecoderStatistics& report) {
     return out.str();
 }
 
-void timing_json(std::ostream& out, const gpu::ReadbackTiming& timing) {
+template <class Timing>
+void timing_json(std::ostream& out, const Timing& timing) {
     out << "{\"calls\":" << timing.calls
         << ",\"total_ms\":" << timing.total_ns / 1e6
         << ",\"max_ms\":" << timing.max_ns / 1e6
@@ -140,6 +143,43 @@ std::string serialize(const gpu::ReadbackStatistics& report) {
     out << "}}";
     return out.str();
 }
+
+std::string serialize(const ffmpeg::video_renderer::VideoRendererStatistics& report) {
+    std::ostringstream out;
+    out.imbue(std::locale::classic());
+    out << std::fixed << std::setprecision(6)
+        << "{\"schema_version\":1,\"module\":\"video_renderer\",\"backend\":\"ffmpeg_swscale\""
+        << ",\"reason\":\"unconfigure\",\"configured_at_unix_ms\":" << report.configured_at_unix_ms
+        << ",\"finished_at_unix_ms\":" << report.finished_at_unix_ms
+        << ",\"configured_duration_ms\":" << report.configured_duration_ns / 1e6
+        << ",\"calls\":" << report.total.calls
+        << ",\"successful_calls\":" << report.successful_calls
+        << ",\"failed_calls\":" << report.failed_calls
+        << ",\"output_bytes\":" << report.output_bytes
+        << ",\"processing_total_ms\":" << report.total.total_ns / 1e6
+        << ",\"processing_max_ms\":" << report.total.max_ns / 1e6
+        << ",\"processing_mean_call_ms\":";
+    if (report.total.calls) out << report.total.total_ns / 1e6 / report.total.calls;
+    else out << "null";
+    out << ",\"input_format\":";
+    if (report.input_observed) quoted(out, pixel_format(report.input_format)); else out << "null";
+    out << ",\"input_width\":";
+    if (report.input_observed) out << report.input_width; else out << "null";
+    out << ",\"input_height\":";
+    if (report.input_observed) out << report.input_height; else out << "null";
+    out << ",\"output_format\":\"rgba8\",\"output_width\":";
+    if (report.input_observed) out << report.output_width; else out << "null";
+    out << ",\"output_height\":";
+    if (report.input_observed) out << report.output_height; else out << "null";
+    out << ",\"format_changed\":" << (report.format_changed ? "true" : "false")
+        << ",\"phases\":{\"readback\":";
+    timing_json(out, report.readback);
+    out << ",\"create_scaler\":"; timing_json(out, report.create_scaler);
+    out << ",\"allocate_rgba\":"; timing_json(out, report.allocate_rgba);
+    out << ",\"scale\":"; timing_json(out, report.scale);
+    out << "}}";
+    return out.str();
+}
 } // namespace
 
 struct PerformanceStatistics::State {
@@ -172,6 +212,7 @@ PerformanceStatistics::PerformanceStatistics(std::shared_ptr<Notifier> notifier,
     };
     decoder_subscription_ = notifier->subscribe<domain::VideoDecoderStatistics>(enqueue);
     readback_subscription_ = notifier->subscribe<gpu::ReadbackStatistics>(enqueue);
+    renderer_subscription_ = notifier->subscribe<ffmpeg::video_renderer::VideoRendererStatistics>(enqueue);
     writer_ = std::thread([state = state_, path = std::move(output_path)] {
         write_reports(state, path);
     });
@@ -180,6 +221,7 @@ PerformanceStatistics::PerformanceStatistics(std::shared_ptr<Notifier> notifier,
 PerformanceStatistics::~PerformanceStatistics() {
     decoder_subscription_.reset();
     readback_subscription_.reset();
+    renderer_subscription_.reset();
     {
         std::lock_guard lock(state_->mutex);
         state_->stopping = true;
